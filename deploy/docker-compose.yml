@@ -9,7 +9,9 @@ services:
       POSTGRES_USER: omni
       POSTGRES_PASSWORD: omni
       POSTGRES_DB: omni_bugtracker
-    ports: ["5432:5432"]
+    # Loopback-only + overridable port: dev gets localhost:5432; prod sets a
+    # non-conflicting port (e.g. 15432) so it never clashes with a host Postgres.
+    ports: ["127.0.0.1:${OMNI_BT_PG_PORT:-5432}:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U omni -d omni_bugtracker"]
@@ -19,7 +21,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports: ["127.0.0.1:${OMNI_BT_REDIS_PORT:-6379}:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -44,7 +46,8 @@ services:
       OMNI_BT_DATABASE__DSN: postgres://omni:omni@postgres:5432/omni_bugtracker?sslmode=disable
       OMNI_BT_REDIS__ADDR: redis:6379
       OMNI_BT_SERVER__ADDR: ":8080"
-    ports: ["8080:8080"]
+    # Published host port is overridable so prod avoids conflicts (default dev 8080).
+    ports: ["${OMNI_BT_API_PORT:-8080}:8080"]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -61,7 +64,7 @@ services:
 
   web:
     build: { context: .., dockerfile: deploy/Dockerfile.web }
-    ports: ["3000:80"]
+    ports: ["${OMNI_BT_WEB_PORT:-3000}:80"]
     depends_on: [api]
 
 volumes:

@@ -24,10 +24,9 @@ generate:
 	oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
 	cd web && npm run gen:api
 
-## migrate: apply goose schema migrations + River queue tables
+## migrate: apply goose schema migrations + River queue tables (single binary)
 migrate:
-	goose -dir db/migrations postgres "$(DATABASE_URL)" up
-	river migrate-up --database-url "$(DATABASE_URL)"
+	OMNI_BT_DATABASE__DSN="$(DATABASE_URL)" go run ./cmd/migrate up
 
 ## build: compile server + worker binaries
 build:

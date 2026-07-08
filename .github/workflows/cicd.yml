@@ -1,0 +1,102 @@
+name: CI/CD
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']   # docs-only changes don't build/deploy
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+
+# Cancel superseded runs per ref, except on main (never cancel a main deploy).
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  COMPOSE: -f deploy/docker-compose.yml
+
+jobs:
+  build:
+    runs-on: [self-hosted, omnibt]     # MUST match the runner's labels
+    # SECURITY: never run untrusted fork-PR code on a self-hosted runner.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - name: Build images (gate — must pass before deploy)
+        run: docker compose $COMPOSE build
+
+  deploy:
+    needs: [build]
+    if: github.ref == 'refs/heads/main'   # only main deploys
+    runs-on: [self-hosted, omnibt]
+    concurrency:
+      group: deploy-omnibt                # serialize deploys; never overlap
+      cancel-in-progress: false
+    env:
+      # Non-conflicting host ports on the shared box (8080/3000/5432 are taken).
+      OMNI_BT_API_PORT: "8092"
+      OMNI_BT_WEB_PORT: "3002"
+      OMNI_BT_PG_PORT: "15432"           # loopback-only (see compose)
+      OMNI_BT_REDIS_PORT: "16379"        # loopback-only
+      PGUSER: omni
+      PGDB: omni_bugtracker
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - name: Deploy on the target (local docker — the runner is on the target)
+        run: |
+          set -euo pipefail
+          DEST="$HOME/omni-bugtracker"
+
+          # Sync the checked-out code into the deploy dir. No --delete of data:
+          # live data lives in the named docker volume, never in this directory.
+          mkdir -p "$DEST" "$DEST/backups"
+          rsync -a --exclude='.git' ./ "${DEST}/"
+          cd "$DEST"
+
+          ts="$(date +%Y%m%d-%H%M%S)"
+
+          # crash-loop guard: a wedged api container can starve the deploy.
+          cid="$(docker compose $COMPOSE ps -q api 2>/dev/null || true)"
+          if [ -n "$cid" ]; then
+            state="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || echo)"
+            case "$state" in
+              *restarting*|*unhealthy*) echo "guard: api is '$state' - stopping"; docker compose $COMPOSE stop api || true ;;
+            esac
+          fi
+
+          # Back up the database BEFORE deploying, if Postgres is running.
+          pgc="$(docker compose $COMPOSE ps -q postgres 2>/dev/null || true)"
+          if [ -n "$pgc" ] && [ "$(docker inspect -f '{{.State.Running}}' "$pgc" 2>/dev/null)" = "true" ]; then
+            echo "backup: pg_dump before deploy"
+            docker compose $COMPOSE exec -T -e PGPASSWORD=omni postgres \
+              pg_dump -U "$PGUSER" -d "$PGDB" --clean --if-exists > "$DEST/backups/bt-${ts}.sql"
+          else
+            echo "backup: no running Postgres (first deploy?) - skipping"
+          fi
+
+          # Recreate the stack. The one-shot `migrate` service runs goose + River
+          # migrations and must complete before api/worker start (compose depends_on).
+          docker compose $COMPOSE up --build -d
+
+          # Wait for readiness — /readyz pings the DB, so it proves migrate + api + pg.
+          ok=""
+          for i in $(seq 1 45); do
+            if curl -fsS --max-time 5 "http://localhost:${OMNI_BT_API_PORT}/readyz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 2
+          done
+          if [ -z "$ok" ]; then
+            echo "deploy: service did not become ready"
+            docker compose $COMPOSE ps
+            docker compose $COMPOSE logs --tail=120 api migrate
+            exit 1
+          fi
+
+          # External smoke test on the published port (proves the port mapping).
+          curl -fsS --max-time 10 "http://localhost:${OMNI_BT_API_PORT}/healthz" >/dev/null
+          echo "deploy: api healthy on :${OMNI_BT_API_PORT}"
+
+          # Retain only the 10 most recent host-side backups.
+          ls -1t "$DEST"/backups/*.sql 2>/dev/null | tail -n +11 | xargs -r rm -f || true
+          echo "deploy: success"
