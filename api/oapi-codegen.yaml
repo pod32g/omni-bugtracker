@@ -1,0 +1,10 @@
+package: httpgen
+output: internal/httpapi/gen/api.gen.go
+generate:
+  chi-server: true
+  models: true
+  strict-server: true
+  embedded-spec: true
+output-options:
+  skip-prune: false
+  nullable-type: true

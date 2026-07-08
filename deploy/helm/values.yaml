@@ -1,0 +1,43 @@
+image:
+  repository: ghcr.io/omni/bugtracker
+  apiTag: "1.0.0"
+  workerTag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+# Postgres and Redis are expected to be external/managed in a scaled install.
+# Provide the DSN/addr via an existing secret to avoid plaintext in values.
+database:
+  existingSecret: omni-bugtracker-db
+  dsnKey: dsn
+redis:
+  addr: redis:6379
+
+identity:
+  issuer: https://id.omni.dev
+  jwksUrl: https://id.omni.dev/.well-known/jwks.json
+  audience: omni-bugtracker
+
+api:
+  replicas: 3
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    targetCPUUtilizationPercentage: 70
+
+worker:
+  replicas: 2
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Prometheus scrape annotations for Omni-Metrics.
+metrics:
+  enabled: true

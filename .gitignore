@@ -1,0 +1,27 @@
+# Go
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+
+# Generated code (regenerate with `make generate`)
+/internal/httpapi/gen/
+/internal/repo/gen/
+/web/src/api/gen/
+
+# Env / secrets
+.env
+.env.local
+*.local.yaml
+
+# Node / frontend
+/web/node_modules/
+/web/dist/
+/web/.vite/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

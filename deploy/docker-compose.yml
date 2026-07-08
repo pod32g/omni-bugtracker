@@ -1,0 +1,68 @@
+# Full self-hosted stack: postgres + redis + api + worker + web.
+# `make up` (or `docker compose -f deploy/docker-compose.yml up --build`) from the repo root.
+name: omni-bugtracker
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: omni
+      POSTGRES_PASSWORD: omni
+      POSTGRES_DB: omni_bugtracker
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omni -d omni_bugtracker"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: apply goose schema + River queue tables, then exit.
+  migrate:
+    build: { context: .., dockerfile: deploy/Dockerfile.api }
+    entrypoint: ["/app/migrate"]
+    command: ["up"]
+    environment:
+      DATABASE_URL: postgres://omni:omni@postgres:5432/omni_bugtracker?sslmode=disable
+      OMNI_BT_DATABASE__DSN: postgres://omni:omni@postgres:5432/omni_bugtracker?sslmode=disable
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: on-failure
+
+  api:
+    build: { context: .., dockerfile: deploy/Dockerfile.api }
+    environment:
+      OMNI_BT_DATABASE__DSN: postgres://omni:omni@postgres:5432/omni_bugtracker?sslmode=disable
+      OMNI_BT_REDIS__ADDR: redis:6379
+      OMNI_BT_SERVER__ADDR: ":8080"
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    build: { context: .., dockerfile: deploy/Dockerfile.worker }
+    environment:
+      OMNI_BT_DATABASE__DSN: postgres://omni:omni@postgres:5432/omni_bugtracker?sslmode=disable
+      OMNI_BT_REDIS__ADDR: redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  web:
+    build: { context: .., dockerfile: deploy/Dockerfile.web }
+    ports: ["3000:80"]
+    depends_on: [api]
+
+volumes:
+  pgdata:

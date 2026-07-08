@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  min-height: 100vh;
+}
+
+/* Rich code blocks in markdown bodies. */
+.markdown pre {
+  @apply bg-black/40 rounded-lg p-4 overflow-x-auto font-mono text-sm my-3 border border-surface-border;
+}
+.markdown code {
+  @apply font-mono text-[0.85em];
+}
+.markdown p {
+  @apply my-2 leading-relaxed;
+}
+.markdown h1, .markdown h2, .markdown h3 {
+  @apply font-semibold mt-4 mb-2;
+}
+.markdown a {
+  @apply text-accent hover:text-accent-hover underline;
+}

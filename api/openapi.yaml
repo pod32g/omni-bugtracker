@@ -1,0 +1,504 @@
+openapi: 3.1.0
+info:
+  title: Omni-BugTracker API
+  version: 1.0.0
+  description: >
+    Developer-first, self-hosted issue & bug tracker. Design-first contract:
+    Go handlers and the TypeScript client are generated from this file.
+    Every UI action is expressible here.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []          # Omni-Identity JWT
+  - apiToken: []            # hashed API token
+
+tags:
+  - name: issues
+  - name: projects
+  - name: comments
+  - name: search
+  - name: automation
+  - name: webhooks
+  - name: integrations
+  - name: dashboards
+  - name: system
+
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      operationId: health
+      security: []
+      responses: { "200": { description: OK } }
+
+  /me:
+    get:
+      tags: [system]
+      operationId: getMe
+      responses:
+        "200": { description: current user, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+
+  /projects:
+    get:
+      tags: [projects]
+      operationId: listProjects
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { description: project list, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectList" } } } }
+    post:
+      tags: [projects]
+      operationId: createProject
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateProject" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /projects/{key}/issues:
+    parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
+    get:
+      tags: [issues]
+      operationId: listIssues
+      parameters:
+        - name: filter
+          in: query
+          description: "GitHub-style filter, e.g. `is:open assignee:@me severity:critical component:auth`"
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, default: "-created_at" }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { description: issue list, content: { application/json: { schema: { $ref: "#/components/schemas/IssueList" } } } }
+    post:
+      tags: [issues]
+      operationId: createIssue
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateIssue" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Issue" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /issues/{issueKey}:
+    parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    get:
+      tags: [issues]
+      operationId: getIssue
+      responses:
+        "200": { description: issue, content: { application/json: { schema: { $ref: "#/components/schemas/Issue" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [issues]
+      operationId: updateIssue
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UpdateIssue" } } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Issue" } } } }
+    delete:
+      tags: [issues]
+      operationId: deleteIssue
+      responses: { "204": { description: deleted } }
+
+  /issues/{issueKey}/transition:
+    parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    post:
+      tags: [issues]
+      operationId: transitionIssue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to]
+              properties:
+                to: { $ref: "#/components/schemas/IssueStatus" }
+                comment: { type: string }
+      responses:
+        "200": { description: transitioned, content: { application/json: { schema: { $ref: "#/components/schemas/Issue" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /issues/{issueKey}/activity:
+    parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    get:
+      tags: [issues]
+      operationId: listIssueActivity
+      responses:
+        "200": { description: timeline, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Activity" } } } } }
+
+  /issues/{issueKey}/comments:
+    parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    get:
+      tags: [comments]
+      operationId: listComments
+      responses:
+        "200": { description: comments, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Comment" } } } } }
+    post:
+      tags: [comments]
+      operationId: createComment
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [body_md], properties: { body_md: { type: string } } } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } }
+
+  /issues/{issueKey}/attachments:
+    parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    post:
+      tags: [issues]
+      operationId: requestAttachmentUpload
+      description: Returns a presigned Omni-Upload URL for direct browser upload, then confirm.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, content_type, size_bytes]
+              properties:
+                filename: { type: string }
+                content_type: { type: string }
+                size_bytes: { type: integer, format: int64 }
+      responses:
+        "200": { description: presigned upload, content: { application/json: { schema: { $ref: "#/components/schemas/PresignedUpload" } } } }
+
+  /issues/bulk:
+    post:
+      tags: [issues]
+      operationId: bulkUpdateIssues
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/BulkUpdate" } } }
+      responses:
+        "200": { description: result, content: { application/json: { schema: { type: object, properties: { updated: { type: integer } } } } } }
+
+  /search:
+    get:
+      tags: [search]
+      operationId: search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+        - name: types
+          in: query
+          schema: { type: string, default: "issues" }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { description: results, content: { application/json: { schema: { $ref: "#/components/schemas/SearchResults" } } } }
+
+  /automation/rules:
+    get:
+      tags: [automation]
+      operationId: listAutomationRules
+      responses:
+        "200": { description: rules, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AutomationRule" } } } } }
+    post:
+      tags: [automation]
+      operationId: createAutomationRule
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AutomationRule" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/AutomationRule" } } } }
+
+  /webhooks:
+    get:
+      tags: [webhooks]
+      operationId: listWebhooks
+      responses:
+        "200": { description: webhooks, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Webhook" } } } } }
+    post:
+      tags: [webhooks]
+      operationId: createWebhook
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Webhook" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Webhook" } } } }
+
+  /integrations/git/events:
+    post:
+      tags: [integrations]
+      operationId: ingestGitEvent
+      security: []
+      description: Inbound commit/PR payloads (HMAC-signed). Parses issue references.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: true } } }
+      responses: { "202": { description: accepted } }
+
+  /integrations/logging/alerts:
+    post:
+      tags: [integrations]
+      operationId: ingestLoggingAlert
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ObservabilityAlert" } } }
+      responses: { "202": { description: accepted } }
+
+  /integrations/metrics/alerts:
+    post:
+      tags: [integrations]
+      operationId: ingestMetricsAlert
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ObservabilityAlert" } } }
+      responses: { "202": { description: accepted } }
+
+  /dashboards/overview:
+    get:
+      tags: [dashboards]
+      operationId: dashboardOverview
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+        - name: range
+          in: query
+          schema: { type: string, default: "30d" }
+      responses:
+        "200": { description: metrics, content: { application/json: { schema: { $ref: "#/components/schemas/DashboardOverview" } } } }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+    apiToken: { type: http, scheme: bearer }
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 50, maximum: 200 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    ProjectKey:
+      name: key
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[A-Z][A-Z0-9]{1,9}$" }
+    IssueKey:
+      name: issueKey
+      in: path
+      required: true
+      description: "e.g. BUG-421"
+      schema: { type: string, pattern: "^[A-Z][A-Z0-9]{1,9}-[0-9]+$" }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: { type: string }
+
+  responses:
+    Problem:
+      description: RFC 9457 problem+json
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        errors: { type: object, additionalProperties: { type: string } }
+
+    IssueType:   { type: string, enum: [bug, task, feature, improvement] }
+    IssueStatus: { type: string, enum: [open, in_progress, blocked, ready_for_review, resolved, closed, reopened] }
+    Severity:    { type: string, enum: [critical, high, medium, low] }
+    Priority:    { type: string, enum: [p0, p1, p2, p3] }
+    RelationKind: { type: string, enum: [blocks, blocked_by, duplicates, relates, caused_by] }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        display_name: { type: string }
+        avatar_url: { type: string }
+        role: { type: string }
+
+    Project:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        key: { type: string }
+        name: { type: string }
+        description_md: { type: string }
+        is_archived: { type: boolean }
+        created_at: { type: string, format: date-time }
+    ProjectList:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Project" } }
+        next_cursor: { type: string, nullable: true }
+    CreateProject:
+      type: object
+      required: [key, name]
+      properties:
+        key: { type: string, pattern: "^[A-Z][A-Z0-9]{1,9}$" }
+        name: { type: string }
+        description_md: { type: string }
+
+    Issue:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        key: { type: string, description: "e.g. BUG-421" }
+        project_key: { type: string }
+        number: { type: integer }
+        type: { $ref: "#/components/schemas/IssueType" }
+        title: { type: string }
+        description_md: { type: string }
+        status: { $ref: "#/components/schemas/IssueStatus" }
+        severity: { $ref: "#/components/schemas/Severity" }
+        priority: { $ref: "#/components/schemas/Priority" }
+        reporter: { $ref: "#/components/schemas/User" }
+        assignee: { $ref: "#/components/schemas/User" }
+        labels: { type: array, items: { type: string } }
+        components: { type: array, items: { type: string } }
+        version_affected: { type: string }
+        version_fixed: { type: string }
+        git_commit_sha: { type: string }
+        pull_request_url: { type: string }
+        repro_steps_md: { type: string }
+        expected_md: { type: string }
+        actual_md: { type: string }
+        environment_md: { type: string }
+        source: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    IssueList:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Issue" } }
+        next_cursor: { type: string, nullable: true }
+        total: { type: integer }
+    CreateIssue:
+      type: object
+      required: [title]
+      properties:
+        type: { $ref: "#/components/schemas/IssueType" }
+        title: { type: string }
+        description_md: { type: string }
+        severity: { $ref: "#/components/schemas/Severity" }
+        priority: { $ref: "#/components/schemas/Priority" }
+        assignee_id: { type: string, format: uuid, nullable: true }
+        labels: { type: array, items: { type: string } }
+        components: { type: array, items: { type: string } }
+        version_affected: { type: string }
+        repro_steps_md: { type: string }
+        expected_md: { type: string }
+        actual_md: { type: string }
+        environment_md: { type: string }
+    UpdateIssue:
+      type: object
+      properties:
+        title: { type: string }
+        description_md: { type: string }
+        severity: { $ref: "#/components/schemas/Severity" }
+        priority: { $ref: "#/components/schemas/Priority" }
+        assignee_id: { type: string, format: uuid, nullable: true }
+        milestone_id: { type: string, format: uuid, nullable: true }
+        version_fixed: { type: string }
+    BulkUpdate:
+      type: object
+      properties:
+        ids: { type: array, items: { type: string, format: uuid } }
+        filter: { type: string }
+        patch: { $ref: "#/components/schemas/UpdateIssue" }
+
+    Comment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        author: { $ref: "#/components/schemas/User" }
+        body_md: { type: string }
+        edited_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    Activity:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        actor: { $ref: "#/components/schemas/User" }
+        verb: { type: string }
+        entity_type: { type: string }
+        changes: { type: object, additionalProperties: true }
+        occurred_at: { type: string, format: date-time }
+
+    PresignedUpload:
+      type: object
+      properties:
+        upload_url: { type: string }
+        object_key: { type: string }
+        method: { type: string }
+        headers: { type: object, additionalProperties: { type: string } }
+
+    SearchResults:
+      type: object
+      properties:
+        issues: { type: array, items: { $ref: "#/components/schemas/Issue" } }
+        source: { type: string, enum: [omni-search, postgres-fts] }
+        total: { type: integer }
+
+    AutomationRule:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        project_key: { type: string, nullable: true }
+        name: { type: string }
+        is_active: { type: boolean }
+        priority: { type: integer }
+        trigger: { type: object, additionalProperties: true }
+        actions: { type: array, items: { type: object, additionalProperties: true } }
+
+    Webhook:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        project_key: { type: string, nullable: true }
+        url: { type: string }
+        events: { type: array, items: { type: string } }
+        is_active: { type: boolean }
+
+    ObservabilityAlert:
+      type: object
+      required: [source, rule, title]
+      properties:
+        source: { type: string, enum: [logging, metrics] }
+        rule: { type: string }
+        project_key: { type: string }
+        title: { type: string }
+        fingerprint: { type: string, description: "Dedupe key; repeated alerts collapse into one issue." }
+        severity: { $ref: "#/components/schemas/Severity" }
+        details_md: { type: string }
+        stack_trace: { type: string }
+        occurrences: { type: integer }
+
+    DashboardOverview:
+      type: object
+      properties:
+        open_issues: { type: integer }
+        critical_issues: { type: integer }
+        avg_resolution_hours: { type: number }
+        mttr_hours: { type: number }
+        regression_rate: { type: number }
+        issues_by_component: { type: object, additionalProperties: { type: integer } }
+        issues_by_release: { type: object, additionalProperties: { type: integer } }
+        team_workload: { type: object, additionalProperties: { type: integer } }
+        recent_activity: { type: array, items: { $ref: "#/components/schemas/Activity" } }

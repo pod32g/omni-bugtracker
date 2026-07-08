@@ -1,0 +1,6 @@
+apiVersion: v2
+name: omni-bugtracker
+description: Developer-first, self-hosted issue & bug tracker for the Omni ecosystem.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

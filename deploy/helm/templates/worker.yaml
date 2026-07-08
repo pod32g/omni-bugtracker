@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: { app: {{ .Release.Name }}-worker }
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels: { app: {{ .Release.Name }}-worker }
+  template:
+    metadata:
+      labels: { app: {{ .Release.Name }}-worker }
+    spec:
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.workerTag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: OMNI_BT_DATABASE__DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.dsnKey }}
+            - name: OMNI_BT_REDIS__ADDR
+              value: {{ .Values.redis.addr | quote }}
+          resources: {{ toYaml .Values.worker.resources | nindent 12 }}

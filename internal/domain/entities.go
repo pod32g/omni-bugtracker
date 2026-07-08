@@ -1,0 +1,80 @@
+package domain
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type User struct {
+	ID          uuid.UUID `json:"id"`
+	IdentitySub string    `json:"-"`
+	Email       string    `json:"email"`
+	DisplayName string    `json:"display_name"`
+	AvatarURL   string    `json:"avatar_url"`
+	Role        Role      `json:"role"`
+}
+
+type Project struct {
+	ID            uuid.UUID `json:"id"`
+	Key           string    `json:"key"`
+	Name          string    `json:"name"`
+	DescriptionMD string    `json:"description_md"`
+	IsArchived    bool      `json:"is_archived"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type Issue struct {
+	ID              uuid.UUID   `json:"id"`
+	Key             string      `json:"key"` // e.g. BUG-421
+	ProjectKey      string      `json:"project_key"`
+	Number          int32       `json:"number"`
+	Type            IssueType   `json:"type"`
+	Title           string      `json:"title"`
+	DescriptionMD   string      `json:"description_md"`
+	Status          IssueStatus `json:"status"`
+	Severity        *Severity   `json:"severity,omitempty"`
+	Priority        Priority    `json:"priority"`
+	Reporter        *User       `json:"reporter,omitempty"`
+	Assignee        *User       `json:"assignee,omitempty"`
+	Labels          []string    `json:"labels"`
+	Components      []string    `json:"components"`
+	VersionAffected string      `json:"version_affected"`
+	VersionFixed    string      `json:"version_fixed"`
+	GitCommitSHA    string      `json:"git_commit_sha"`
+	PullRequestURL  string      `json:"pull_request_url"`
+	ReproStepsMD    string      `json:"repro_steps_md"`
+	ExpectedMD      string      `json:"expected_md"`
+	ActualMD        string      `json:"actual_md"`
+	EnvironmentMD   string      `json:"environment_md"`
+	Source          IssueSource `json:"source"`
+	CreatedAt       time.Time   `json:"created_at"`
+	UpdatedAt       time.Time   `json:"updated_at"`
+}
+
+// Key builds the human-readable issue key from a project key and number.
+func IssueKey(projectKey string, number int32) string {
+	return projectKey + "-" + itoa(number)
+}
+
+func itoa(n int32) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [12]byte
+	i := len(b)
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		b[i] = '-'
+	}
+	return string(b[i:])
+}
