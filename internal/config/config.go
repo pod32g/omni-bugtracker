@@ -56,6 +56,22 @@ type Identity struct {
 	JWKSURL      string        `koanf:"jwks_url"`
 	Audience     string        `koanf:"audience"`
 	JWKSCacheTTL time.Duration `koanf:"jwks_cache_ttl"`
+
+	// OIDC login (BFF) settings. The API is a confidential-less public PKCE client
+	// that performs the code exchange server-side (Omni-Identity sends no CORS headers).
+	ClientID      string `koanf:"client_id"`
+	AuthorizeURL  string `koanf:"authorize_url"`
+	TokenURL      string `koanf:"token_url"`
+	UserinfoURL   string `koanf:"userinfo_url"`
+	EndSessionURL string `koanf:"end_session_url"`
+	RedirectURI   string `koanf:"redirect_uri"`
+	Scopes        string `koanf:"scopes"`
+	PostLogoutURL string `koanf:"post_logout_url"`
+}
+
+// LoginEnabled reports whether the browser OIDC login flow is fully configured.
+func (i Identity) LoginEnabled() bool {
+	return i.ClientID != "" && i.AuthorizeURL != "" && i.TokenURL != "" && i.RedirectURI != ""
 }
 
 type Integrations struct {

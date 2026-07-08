@@ -51,10 +51,14 @@ func Auth(verifier *auth.Verifier, authn Authenticator) func(http.Handler) http.
 	}
 }
 
+// bearer returns the credential from the Authorization header, or the httpOnly
+// session cookie set by the browser login flow.
 func bearer(r *http.Request) string {
-	h := r.Header.Get("Authorization")
-	if strings.HasPrefix(h, "Bearer ") {
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimSpace(h[len("Bearer "):])
+	}
+	if c, err := r.Cookie(auth.SessionCookie); err == nil {
+		return c.Value
 	}
 	return ""
 }

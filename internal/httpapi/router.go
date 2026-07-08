@@ -28,6 +28,8 @@ type Deps struct {
 	// Handlers is the OpenAPI strict server implementation, mounted under /api/v1
 	// once `make generate` has produced the httpgen package. See mountGenerated().
 	Handlers http.Handler
+	// AuthFlow serves the unauthenticated browser login endpoints (/auth/*).
+	AuthFlow http.Handler
 }
 
 // NewRouter builds the fully-wired chi router.
@@ -51,6 +53,11 @@ func NewRouter(d Deps) http.Handler {
 	r.Get("/healthz", health)
 	r.Get("/readyz", readyz(d.DB))
 	r.Handle("/metrics", promhttp.HandlerFor(d.Metrics.Registry, promhttp.HandlerOpts{}))
+
+	// Unauthenticated browser login flow (OIDC BFF).
+	if d.AuthFlow != nil {
+		r.Mount("/auth", d.AuthFlow)
+	}
 
 	// Authenticated API surface.
 	r.Route("/api/v1", func(api chi.Router) {

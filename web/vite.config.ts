@@ -8,6 +8,7 @@ export default defineConfig({
     // Proxy the API so the SPA and backend share an origin in dev.
     proxy: {
       "/api": { target: "http://localhost:8080", changeOrigin: true },
+      "/auth": { target: "http://localhost:8080", changeOrigin: true },
     },
   },
 });

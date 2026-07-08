@@ -31,12 +31,17 @@ func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 // ── users & tokens ──
 
 func (s *Store) UpsertUser(ctx context.Context, in service.UpsertUserParams) (domain.User, error) {
+	// COALESCE(NULLIF(...,'')) keeps existing profile fields when a caller (e.g. the
+	// per-request middleware validating an access token that carries no email/name)
+	// upserts with empty values — only the OIDC callback's id_token enrichment fills them.
 	const q = `
 		INSERT INTO users (identity_sub, email, display_name, avatar_url)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (identity_sub) DO UPDATE
-		  SET email = EXCLUDED.email, display_name = EXCLUDED.display_name,
-		      avatar_url = EXCLUDED.avatar_url, last_seen_at = now(), updated_at = now()
+		  SET email        = COALESCE(NULLIF(EXCLUDED.email, ''), users.email),
+		      display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), users.display_name),
+		      avatar_url   = COALESCE(NULLIF(EXCLUDED.avatar_url, ''), users.avatar_url),
+		      last_seen_at = now(), updated_at = now()
 		RETURNING id, identity_sub, email, display_name, avatar_url, role`
 	var u domain.User
 	err := s.pool.QueryRow(ctx, q, in.IdentitySub, in.Email, in.DisplayName, in.AvatarURL).

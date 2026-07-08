@@ -71,26 +71,43 @@ export interface DashboardOverview {
 
 const BASE = "/api/v1";
 
-function token(): string {
-  return localStorage.getItem("obt_token") ?? "";
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+// Browser auth is a first-party httpOnly session cookie set by /auth/callback, so no
+// token handling is needed here. An optional localStorage token still works for
+// programmatic/API-token use.
+function optionalToken(): Record<string, string> {
+  const t = localStorage.getItem("obt_token");
+  return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(BASE + path, {
     ...init,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token()}`,
+      ...optionalToken(),
       ...(init.headers ?? {}),
     },
   });
   if (!res.ok) {
     const problem = await res.json().catch(() => ({ title: res.statusText }));
-    throw new Error(problem.detail || problem.title || `HTTP ${res.status}`);
+    throw new ApiError(res.status, problem.detail || problem.title || `HTTP ${res.status}`);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
+
+// Browser login helpers — navigate to the BFF endpoints (server-side OIDC exchange).
+export const session = {
+  login: () => window.location.assign("/auth/login"),
+  logout: () => window.location.assign("/auth/logout"),
+};
 
 export const api = {
   me: () => request<User>("/me"),

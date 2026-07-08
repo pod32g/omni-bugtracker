@@ -8,6 +8,10 @@ import (
 	"github.com/omni/bugtracker/internal/domain"
 )
 
+// SessionCookie holds the Omni-Identity access token (JWT) after browser login.
+// Set httpOnly by the OIDC callback; read by the auth middleware as a bearer fallback.
+const SessionCookie = "obt_session"
+
 type ctxKey struct{}
 
 // Principal is the authenticated caller for a request.

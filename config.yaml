@@ -27,10 +27,20 @@ worker:
   poll_interval: "1s"
 
 identity:
-  issuer: "https://id.omni.dev"
-  jwks_url: "https://id.omni.dev/.well-known/jwks.json"
+  # Omni-Identity (OIDC). Access tokens carry aud = client_id, so audience == client_id.
+  issuer: "http://192.168.68.34:8081"
+  jwks_url: "http://192.168.68.34:8081/jwks.json"
   audience: "omni-bugtracker"
   jwks_cache_ttl: "1h"
+  # Browser login (Authorization Code + PKCE, exchanged server-side by the API).
+  client_id: "omni-bugtracker"
+  authorize_url: "http://192.168.68.34:8081/oauth2/authorize"
+  token_url: "http://192.168.68.34:8081/oauth2/token"
+  userinfo_url: "http://192.168.68.34:8081/userinfo"
+  end_session_url: "http://192.168.68.34:8081/logout"
+  redirect_uri: "http://192.168.68.34:3002/auth/callback"
+  scopes: "openid email profile"
+  post_logout_url: "http://192.168.68.34:3002/"
 
 integrations:
   notify:
