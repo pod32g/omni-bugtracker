@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/binary"
@@ -18,12 +20,13 @@ import (
 	"github.com/omni/bugtracker/internal/domain"
 )
 
-// Verifier validates Omni-Identity RS256 JWTs against a cached JWKS.
+// Verifier validates Omni-Identity JWTs against a cached JWKS. Supports both RSA
+// (RS256) and Ed25519 (EdDSA) signing keys — Omni-Identity currently signs with EdDSA.
 type Verifier struct {
 	cfg    config.Identity
 	http   *http.Client
 	mu     sync.RWMutex
-	keys   map[string]*rsa.PublicKey
+	keys   map[string]crypto.PublicKey
 	loaded time.Time
 }
 
@@ -31,7 +34,7 @@ func NewVerifier(cfg config.Identity) *Verifier {
 	return &Verifier{
 		cfg:  cfg,
 		http: &http.Client{Timeout: 5 * time.Second},
-		keys: map[string]*rsa.PublicKey{},
+		keys: map[string]crypto.PublicKey{},
 	}
 }
 
@@ -47,7 +50,10 @@ type Claims struct {
 func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 	claims := &Claims{}
 	_, err := jwt.ParseWithClaims(raw, claims, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+		switch t.Method.(type) {
+		case *jwt.SigningMethodRSA, *jwt.SigningMethodEd25519:
+			// supported
+		default:
 			return nil, fmt.Errorf("unexpected signing method %q", t.Header["alg"])
 		}
 		kid, _ := t.Header["kid"].(string)
@@ -55,7 +61,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 	},
 		jwt.WithIssuer(v.cfg.Issuer),
 		jwt.WithAudience(v.cfg.Audience),
-		jwt.WithValidMethods([]string{"RS256"}),
+		jwt.WithValidMethods([]string{"RS256", "EdDSA"}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("verify token: %w", err)
@@ -66,7 +72,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 	return claims, nil
 }
 
-func (v *Verifier) keyFor(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+func (v *Verifier) keyFor(ctx context.Context, kid string) (crypto.PublicKey, error) {
 	v.mu.RLock()
 	key, ok := v.keys[kid]
 	fresh := time.Since(v.loaded) < v.cfg.JWKSCacheTTL
@@ -89,8 +95,12 @@ type jwks struct {
 	Keys []struct {
 		Kid string `json:"kid"`
 		Kty string `json:"kty"`
-		N   string `json:"n"`
-		E   string `json:"e"`
+		// RSA
+		N string `json:"n"`
+		E string `json:"e"`
+		// OKP (Ed25519)
+		Crv string `json:"crv"`
+		X   string `json:"x"`
 	} `json:"keys"`
 }
 
@@ -112,16 +122,20 @@ func (v *Verifier) refresh(ctx context.Context) error {
 		return fmt.Errorf("decode jwks: %w", err)
 	}
 
-	keys := make(map[string]*rsa.PublicKey, len(set.Keys))
+	keys := make(map[string]crypto.PublicKey, len(set.Keys))
 	for _, k := range set.Keys {
-		if k.Kty != "RSA" {
-			continue
+		switch k.Kty {
+		case "RSA":
+			if pub, err := parseRSA(k.N, k.E); err == nil {
+				keys[k.Kid] = pub
+			}
+		case "OKP":
+			if k.Crv == "Ed25519" {
+				if pub, err := parseEd25519(k.X); err == nil {
+					keys[k.Kid] = pub
+				}
+			}
 		}
-		pub, err := parseRSA(k.N, k.E)
-		if err != nil {
-			continue
-		}
-		keys[k.Kid] = pub
 	}
 
 	v.mu.Lock()
@@ -147,4 +161,15 @@ func parseRSA(nStr, eStr string) (*rsa.PublicKey, error) {
 		N: new(big.Int).SetBytes(nb),
 		E: int(binary.BigEndian.Uint64(padded)),
 	}, nil
+}
+
+func parseEd25519(xStr string) (ed25519.PublicKey, error) {
+	xb, err := base64.RawURLEncoding.DecodeString(xStr)
+	if err != nil {
+		return nil, err
+	}
+	if len(xb) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("bad ed25519 key length %d", len(xb))
+	}
+	return ed25519.PublicKey(xb), nil
 }
