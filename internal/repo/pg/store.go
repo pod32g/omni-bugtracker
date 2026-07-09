@@ -276,8 +276,8 @@ func (s *Store) ListIssues(ctx context.Context, f service.IssueFilter) ([]domain
 	}
 
 	args = append(args, clampLimit(f.Limit), f.Offset)
-	q := fmt.Sprintf(`%s WHERE %s ORDER BY i.created_at DESC LIMIT $%d OFFSET $%d`,
-		selectIssue, clause, len(args)-1, len(args))
+	q := fmt.Sprintf(`%s WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
+		selectIssue, clause, orderBy(f.Sort), len(args)-1, len(args))
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, 0, err
@@ -824,6 +824,23 @@ func prioPtr(p *domain.Priority) *string {
 	}
 	v := string(*p)
 	return &v
+}
+
+// orderBy maps a whitelisted sort key to a safe ORDER BY clause (never interpolate
+// user input into SQL). Enum order puts p0 / critical first.
+func orderBy(sort string) string {
+	switch sort {
+	case "created_at":
+		return "i.created_at ASC"
+	case "-updated_at", "updated":
+		return "i.updated_at DESC"
+	case "priority":
+		return "i.priority ASC, i.created_at DESC"
+	case "severity":
+		return "i.severity ASC NULLS LAST, i.created_at DESC"
+	default:
+		return "i.created_at DESC"
+	}
 }
 
 func clampLimit(l int32) int32 {

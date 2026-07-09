@@ -160,9 +160,9 @@ export const api = {
   createProject: (body: { key: string; name: string; description_md?: string }) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(body) }),
   listLabels: (projectKey: string) => request<{ items: Label[] }>(`/projects/${projectKey}/labels`),
-  listIssues: (projectKey: string, filter = "") =>
+  listIssues: (projectKey: string, filter = "", sort = "") =>
     request<{ items: Issue[]; total: number }>(
-      `/projects/${projectKey}/issues?filter=${encodeURIComponent(filter)}`,
+      `/projects/${projectKey}/issues?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}`,
     ),
   getIssue: (issueKey: string) => request<Issue>(`/issues/${issueKey}`),
   createIssue: (projectKey: string, body: NewIssue) =>

@@ -7,8 +7,16 @@ import { NewIssueForm } from "./NewIssueForm";
 
 const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
 
+const QUICK_FILTERS = [
+  { label: "Open", filter: "is:open" },
+  { label: "Assigned to me", filter: "assignee:@me" },
+  { label: "Critical", filter: "severity:critical" },
+  { label: "All", filter: "" },
+];
+
 export function IssueList() {
   const [filter, setFilter] = useState("is:open");
+  const [sort, setSort] = useState("");
   const [project, setProject] = useState<string>("");
   const [showNewIssue, setShowNewIssue] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
@@ -22,8 +30,8 @@ export function IssueList() {
   }, [project, projects.data]);
 
   const issues = useQuery({
-    queryKey: ["issues", project, filter],
-    queryFn: () => api.listIssues(project, filter),
+    queryKey: ["issues", project, filter, sort],
+    queryFn: () => api.listIssues(project, filter, sort),
     enabled: !!project,
   });
 
@@ -83,12 +91,40 @@ export function IssueList() {
 
       {hasProjects && (
         <>
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter: is:open assignee:@me severity:critical type:bug"
-            className="mb-4 w-full rounded-lg border border-surface-border bg-surface-raised px-3 py-2 font-mono text-sm outline-none focus:border-accent"
-          />
+          <div className="mb-4 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {QUICK_FILTERS.map((q) => (
+                <button
+                  key={q.label}
+                  onClick={() => setFilter(q.filter)}
+                  className={`rounded-full px-3 py-1 text-xs transition ${
+                    filter === q.filter
+                      ? "bg-accent text-white"
+                      : "border border-surface-border text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  {q.label}
+                </button>
+              ))}
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value)}
+                className="ml-auto rounded-lg border border-surface-border bg-surface-raised px-2 py-1 text-xs outline-none"
+              >
+                <option value="">Newest</option>
+                <option value="created_at">Oldest</option>
+                <option value="-updated_at">Recently updated</option>
+                <option value="priority">Priority</option>
+                <option value="severity">Severity</option>
+              </select>
+            </div>
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter: is:open assignee:@me severity:critical type:bug label:regression"
+              className="w-full rounded-lg border border-surface-border bg-surface-raised px-3 py-2 font-mono text-sm outline-none focus:border-accent"
+            />
+          </div>
           <div className="overflow-hidden rounded-xl border border-surface-border">
             {issues.isLoading && <div className="p-6 text-sm text-slate-400">Loading…</div>}
             {issues.isError && (
