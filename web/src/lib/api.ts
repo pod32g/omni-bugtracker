@@ -219,6 +219,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ to }),
     }),
+  // Re-homes the issue into another project. The response carries the issue's NEW key
+  // (it's reallocated a number in the target project), so callers should navigate to it.
+  moveIssue: (issueKey: string, targetProjectKey: string) =>
+    request<Issue>(`/issues/${issueKey}/move`, {
+      method: "POST",
+      body: JSON.stringify({ target_project_key: targetProjectKey }),
+    }),
   listComments: (issueKey: string) => request<Comment[]>(`/issues/${issueKey}/comments`),
   addComment: (issueKey: string, body_md: string) =>
     request<Comment>(`/issues/${issueKey}/comments`, {

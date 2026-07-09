@@ -188,6 +188,29 @@ paths:
         "200": { description: transitioned, content: { application/json: { schema: { $ref: "#/components/schemas/Issue" } } } }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /issues/{issueKey}/move:
+    parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    post:
+      tags: [issues]
+      operationId: moveIssue
+      description: >
+        Re-home an issue into another project. The issue is reallocated a number in the
+        target project, so its key changes; project-scoped associations (milestone,
+        release, components) are cleared and labels are re-mapped by name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_project_key]
+              properties:
+                target_project_key: { type: string }
+      responses:
+        "200": { description: moved, content: { application/json: { schema: { $ref: "#/components/schemas/Issue" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /issues/{issueKey}/activity:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
     get:

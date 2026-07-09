@@ -44,6 +44,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Patch("/issues/{issueKey}", h.updateIssue)
 	r.Delete("/issues/{issueKey}", h.deleteIssue)
 	r.Post("/issues/{issueKey}/transition", h.transition)
+	r.Post("/issues/{issueKey}/move", h.moveIssue)
 	r.Get("/issues/{issueKey}/comments", h.listComments)
 	r.Post("/issues/{issueKey}/comments", h.addComment)
 	r.Get("/issues/{issueKey}/activity", h.activity)
@@ -434,6 +435,48 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// moveIssue re-homes an issue into another project. The issue's key changes (it's
+// reallocated a number in the target project) and project-scoped associations are
+// reconciled — see Store.MoveIssue. Returns the moved issue with its new key.
+func (h *httpHandlers) moveIssue(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermIssueUpdate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
+		return
+	}
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		TargetProjectKey string `json:"target_project_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	target := strings.ToUpper(strings.TrimSpace(body.TargetProjectKey))
+	if !projectKeyRe.MatchString(target) {
+		httpapi.WriteValidation(w, map[string]string{"target_project_key": "required"})
+		return
+	}
+	if target == issue.ProjectKey {
+		httpapi.WriteProblem(w, http.StatusConflict, "already there", "issue is already in "+target)
+		return
+	}
+	if _, err := h.repo.GetProjectByKey(r.Context(), target); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project: "+target)
+		return
+	}
+	actor, _ := uuid.Parse(p.UserID)
+	moved, err := h.issues.Move(r.Context(), issue.ID, actor, target)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "move failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, moved)
 }
 
 func (h *httpHandlers) deleteIssue(w http.ResponseWriter, r *http.Request) {

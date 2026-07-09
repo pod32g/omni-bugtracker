@@ -454,6 +454,72 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 	return scanIssue(s.pool.QueryRow(ctx, selectIssue+` WHERE i.id = $1`, id))
 }
 
+// MoveIssue re-homes an issue into another project in one transaction. Because an issue's
+// human key is (project.key, number) and the table enforces UNIQUE(project_id, number),
+// the issue is given a fresh number allocated from the target project (mirroring
+// CreateIssue) — so its key changes. Milestone, release and components are project-scoped,
+// so they're cleared (they'd otherwise dangle to the source project); labels are re-mapped
+// by name into the target project's scope. Records "issue.moved" and enqueues the event.
+func (s *Store) MoveIssue(ctx context.Context, id, actor uuid.UUID, targetProjectKey string, publish service.PublishFn) (domain.Issue, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Snapshot the label names before the move so they can travel to the new project.
+	var labelNames []string
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id
+		                       WHERE il.issue_id = $1 ORDER BY l.name), '{}')`, id).Scan(&labelNames); err != nil {
+		return domain.Issue{}, err
+	}
+
+	// Allocate the next per-project number in the destination — the old number would
+	// collide with UNIQUE(project_id, number) in most projects.
+	var targetProjectID uuid.UUID
+	var number int32
+	if err := tx.QueryRow(ctx,
+		`UPDATE projects SET next_issue_number = next_issue_number + 1, updated_at = now()
+		 WHERE key = $1 RETURNING id, next_issue_number - 1`, targetProjectKey).
+		Scan(&targetProjectID, &number); err != nil {
+		return domain.Issue{}, fmt.Errorf("allocate number: %w", err)
+	}
+
+	// Re-home the issue; NULL the project-scoped milestone/release (they belong to the
+	// source project). deleted_at guard mirrors the other issue writes.
+	tag, err := tx.Exec(ctx,
+		`UPDATE issues SET project_id = $2, number = $3, milestone_id = NULL, release_id = NULL, updated_at = now()
+		 WHERE id = $1 AND deleted_at IS NULL`, id, targetProjectID, number)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.Issue{}, pgx.ErrNoRows
+	}
+
+	// Components reference the source project; drop the associations.
+	if _, err := tx.Exec(ctx, `DELETE FROM issue_components WHERE issue_id = $1`, id); err != nil {
+		return domain.Issue{}, err
+	}
+	// Re-create the label set under the target project's scope.
+	if err := setIssueLabels(ctx, tx, targetProjectID, id, labelNames, true); err != nil {
+		return domain.Issue{}, fmt.Errorf("remap labels: %w", err)
+	}
+	if err := recordActivity(ctx, tx, id, actor, "issue.moved", "issue", id); err != nil {
+		return domain.Issue{}, err
+	}
+	if publish != nil {
+		if err := publish(tx); err != nil {
+			return domain.Issue{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Issue{}, err
+	}
+	return scanIssue(s.pool.QueryRow(ctx, selectIssue+` WHERE i.id = $1`, id))
+}
+
 // SoftDeleteIssue marks the issue deleted, records the timeline entry, and emits the event.
 func (s *Store) SoftDeleteIssue(ctx context.Context, id, actor uuid.UUID, publish service.PublishFn) error {
 	tx, err := s.pool.Begin(ctx)

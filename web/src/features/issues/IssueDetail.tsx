@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, UNASSIGNED, type IssueStatus, type NewIssue, type Priority, type User } from "../../lib/api";
+import { api, UNASSIGNED, type IssueStatus, type NewIssue, type Priority, type Project, type User } from "../../lib/api";
 import { humanizeVerb, timeAgo } from "../../lib/activity";
 import { Avatar, LabelChip, PriorityText, SeverityMark, SeverityPill, StatusPill, statusLabel, statusTone } from "../../components/Badges";
 import { IconBranch, IconChevronDown, IconCommit, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
@@ -27,6 +27,7 @@ export function IssueDetail() {
   const activity = useQuery({ queryKey: ["activity", issueKey], queryFn: () => api.activity(issueKey) });
   const commits = useQuery({ queryKey: ["commits", issueKey], queryFn: () => api.commits(issueKey) });
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => api.listProjects() });
 
   // Inline quick-edit of rail fields (assignee, priority), à la Jira.
   const patch = useMutation({
@@ -34,6 +35,17 @@ export function IssueDetail() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["issue", issueKey] });
       qc.invalidateQueries({ queryKey: ["issues"] });
+    },
+  });
+
+  // Moving reallocates the issue's number in the target project, so its key changes —
+  // navigate to the new key on success. Both project lists refetch via the ["issues"] prefix.
+  const move = useMutation({
+    mutationFn: (targetProjectKey: string) => api.moveIssue(issueKey, targetProjectKey),
+    onSuccess: (moved) => {
+      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: ["issue", moved.key] });
+      navigate(`/issues/${moved.key}`, { replace: true });
     },
   });
 
@@ -210,6 +222,22 @@ export function IssueDetail() {
             <MicroLabel>Status</MicroLabel>
             <StatusControl status={i.status} onChange={(to) => transition.mutate(to)} pending={transition.isPending} />
           </div>
+
+          <MetaRow label="Project">
+            <ProjectControl
+              projectKey={i.project_key}
+              projects={(projects.data?.items ?? []).filter((p) => p.key !== i.project_key)}
+              pending={move.isPending}
+              onChange={(key) => {
+                if (
+                  window.confirm(
+                    `Move ${i.key} to ${key}? It gets a new key (${key}-N) and loses its milestone, release, and components.`,
+                  )
+                )
+                  move.mutate(key);
+              }}
+            />
+          </MetaRow>
 
           <MetaRow label="Assignee">
             <AssigneeControl
@@ -400,6 +428,46 @@ function AssigneeControl({
         {users.map((u) => (
           <option key={u.id} value={u.id}>
             {u.display_name || u.email}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function ProjectControl({
+  projectKey,
+  projects,
+  pending,
+  onChange,
+}: {
+  projectKey: string;
+  projects: Project[];
+  pending: boolean;
+  onChange: (key: string) => void;
+}) {
+  return (
+    <div className="relative">
+      <div className="-mx-1.5 flex items-center justify-between gap-2 rounded-md px-1.5 py-1 transition hover:bg-panel">
+        <span className="flex items-center gap-2">
+          <span className="rounded-sm border border-hairline bg-panel px-1.5 py-0.5 font-mono text-xs font-semibold text-blueprint">
+            {projectKey}
+          </span>
+          {pending && <span className="text-sm text-graphite-soft">Moving…</span>}
+        </span>
+        <IconChevronDown size={12} className="text-graphite-soft" />
+      </div>
+      <select
+        value={projectKey}
+        onChange={(e) => e.target.value !== projectKey && onChange(e.target.value)}
+        aria-label="Move to project"
+        disabled={pending || projects.length === 0}
+        className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+      >
+        <option value={projectKey}>{projectKey} (current)</option>
+        {projects.map((p) => (
+          <option key={p.key} value={p.key}>
+            {p.key} — {p.name}
           </option>
         ))}
       </select>

@@ -107,6 +107,18 @@ func (s *Issues) Update(ctx context.Context, id, actor uuid.UUID, in UpdateIssue
 	})
 }
 
+// Move re-homes an issue into another project. The issue gets a fresh key in the target
+// project (project-scoped number is reallocated), and project-scoped associations
+// (milestone, release, components, labels) are reconciled to the destination. Emits
+// issue.updated so downstream consumers refresh.
+func (s *Issues) Move(ctx context.Context, id, actor uuid.UUID, targetProjectKey string) (domain.Issue, error) {
+	return s.repo.MoveIssue(ctx, id, actor, targetProjectKey, func(tx pgx.Tx) error {
+		return s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
+			EventType: events.IssueUpdated, IssueID: id.String(), ActorID: actor.String(),
+		})
+	})
+}
+
 // Delete soft-deletes an issue and emits issue.deleted.
 func (s *Issues) Delete(ctx context.Context, id, actor uuid.UUID) error {
 	return s.repo.SoftDeleteIssue(ctx, id, actor, func(tx pgx.Tx) error {
