@@ -146,6 +146,16 @@ export const IconLogout = (p: P) => (
   </Svg>
 );
 
+export const IconBoard = (p: P) => (
+  <Svg {...p} viewBox="0 0 18 18">
+    <g strokeWidth={p.strokeWidth ?? 1.4}>
+      <rect x="2.5" y="2.5" width="3.6" height="13" rx="1" />
+      <rect x="7.2" y="2.5" width="3.6" height="9" rx="1" />
+      <rect x="11.9" y="2.5" width="3.6" height="11" rx="1" />
+    </g>
+  </Svg>
+);
+
 export const IconSun = (p: P) => (
   <Svg {...p} viewBox="0 0 18 18">
     <circle cx="9" cy="9" r="3.2" strokeWidth={p.strokeWidth ?? 1.4} />

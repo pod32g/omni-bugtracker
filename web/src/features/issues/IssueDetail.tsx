@@ -1,9 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, type IssueStatus } from "../../lib/api";
+import { api, UNASSIGNED, type IssueStatus, type NewIssue, type Priority, type User } from "../../lib/api";
 import { humanizeVerb, timeAgo } from "../../lib/activity";
 import { Avatar, LabelChip, PriorityText, SeverityMark, SeverityPill, StatusPill, statusLabel, statusTone } from "../../components/Badges";
 import { IconBranch, IconChevronDown, IconCommit, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
@@ -20,11 +20,22 @@ export function IssueDetail() {
   const [comment, setComment] = useState("");
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const issue = useQuery({ queryKey: ["issue", issueKey], queryFn: () => api.getIssue(issueKey) });
   const comments = useQuery({ queryKey: ["comments", issueKey], queryFn: () => api.listComments(issueKey) });
   const activity = useQuery({ queryKey: ["activity", issueKey], queryFn: () => api.activity(issueKey) });
   const commits = useQuery({ queryKey: ["commits", issueKey], queryFn: () => api.commits(issueKey) });
+  const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
+
+  // Inline quick-edit of rail fields (assignee, priority), à la Jira.
+  const patch = useMutation({
+    mutationFn: (body: Partial<NewIssue>) => api.updateIssue(issueKey, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["issue", issueKey] });
+      qc.invalidateQueries({ queryKey: ["issues"] });
+    },
+  });
 
   const transition = useMutation({
     mutationFn: (to: IssueStatus) => api.transition(issueKey, to),
@@ -44,6 +55,7 @@ export function IssueDetail() {
     mutationFn: () => api.addComment(issueKey, comment),
     onSuccess: () => {
       setComment("");
+      if (composerRef.current) composerRef.current.style.height = ""; // reset the auto-grown height
       qc.invalidateQueries({ queryKey: ["comments", issueKey] });
       qc.invalidateQueries({ queryKey: ["activity", issueKey] });
     },
@@ -102,8 +114,8 @@ export function IssueDetail() {
       </div>
 
       {/* Body */}
-      <div className="grid lg:grid-cols-[1fr_320px]">
-        <article className="flex flex-col gap-8 px-10 py-9">
+      <div className="mx-auto grid w-full max-w-[1160px] lg:grid-cols-[minmax(0,1fr)_320px]">
+        <article className="flex flex-col gap-8 px-6 py-9 sm:px-8 lg:px-10">
           <header className="flex flex-col gap-3.5">
             <div className="flex flex-wrap items-center gap-2.5">
               <SeverityPill severity={i.severity} />
@@ -168,11 +180,17 @@ export function IssueDetail() {
             <div className="flex items-start gap-3">
               <Avatar user={i.reporter} size={28} />
               <textarea
+                ref={composerRef}
                 value={comment}
-                onChange={(e) => setComment(e.target.value)}
+                onChange={(e) => {
+                  setComment(e.target.value);
+                  const t = e.currentTarget;
+                  t.style.height = "auto";
+                  t.style.height = `${Math.min(t.scrollHeight, 176)}px`; // grow with content, cap at ~176px
+                }}
                 placeholder="Leave a comment… (Markdown supported)"
                 rows={2}
-                className="grow resize-y rounded-md border border-hairline bg-paper px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
+                className="max-h-44 grow resize-none overflow-y-auto rounded-md border border-hairline bg-paper px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
               />
               <button
                 disabled={!comment.trim() || addComment.isPending}
@@ -185,20 +203,20 @@ export function IssueDetail() {
           </div>
         </article>
 
-        {/* Meta rail */}
-        <aside className="flex flex-col gap-6 border-hairline bg-mist px-6 py-8 lg:border-l">
+        {/* Meta rail — full-height panel; content sticks while scrolling the doc. */}
+        <aside className="border-hairline bg-mist lg:border-l">
+          <div className="flex flex-col gap-6 px-6 py-8 lg:sticky lg:top-[60px] lg:max-h-[calc(100vh-60px)] lg:overflow-y-auto">
           <div className="flex flex-col gap-2">
             <MicroLabel>Status</MicroLabel>
             <StatusControl status={i.status} onChange={(to) => transition.mutate(to)} pending={transition.isPending} />
           </div>
 
           <MetaRow label="Assignee">
-            <div className="flex items-center gap-2.5">
-              <Avatar user={i.assignee} size={26} />
-              <span className="text-sm font-medium text-ink">
-                {i.assignee?.display_name ?? i.assignee?.email ?? "Unassigned"}
-              </span>
-            </div>
+            <AssigneeControl
+              assignee={i.assignee}
+              users={users.data?.items ?? []}
+              onChange={(assignee_id) => patch.mutate({ assignee_id })}
+            />
           </MetaRow>
 
           {i.labels && i.labels.length > 0 && (
@@ -213,7 +231,7 @@ export function IssueDetail() {
 
           <div className="flex gap-4">
             <MetaRow label="Priority" className="grow">
-              <PriorityText priority={i.priority} />
+              <PriorityControl priority={i.priority} onChange={(priority) => patch.mutate({ priority })} />
             </MetaRow>
             <MetaRow label="Severity" className="grow">
               <SeverityMark severity={i.severity} />
@@ -266,6 +284,7 @@ export function IssueDetail() {
               </ul>
             </div>
           )}
+          </div>
         </aside>
       </div>
 
@@ -347,6 +366,65 @@ function StatusControl({
         {TRANSITIONS.map((s) => (
           <option key={s} value={s}>
             {statusLabel[s]}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function AssigneeControl({
+  assignee,
+  users,
+  onChange,
+}: {
+  assignee?: User;
+  users: User[];
+  onChange: (assigneeId: string) => void;
+}) {
+  return (
+    <div className="relative">
+      <div className="-mx-1.5 flex items-center gap-2.5 rounded-md px-1.5 py-1 transition hover:bg-panel">
+        <Avatar user={assignee} size={26} />
+        <span className="text-sm font-medium text-ink">
+          {assignee?.display_name ?? assignee?.email ?? "Unassigned"}
+        </span>
+      </div>
+      <select
+        value={assignee?.id ?? UNASSIGNED}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Change assignee"
+        className="absolute inset-0 cursor-pointer opacity-0"
+      >
+        <option value={UNASSIGNED}>Unassigned</option>
+        {users.map((u) => (
+          <option key={u.id} value={u.id}>
+            {u.display_name || u.email}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+const PRIORITIES: Priority[] = ["p0", "p1", "p2", "p3"];
+
+function PriorityControl({ priority, onChange }: { priority: Priority; onChange: (p: Priority) => void }) {
+  return (
+    <div className="relative inline-block">
+      <div className="-mx-1.5 flex items-center gap-1 rounded-md px-1.5 py-1 transition hover:bg-panel">
+        <PriorityText priority={priority} />
+        <IconChevronDown size={12} className="text-graphite-soft" />
+      </div>
+      <select
+        value={priority}
+        onChange={(e) => onChange(e.target.value as Priority)}
+        aria-label="Change priority"
+        className="absolute inset-0 cursor-pointer opacity-0"
+      >
+        {PRIORITIES.map((p) => (
+          <option key={p} value={p}>
+            {p.toUpperCase()}
           </option>
         ))}
       </select>

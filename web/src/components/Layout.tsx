@@ -6,6 +6,7 @@ import { ProjectProvider, useProject } from "../lib/project";
 import { useTheme } from "../lib/theme";
 import { Avatar } from "./Badges";
 import {
+  IconBoard,
   IconChevronDown,
   IconDashboard,
   IconFlag,
@@ -28,9 +29,11 @@ export function Layout() {
 
   return (
     <ProjectProvider>
-      <div className="flex min-h-screen bg-paper">
+      {/* App shell: fixed viewport, sidebar stays put, only <main> scrolls (its content
+          grows internally instead of growing the whole page). */}
+      <div className="flex h-screen overflow-hidden bg-paper">
         <Sidebar me={me.data} />
-        <main className="flex-1 overflow-auto">
+        <main className="min-w-0 flex-1 overflow-auto">
           <Outlet />
         </main>
       </div>
@@ -70,6 +73,7 @@ function Sidebar({ me }: { me?: User }) {
           label="Issues"
           trailing={openCount != null ? String(openCount) : undefined}
         />
+        <NavItem to="/board" icon={<IconBoard size={17} />} label="Board" />
         <NavItemSoon icon={<IconFlag size={17} />} label="Milestones" />
         <NavItemSoon icon={<IconTag size={17} />} label="Releases" />
       </nav>

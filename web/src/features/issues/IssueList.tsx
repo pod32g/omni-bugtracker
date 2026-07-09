@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, type Issue } from "../../lib/api";
 import { useProject } from "../../lib/project";
 import { timeAgo } from "../../lib/activity";
@@ -30,7 +30,9 @@ const shortAgo = (iso: string) => timeAgo(iso).replace(" ago", "");
 
 export function IssueList() {
   const { projects, projectKey, setProjectKey } = useProject();
-  const [filter, setFilter] = useState("is:open");
+  const [searchParams] = useSearchParams();
+  // Initial filter can be deep-linked from the dashboard gadgets (e.g. ?filter=assignee:@me).
+  const [filter, setFilter] = useState(() => searchParams.get("filter") ?? "is:open");
   const [sort, setSort] = useState("");
   const [showNewIssue, setShowNewIssue] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
