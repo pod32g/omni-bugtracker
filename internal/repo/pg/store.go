@@ -345,10 +345,11 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		  severity         = COALESCE($5::severity, severity),
 		  priority         = COALESCE($6::priority, priority),
 		  -- nil = unchanged; the zero UUID clears the assignee; otherwise assign.
+		  -- $7::uuid so Postgres can determine the parameter type (else 42P08).
 		  assignee_id      = CASE
-		                       WHEN $7 IS NULL THEN assignee_id
-		                       WHEN $7 = '00000000-0000-0000-0000-000000000000'::uuid THEN NULL
-		                       ELSE $7 END,
+		                       WHEN $7::uuid IS NULL THEN assignee_id
+		                       WHEN $7::uuid = '00000000-0000-0000-0000-000000000000'::uuid THEN NULL
+		                       ELSE $7::uuid END,
 		  version_affected = COALESCE($8, version_affected),
 		  version_fixed    = COALESCE($9, version_fixed),
 		  repro_steps_md   = COALESCE($10, repro_steps_md),
