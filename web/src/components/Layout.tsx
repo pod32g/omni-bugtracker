@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, session, type Project, type User } from "../lib/api";
 import { ProjectProvider, useProject } from "../lib/project";
 import { useTheme } from "../lib/theme";
@@ -14,10 +14,13 @@ import {
   IconLogout,
   IconMark,
   IconMoon,
+  IconPlus,
   IconSun,
   IconTag,
   IconTarget,
 } from "./icons";
+
+const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
 
 export function Layout() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me(), retry: false });
@@ -45,6 +48,7 @@ export function Layout() {
 function Sidebar({ me }: { me?: User }) {
   const { projects, projectKey, current, setProjectKey } = useProject();
   const { theme, toggle } = useTheme();
+  const canManage = CAN_MANAGE.has(me?.role ?? "");
   // Shares the ["dashboard"] cache with the Dashboard page — the open count is free here.
   const overview = useQuery({ queryKey: ["dashboard"], queryFn: () => api.dashboard(), retry: false });
   const openCount = overview.data?.open_issues;
@@ -61,7 +65,13 @@ function Sidebar({ me }: { me?: User }) {
         </div>
       </div>
 
-      <ProjectSwitcher projects={projects} current={current} projectKey={projectKey} onChange={setProjectKey} />
+      <ProjectSwitcher
+        projects={projects}
+        current={current}
+        projectKey={projectKey}
+        onChange={setProjectKey}
+        canManage={canManage}
+      />
 
       <nav className="mt-6 flex grow flex-col gap-0.5">
         <div className="px-2 pb-2 font-mono text-[10px] font-medium uppercase tracking-caps text-graphite-soft">
@@ -160,37 +170,151 @@ function ProjectSwitcher({
   current,
   projectKey,
   onChange,
+  canManage,
 }: {
   projects: Project[];
   current?: Project;
   projectKey: string;
   onChange: (key: string) => void;
+  canManage: boolean;
 }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+
   return (
     <div className="relative mt-7">
-      <div className="flex items-center justify-between rounded-md border border-hairline bg-paper px-3 py-2.5">
-        <div className="flex min-w-0 items-center gap-2.5">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-label="Switch or create project"
+        className="flex w-full items-center justify-between rounded-md border border-hairline bg-paper px-3 py-2.5 transition hover:border-graphite"
+      >
+        <span className="flex min-w-0 items-center gap-2.5">
           <span className="rounded-sm bg-blueprint-soft px-1.5 py-0.5 font-mono text-xs font-semibold text-blueprint">
             {current?.key ?? "—"}
           </span>
           <span className="truncate text-sm font-medium text-ink">{current?.name ?? "No project"}</span>
-        </div>
+        </span>
         <IconChevronDown size={14} className="text-graphite" />
-      </div>
-      {projects.length > 0 && (
-        <select
-          value={projectKey}
-          onChange={(e) => onChange(e.target.value)}
-          aria-label="Switch project"
-          className="absolute inset-0 cursor-pointer opacity-0"
-        >
-          {projects.map((p) => (
-            <option key={p.key} value={p.key}>
-              {p.key} — {p.name}
-            </option>
-          ))}
-        </select>
+      </button>
+
+      {open && (
+        <>
+          <button className="fixed inset-0 z-10 cursor-default" aria-hidden onClick={() => setOpen(false)} />
+          <div className="absolute inset-x-0 top-[46px] z-20 max-h-72 overflow-y-auto rounded-md border border-hairline bg-paper py-1 shadow-lg shadow-ink/10">
+            {projects.length === 0 && (
+              <div className="px-3 py-2 text-xs text-graphite-soft">No projects yet.</div>
+            )}
+            {projects.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => {
+                  onChange(p.key);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center gap-2.5 px-3 py-2 text-left transition hover:bg-panel ${
+                  p.key === projectKey ? "bg-blueprint-soft" : ""
+                }`}
+              >
+                <span className="rounded-sm bg-blueprint-soft px-1.5 py-0.5 font-mono text-[11px] font-semibold text-blueprint">
+                  {p.key}
+                </span>
+                <span className="truncate text-sm text-ink">{p.name}</span>
+              </button>
+            ))}
+            {canManage && (
+              <>
+                {projects.length > 0 && <div className="my-1 border-t border-hairline" />}
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    setCreating(true);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-blueprint transition hover:bg-panel"
+                >
+                  <IconPlus size={14} />
+                  New project
+                </button>
+              </>
+            )}
+          </div>
+        </>
       )}
+
+      {creating && (
+        <NewProjectDialog
+          onClose={() => setCreating(false)}
+          onCreated={(project) => {
+            // Seed the cache so the context's default-selection effect doesn't bounce
+            // the selection back to the first project before the refetch lands.
+            qc.setQueryData<{ items: Project[] }>(["projects"], (old) => ({
+              items: [...(old?.items ?? []), project],
+            }));
+            onChange(project.key);
+            setCreating(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (project: Project) => void }) {
+  const [key, setKey] = useState("");
+  const [name, setName] = useState("");
+  const create = useMutation({
+    mutationFn: () => api.createProject({ key: key.toUpperCase(), name: name.trim() }),
+    onSuccess: (p) => onCreated(p),
+  });
+  const valid = /^[A-Z][A-Z0-9]{1,9}$/.test(key) && name.trim().length > 0;
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/40 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-sm rounded-lg border border-hairline bg-paper p-6 shadow-xl shadow-ink/10"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="mb-4 text-lg font-bold text-ink">New project</h2>
+        <label className="mb-3 block">
+          <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">Key</span>
+          <input
+            autoFocus
+            value={key}
+            onChange={(e) => setKey(e.target.value.toUpperCase())}
+            placeholder="API"
+            maxLength={10}
+            className="w-full rounded-md border border-hairline bg-paper px-3 py-2 font-mono uppercase text-ink outline-none focus:border-blueprint"
+          />
+          <span className="mt-1 block text-xs text-graphite-soft">
+            2–10 uppercase letters/digits; the issue prefix (e.g. API-1).
+          </span>
+        </label>
+        <label className="mb-4 block">
+          <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">Name</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && valid && !create.isPending) create.mutate();
+            }}
+            placeholder="API Service"
+            className="w-full rounded-md border border-hairline bg-paper px-3 py-2 text-ink outline-none focus:border-blueprint"
+          />
+        </label>
+        {create.isError && <p className="mb-3 text-sm text-critical">{(create.error as Error).message}</p>}
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-md px-4 py-2 text-sm text-graphite hover:text-ink">
+            Cancel
+          </button>
+          <button
+            disabled={!valid || create.isPending}
+            onClick={() => create.mutate()}
+            className="rounded-md bg-blueprint px-4 py-2 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+          >
+            {create.isPending ? "Creating…" : "Create project"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
