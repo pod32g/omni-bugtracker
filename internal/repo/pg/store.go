@@ -442,9 +442,10 @@ func (s *Store) AddComment(ctx context.Context, issueID, author uuid.UUID, body 
 
 func (s *Store) ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, issue_id, author_id, body_md, edited_at, created_at
-		 FROM comments WHERE issue_id = $1 AND deleted_at IS NULL
-		 ORDER BY created_at LIMIT $2 OFFSET $3`, issueID, clampLimit(limit), offset)
+		`SELECT c.id, c.issue_id, c.author_id, u.display_name, u.email, c.body_md, c.edited_at, c.created_at
+		 FROM comments c LEFT JOIN users u ON u.id = c.author_id
+		 WHERE c.issue_id = $1 AND c.deleted_at IS NULL
+		 ORDER BY c.created_at LIMIT $2 OFFSET $3`, issueID, clampLimit(limit), offset)
 	if err != nil {
 		return nil, err
 	}
@@ -452,12 +453,13 @@ func (s *Store) ListComments(ctx context.Context, issueID uuid.UUID, limit, offs
 	var out []domain.Comment
 	for rows.Next() {
 		var c domain.Comment
-		var author *uuid.UUID
-		if err := rows.Scan(&c.ID, &c.IssueID, &author, &c.BodyMD, &c.EditedAt, &c.CreatedAt); err != nil {
+		var authorID *uuid.UUID
+		var displayName, email *string
+		if err := rows.Scan(&c.ID, &c.IssueID, &authorID, &displayName, &email, &c.BodyMD, &c.EditedAt, &c.CreatedAt); err != nil {
 			return nil, err
 		}
-		if author != nil {
-			c.Author = &domain.User{ID: *author}
+		if authorID != nil {
+			c.Author = &domain.User{ID: *authorID, DisplayName: deref(displayName), Email: deref(email)}
 		}
 		out = append(out, c)
 	}
