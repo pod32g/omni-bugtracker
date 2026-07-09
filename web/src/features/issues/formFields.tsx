@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../../lib/api";
 
 export function Field({ label, children, className = "" }: { label: string; children: ReactNode; className?: string }) {
   return (
@@ -31,6 +33,30 @@ export function Textarea({ value, onChange, rows }: { value: string; onChange: (
       rows={rows}
       className="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
     />
+  );
+}
+
+export function AssigneeSelect({
+  value,
+  onChange,
+  unassignedValue = "",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  unassignedValue?: string;
+}) {
+  const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 outline-none focus:border-accent"
+    >
+      <option value={unassignedValue}>Unassigned</option>
+      {users.data?.items.map((u) => (
+        <option key={u.id} value={u.id}>{u.display_name || u.email}</option>
+      ))}
+    </select>
   );
 }
 

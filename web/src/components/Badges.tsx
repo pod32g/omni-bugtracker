@@ -1,4 +1,4 @@
-import type { IssueStatus, Priority, Severity } from "../lib/api";
+import type { IssueStatus, Priority, Severity, User } from "../lib/api";
 
 const severityColor: Record<Severity, string> = {
   critical: "bg-severity-critical/20 text-severity-critical",
@@ -31,6 +31,34 @@ export function StatusBadge({ status }: { status: IssueStatus }) {
     <span className="rounded border border-surface-border bg-white/5 px-2 py-0.5 text-xs text-slate-300">
       {statusLabel[status]}
     </span>
+  );
+}
+
+export function Avatar({ user }: { user?: User }) {
+  if (!user) {
+    return (
+      <span
+        title="Unassigned"
+        className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-white/5 text-[10px] text-slate-500"
+      >
+        –
+      </span>
+    );
+  }
+  const initials = (user.display_name || user.email || "?").slice(0, 2).toUpperCase();
+  return (
+    <span
+      title={user.display_name || user.email}
+      className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-accent/25 text-[10px] font-medium text-accent-hover"
+    >
+      {initials}
+    </span>
+  );
+}
+
+export function LabelChip({ name }: { name: string }) {
+  return (
+    <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs text-slate-300">{name}</span>
   );
 }
 

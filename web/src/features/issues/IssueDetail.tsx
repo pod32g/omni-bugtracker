@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type IssueStatus } from "../../lib/api";
 import { humanizeVerb, timeAgo } from "../../lib/activity";
-import { PriorityBadge, SeverityBadge, StatusBadge } from "../../components/Badges";
+import { Avatar, LabelChip, PriorityBadge, SeverityBadge, StatusBadge } from "../../components/Badges";
 import { EditIssueForm } from "./EditIssueForm";
 
 const TRANSITIONS: IssueStatus[] = [
@@ -133,8 +133,26 @@ export function IssueDetail() {
         </div>
         <div>
           <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Assignee</h3>
-          <p className="text-sm text-slate-300">{i.assignee?.display_name ?? "Unassigned"}</p>
+          <div className="flex items-center gap-2 text-sm text-slate-300">
+            <Avatar user={i.assignee} />
+            {i.assignee?.display_name ?? i.assignee?.email ?? "Unassigned"}
+          </div>
         </div>
+        <div>
+          <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Reporter</h3>
+          <div className="flex items-center gap-2 text-sm text-slate-300">
+            <Avatar user={i.reporter} />
+            {i.reporter?.display_name ?? i.reporter?.email ?? "—"}
+          </div>
+        </div>
+        {i.labels && i.labels.length > 0 && (
+          <div>
+            <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Labels</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {i.labels.map((l) => <LabelChip key={l} name={l} />)}
+            </div>
+          </div>
+        )}
         <div>
           <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Development</h3>
           {commits.data && commits.data.length > 0 ? (

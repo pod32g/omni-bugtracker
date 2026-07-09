@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../../lib/api";
-import { PriorityBadge, SeverityBadge, StatusBadge } from "../../components/Badges";
+import { Avatar, LabelChip, PriorityBadge, SeverityBadge, StatusBadge } from "../../components/Badges";
 import { NewIssueForm } from "./NewIssueForm";
 
 const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
@@ -101,10 +101,14 @@ export function IssueList() {
                 className="flex items-center gap-3 border-b border-surface-border px-4 py-3 last:border-0 hover:bg-white/5"
               >
                 <span className="w-24 font-mono text-sm text-accent-hover">{issue.key}</span>
-                <span className="flex-1 truncate">{issue.title}</span>
-                <SeverityBadge severity={issue.severity} />
-                <PriorityBadge priority={issue.priority} />
-                <StatusBadge status={issue.status} />
+                <span className="truncate">{issue.title}</span>
+                <div className="ml-auto flex items-center gap-2">
+                  {issue.labels?.slice(0, 3).map((l) => <LabelChip key={l} name={l} />)}
+                  <SeverityBadge severity={issue.severity} />
+                  <PriorityBadge priority={issue.priority} />
+                  <StatusBadge status={issue.status} />
+                  <Avatar user={issue.assignee} />
+                </div>
               </Link>
             ))}
             {issues.data?.items?.length === 0 && (

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type Issue, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
-import { Field, Modal, Select, TextInput, Textarea } from "./formFields";
+import { api, UNASSIGNED, type Issue, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
+import { AssigneeSelect, Field, Modal, Select, TextInput, Textarea } from "./formFields";
 
 const TYPES: IssueType[] = ["bug", "task", "feature", "improvement"];
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
@@ -14,6 +14,7 @@ export function EditIssueForm({ issue, onClose }: { issue: Issue; onClose: () =>
     title: issue.title,
     priority: issue.priority,
     severity: issue.severity ?? "medium",
+    assignee_id: issue.assignee?.id ?? UNASSIGNED,
     description_md: issue.description_md ?? "",
     repro_steps_md: issue.repro_steps_md ?? "",
     expected_md: issue.expected_md ?? "",
@@ -53,6 +54,13 @@ export function EditIssueForm({ issue, onClose }: { issue: Issue; onClose: () =>
             <Select value={form.severity ?? "medium"} onChange={(v) => set("severity", v as Severity)} options={SEVERITIES} />
           </Field>
         )}
+        <Field label="Assignee">
+          <AssigneeSelect
+            value={form.assignee_id ?? UNASSIGNED}
+            onChange={(v) => set("assignee_id", v)}
+            unassignedValue={UNASSIGNED}
+          />
+        </Field>
       </div>
 
       <Field label="Title" className="mt-3">

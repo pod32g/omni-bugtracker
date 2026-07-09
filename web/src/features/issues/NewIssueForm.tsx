@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
-import { Field, Modal, Select, TextInput, Textarea } from "./formFields";
+import { AssigneeSelect, Field, Modal, Select, TextInput, Textarea } from "./formFields";
 
 const TYPES: IssueType[] = ["bug", "task", "feature", "improvement"];
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
@@ -19,6 +19,7 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
     mutationFn: () => {
       const body: NewIssue = { ...form };
       if (body.type !== "bug") delete body.severity;
+      if (!body.assignee_id) delete body.assignee_id;
       return api.createIssue(projectKey, body);
     },
     onSuccess: (issue) => {
@@ -44,6 +45,9 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
             <Select value={form.severity ?? "medium"} onChange={(v) => set("severity", v as Severity)} options={SEVERITIES} />
           </Field>
         )}
+        <Field label="Assignee">
+          <AssigneeSelect value={form.assignee_id ?? ""} onChange={(v) => set("assignee_id", v)} />
+        </Field>
       </div>
 
       <Field label="Title" className="mt-3">

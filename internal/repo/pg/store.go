@@ -9,7 +9,6 @@ package pg
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -270,7 +269,11 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		  type             = COALESCE($4::issue_type, type),
 		  severity         = COALESCE($5::severity, severity),
 		  priority         = COALESCE($6::priority, priority),
-		  assignee_id      = COALESCE($7, assignee_id),
+		  -- nil = unchanged; the zero UUID clears the assignee; otherwise assign.
+		  assignee_id      = CASE
+		                       WHEN $7 IS NULL THEN assignee_id
+		                       WHEN $7 = '00000000-0000-0000-0000-000000000000'::uuid THEN NULL
+		                       ELSE $7 END,
 		  version_affected = COALESCE($8, version_affected),
 		  version_fixed    = COALESCE($9, version_fixed),
 		  repro_steps_md   = COALESCE($10, repro_steps_md),
@@ -656,8 +659,15 @@ const selectIssue = `
 	SELECT i.id, p.key, i.number, i.type, i.title, i.description_md, i.status, i.severity, i.priority,
 	       i.version_affected, i.version_fixed, i.git_commit_sha, i.pull_request_url,
 	       i.repro_steps_md, i.expected_md, i.actual_md, i.environment_md, i.source,
-	       i.created_at, i.updated_at
-	FROM issues i JOIN projects p ON p.id = i.project_id`
+	       i.created_at, i.updated_at,
+	       ru.id, ru.display_name, ru.email,
+	       au.id, au.display_name, au.email,
+	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
+	       COALESCE(array(SELECT c.name FROM issue_components ic JOIN components c ON c.id = ic.component_id WHERE ic.issue_id = i.id ORDER BY c.name), '{}') AS components
+	FROM issues i
+	JOIN projects p ON p.id = i.project_id
+	LEFT JOIN users ru ON ru.id = i.reporter_id
+	LEFT JOIN users au ON au.id = i.assignee_id`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -666,24 +676,39 @@ type scanner interface {
 func scanIssue(row scanner) (domain.Issue, error) {
 	var i domain.Issue
 	var sev *string
+	var reporterID, assigneeID *uuid.UUID
+	var reporterName, reporterEmail, assigneeName, assigneeEmail *string
 	err := row.Scan(
 		&i.ID, &i.ProjectKey, &i.Number, &i.Type, &i.Title, &i.DescriptionMD, &i.Status, &sev, &i.Priority,
 		&i.VersionAffected, &i.VersionFixed, &i.GitCommitSHA, &i.PullRequestURL,
 		&i.ReproStepsMD, &i.ExpectedMD, &i.ActualMD, &i.EnvironmentMD, &i.Source,
 		&i.CreatedAt, &i.UpdatedAt,
+		&reporterID, &reporterName, &reporterEmail,
+		&assigneeID, &assigneeName, &assigneeEmail,
+		&i.Labels, &i.Components,
 	)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.Issue{}, err
-		}
 		return domain.Issue{}, err
 	}
 	if sev != nil {
 		sv := domain.Severity(*sev)
 		i.Severity = &sv
 	}
+	if reporterID != nil {
+		i.Reporter = &domain.User{ID: *reporterID, DisplayName: deref(reporterName), Email: deref(reporterEmail)}
+	}
+	if assigneeID != nil {
+		i.Assignee = &domain.User{ID: *assigneeID, DisplayName: deref(assigneeName), Email: deref(assigneeEmail)}
+	}
 	i.Key = domain.IssueKey(i.ProjectKey, i.Number)
 	return i, nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func recordActivity(ctx context.Context, tx pgx.Tx, issueID, actor uuid.UUID, verb, entityType string, entityID uuid.UUID) error {

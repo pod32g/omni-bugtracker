@@ -31,11 +31,15 @@ export interface NewIssue {
   description_md?: string;
   severity?: Severity;
   priority: Priority;
+  assignee_id?: string;
   repro_steps_md?: string;
   expected_md?: string;
   actual_md?: string;
   environment_md?: string;
 }
+
+// Sentinel assignee_id meaning "clear the assignee" on PATCH.
+export const UNASSIGNED = "00000000-0000-0000-0000-000000000000";
 
 export interface Issue {
   id: string;
@@ -143,6 +147,8 @@ export const session = {
 
 export const api = {
   me: () => request<User>("/me"),
+  listUsers: () => request<{ items: User[] }>("/users"),
+  dashboard: () => request<DashboardOverview>("/dashboards/overview"),
   listProjects: () => request<{ items: Project[] }>("/projects"),
   createProject: (body: { key: string; name: string; description_md?: string }) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(body) }),
@@ -173,6 +179,4 @@ export const api = {
     }),
   activity: (issueKey: string) => request<Activity[]>(`/issues/${issueKey}/activity`),
   commits: (issueKey: string) => request<LinkedCommit[]>(`/issues/${issueKey}/commits`),
-  dashboard: (project = "") =>
-    request<DashboardOverview>(`/dashboards/overview?project=${project}`),
 };
