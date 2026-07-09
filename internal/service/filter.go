@@ -39,6 +39,8 @@ func ParseFilter(projectKey, raw, meUserID string) IssueFilter {
 		case "type":
 			t := domain.IssueType(val)
 			f.Type = &t
+		case "label":
+			f.Label = strings.Trim(val, `"`)
 		default:
 			freeText = append(freeText, tok)
 		}

@@ -16,6 +16,12 @@ type Comment struct {
 	CreatedAt time.Time  `json:"created_at"`
 }
 
+type Label struct {
+	ID    uuid.UUID `json:"id"`
+	Name  string    `json:"name"`
+	Color string    `json:"color"`
+}
+
 type LinkedCommit struct {
 	SHA       string    `json:"sha"`
 	Repo      string    `json:"repo"`

@@ -30,6 +30,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/dashboards/overview", h.dashboard)
 	r.Get("/projects", h.listProjects)
 	r.Post("/projects", h.createProject)
+	r.Get("/projects/{key}/labels", h.listLabels)
 	r.Get("/projects/{key}/issues", h.listIssues)
 	r.Post("/projects/{key}/issues", h.createIssue)
 	r.Get("/issues/{issueKey}", h.getIssue)
@@ -119,6 +120,15 @@ func (h *httpHandlers) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, project)
+}
+
+func (h *httpHandlers) listLabels(w http.ResponseWriter, r *http.Request) {
+	labels, err := h.repo.ListLabels(r.Context(), chi.URLParam(r, "key"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": labels})
 }
 
 func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +229,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		ExpectedMD      *string           `json:"expected_md"`
 		ActualMD        *string           `json:"actual_md"`
 		EnvironmentMD   *string           `json:"environment_md"`
+		Labels          *[]string         `json:"labels"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -234,7 +245,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		Severity: body.Severity, Priority: body.Priority, AssigneeID: body.AssigneeID,
 		VersionAffected: body.VersionAffected, VersionFixed: body.VersionFixed,
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
-		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD,
+		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD, Labels: body.Labels,
 	})
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())

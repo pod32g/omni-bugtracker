@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 
@@ -57,6 +57,70 @@ export function AssigneeSelect({
         <option key={u.id} value={u.id}>{u.display_name || u.email}</option>
       ))}
     </select>
+  );
+}
+
+export function LabelsInput({
+  projectKey,
+  value,
+  onChange,
+}: {
+  projectKey: string;
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const labels = useQuery({
+    queryKey: ["labels", projectKey],
+    queryFn: () => api.listLabels(projectKey),
+    enabled: !!projectKey,
+  });
+  const [text, setText] = useState("");
+  const add = (name: string) => {
+    const n = name.trim();
+    if (n && !value.includes(n)) onChange([...value, n]);
+    setText("");
+  };
+  const suggestions = (labels.data?.items ?? []).map((l) => l.name).filter((n) => !value.includes(n));
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-surface-border bg-surface px-2 py-1.5">
+        {value.map((l) => (
+          <span key={l} className="flex items-center gap-1 rounded-full bg-accent/20 px-2 py-0.5 text-xs text-accent-hover">
+            {l}
+            <button type="button" onClick={() => onChange(value.filter((v) => v !== l))} className="hover:text-white">×</button>
+          </span>
+        ))}
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              add(text);
+            } else if (e.key === "Backspace" && !text && value.length) {
+              onChange(value.slice(0, -1));
+            }
+          }}
+          placeholder="Add label…"
+          className="min-w-[6rem] flex-1 bg-transparent text-sm outline-none"
+        />
+      </div>
+      {suggestions.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {suggestions.slice(0, 10).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => add(s)}
+              className="rounded-full border border-surface-border px-2 py-0.5 text-xs text-slate-400 hover:border-accent hover:text-accent-hover"
+            >
+              + {s}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

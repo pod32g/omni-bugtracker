@@ -25,6 +25,12 @@ export interface Project {
   created_at: string;
 }
 
+export interface Label {
+  id: string;
+  name: string;
+  color: string;
+}
+
 export interface NewIssue {
   type: IssueType;
   title: string;
@@ -32,6 +38,7 @@ export interface NewIssue {
   severity?: Severity;
   priority: Priority;
   assignee_id?: string;
+  labels?: string[];
   repro_steps_md?: string;
   expected_md?: string;
   actual_md?: string;
@@ -152,6 +159,7 @@ export const api = {
   listProjects: () => request<{ items: Project[] }>("/projects"),
   createProject: (body: { key: string; name: string; description_md?: string }) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(body) }),
+  listLabels: (projectKey: string) => request<{ items: Label[] }>(`/projects/${projectKey}/labels`),
   listIssues: (projectKey: string, filter = "") =>
     request<{ items: Issue[]; total: number }>(
       `/projects/${projectKey}/issues?filter=${encodeURIComponent(filter)}`,

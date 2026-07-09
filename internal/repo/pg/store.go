@@ -9,6 +9,7 @@ package pg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -96,6 +97,72 @@ func (s *Store) ListProjects(ctx context.Context, limit, offset int32) ([]domain
 	return out, rows.Err()
 }
 
+func (s *Store) ListLabels(ctx context.Context, projectKey string) ([]domain.Label, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT l.id, l.name, l.color FROM labels l
+		 LEFT JOIN projects p ON p.id = l.project_id
+		 WHERE l.project_id IS NULL OR p.key = $1
+		 ORDER BY l.name`, projectKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Label
+	for rows.Next() {
+		var l domain.Label
+		if err := rows.Scan(&l.ID, &l.Name, &l.Color); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// ensureLabels resolves label names to ids within a project, creating any that are new.
+func ensureLabels(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, names []string) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	seen := map[string]bool{}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[strings.ToLower(name)] {
+			continue
+		}
+		seen[strings.ToLower(name)] = true
+		var id uuid.UUID
+		err := tx.QueryRow(ctx,
+			`SELECT id FROM labels WHERE project_id = $1 AND lower(name) = lower($2)`, projectID, name).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if err := tx.QueryRow(ctx,
+				`INSERT INTO labels (project_id, name) VALUES ($1, $2) RETURNING id`, projectID, name).Scan(&id); err != nil {
+				return nil, err
+			}
+		} else if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func setIssueLabels(ctx context.Context, tx pgx.Tx, projectID, issueID uuid.UUID, names []string, replace bool) error {
+	if replace {
+		if _, err := tx.Exec(ctx, `DELETE FROM issue_labels WHERE issue_id = $1`, issueID); err != nil {
+			return err
+		}
+	}
+	ids, err := ensureLabels(ctx, tx, projectID, names)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO issue_labels (issue_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, issueID, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) CreateProject(ctx context.Context, in service.CreateProjectInput) (domain.Project, error) {
 	const q = `INSERT INTO projects (key, name, description_md)
 	           VALUES ($1, $2, $3)
@@ -149,6 +216,11 @@ func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, pu
 	}
 	issue.Key = domain.IssueKey(in.ProjectKey, number)
 
+	if len(in.Labels) > 0 {
+		if err := setIssueLabels(ctx, tx, projectID, issue.ID, in.Labels, false); err != nil {
+			return domain.Issue{}, fmt.Errorf("set labels: %w", err)
+		}
+	}
 	if err := recordActivity(ctx, tx, issue.ID, in.ReporterID, "issue.created", "issue", issue.ID); err != nil {
 		return domain.Issue{}, err
 	}
@@ -187,6 +259,9 @@ func (s *Store) ListIssues(ctx context.Context, f service.IssueFilter) ([]domain
 	}
 	if f.Severity != nil {
 		add("i.severity = $%d", string(*f.Severity))
+	}
+	if strings.TrimSpace(f.Label) != "" {
+		add("EXISTS (SELECT 1 FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id AND lower(l.name) = lower($%d))", f.Label)
 	}
 	if strings.TrimSpace(f.Query) != "" {
 		add("i.fts @@ websearch_to_tsquery('english', $%d)", f.Query)
@@ -287,6 +362,15 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		in.AssigneeID, in.VersionAffected, in.VersionFixed,
 		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD); err != nil {
 		return domain.Issue{}, err
+	}
+	if in.Labels != nil {
+		var projectID uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT project_id FROM issues WHERE id = $1`, id).Scan(&projectID); err != nil {
+			return domain.Issue{}, err
+		}
+		if err := setIssueLabels(ctx, tx, projectID, id, *in.Labels, true); err != nil {
+			return domain.Issue{}, fmt.Errorf("set labels: %w", err)
+		}
 	}
 	if err := recordActivity(ctx, tx, id, actor, "issue.updated", "issue", id); err != nil {
 		return domain.Issue{}, err

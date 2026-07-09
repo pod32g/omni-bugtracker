@@ -33,6 +33,7 @@ type Repository interface {
 	GetProjectByKey(ctx context.Context, key string) (domain.Project, error)
 	ListProjects(ctx context.Context, limit, offset int32) ([]domain.Project, error)
 	CreateProject(ctx context.Context, in CreateProjectInput) (domain.Project, error)
+	ListLabels(ctx context.Context, projectKey string) ([]domain.Label, error)
 
 	// Issues (transactional writes take a PublishFn for the outbox)
 	CreateIssue(ctx context.Context, in CreateIssueInput, publish PublishIssueFn) (domain.Issue, error)
@@ -135,6 +136,7 @@ type UpdateIssueInput struct {
 	ExpectedMD      *string
 	ActualMD        *string
 	EnvironmentMD   *string
+	Labels          *[]string // nil = unchanged; non-nil replaces the label set
 }
 
 type IssueFilter struct {
@@ -143,6 +145,7 @@ type IssueFilter struct {
 	AssigneeID *uuid.UUID
 	Type       *domain.IssueType
 	Severity   *domain.Severity
+	Label      string
 	Query      string // full-text
 	Sort       string
 	Limit      int32

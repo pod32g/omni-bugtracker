@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
-import { AssigneeSelect, Field, Modal, Select, TextInput, Textarea } from "./formFields";
+import { AssigneeSelect, Field, LabelsInput, Modal, Select, TextInput, Textarea } from "./formFields";
 
 const TYPES: IssueType[] = ["bug", "task", "feature", "improvement"];
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
@@ -11,7 +11,7 @@ const PRIORITIES: Priority[] = ["p0", "p1", "p2", "p3"];
 export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onClose: () => void }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [form, setForm] = useState<NewIssue>({ type: "bug", title: "", priority: "p2", severity: "medium" });
+  const [form, setForm] = useState<NewIssue>({ type: "bug", title: "", priority: "p2", severity: "medium", labels: [] });
 
   const set = <K extends keyof NewIssue>(k: K, v: NewIssue[K]) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -55,6 +55,9 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
       </Field>
       <Field label="Description (Markdown)" className="mt-3">
         <Textarea value={form.description_md ?? ""} onChange={(v) => set("description_md", v)} rows={4} />
+      </Field>
+      <Field label="Labels" className="mt-3">
+        <LabelsInput projectKey={projectKey} value={form.labels ?? []} onChange={(v) => set("labels", v)} />
       </Field>
 
       {isBug && (
