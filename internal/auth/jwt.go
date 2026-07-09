@@ -66,9 +66,6 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verify token: %w", err)
 	}
-	if claims.Role == "" {
-		claims.Role = domain.RoleMember
-	}
 	return claims, nil
 }
 

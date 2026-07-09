@@ -43,15 +43,14 @@ func (a *Auth) SyncUser(ctx context.Context, c *auth.Claims) (*auth.Principal, e
 	if err != nil {
 		return nil, err
 	}
-	role := u.Role
-	if c.Role != "" {
-		role = c.Role // Identity is authoritative for role claims
-	}
+	// The tracker's DB is authoritative for its own RBAC roles (managed via the
+	// Members admin / promoted by an owner). We intentionally do NOT let the identity
+	// token's `role` claim override it — Omni-Identity is the IdP, not the role store.
 	return &auth.Principal{
 		UserID:      u.ID.String(),
 		IdentitySub: u.IdentitySub,
 		Email:       u.Email,
 		DisplayName: u.DisplayName,
-		Role:        role,
+		Role:        u.Role,
 	}, nil
 }
