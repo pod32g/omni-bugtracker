@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type Issue } from "../../lib/api";
 import { useProject } from "../../lib/project";
@@ -29,13 +29,12 @@ const SORTS = [
 const shortAgo = (iso: string) => timeAgo(iso).replace(" ago", "");
 
 export function IssueList() {
-  const { projects, projectKey, setProjectKey } = useProject();
+  const { projects, projectKey } = useProject();
   const [searchParams] = useSearchParams();
   // Initial filter can be deep-linked from the dashboard gadgets (e.g. ?filter=assignee:@me).
   const [filter, setFilter] = useState(() => searchParams.get("filter") ?? "is:open");
   const [sort, setSort] = useState("");
   const [showNewIssue, setShowNewIssue] = useState(false);
-  const [showNewProject, setShowNewProject] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me(), retry: false });
@@ -91,14 +90,6 @@ export function IssueList() {
             />
             <span className="rounded-sm border border-hairline px-1.5 py-px font-mono text-xs text-graphite-soft">/</span>
           </label>
-          {canManage && (
-            <button
-              onClick={() => setShowNewProject((s) => !s)}
-              className="flex h-10 items-center rounded-md border border-hairline px-3.5 text-sm font-medium text-graphite transition hover:border-graphite hover:text-ink"
-            >
-              New project
-            </button>
-          )}
           <button
             onClick={() => setShowNewIssue(true)}
             disabled={!projectKey}
@@ -110,19 +101,12 @@ export function IssueList() {
         </div>
       </div>
 
-      {showNewProject && canManage && (
-        <NewProjectInline
-          onDone={(key) => {
-            setShowNewProject(false);
-            if (key) setProjectKey(key);
-          }}
-        />
-      )}
-
       {!hasProjects && !projects.length && (
         <div className="m-9 rounded-lg border border-hairline bg-panel p-6 text-sm text-graphite">
           No projects yet.{" "}
-          {canManage ? "Create one with “New project” above." : "Ask an admin to create a project."}
+          {canManage
+            ? "Create one from the project switcher in the sidebar."
+            : "Ask an admin to create a project."}
         </div>
       )}
 
@@ -278,53 +262,6 @@ function SortSelect({ value, onChange }: { value: string; onChange: (v: string) 
           </option>
         ))}
       </select>
-    </div>
-  );
-}
-
-function NewProjectInline({ onDone }: { onDone: (key?: string) => void }) {
-  const qc = useQueryClient();
-  const [key, setKey] = useState("");
-  const [name, setName] = useState("");
-  const create = useMutation({
-    mutationFn: () => api.createProject({ key: key.toUpperCase(), name }),
-    onSuccess: (p) => {
-      qc.invalidateQueries({ queryKey: ["projects"] });
-      onDone(p.key);
-    },
-  });
-  return (
-    <div className="mx-9 mt-4 flex flex-wrap items-end gap-3 rounded-lg border border-hairline bg-panel p-4">
-      <label className="text-sm">
-        <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">Key</span>
-        <input
-          value={key}
-          onChange={(e) => setKey(e.target.value.toUpperCase())}
-          placeholder="BUG"
-          maxLength={10}
-          className="w-28 rounded-md border border-hairline bg-paper px-3 py-1.5 font-mono uppercase text-ink outline-none focus:border-blueprint"
-        />
-      </label>
-      <label className="flex-1 text-sm">
-        <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">Name</span>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Bug Tracker"
-          className="w-full rounded-md border border-hairline bg-paper px-3 py-1.5 text-ink outline-none focus:border-blueprint"
-        />
-      </label>
-      <button
-        disabled={!/^[A-Z][A-Z0-9]{1,9}$/.test(key) || !name.trim() || create.isPending}
-        onClick={() => create.mutate()}
-        className="rounded-md bg-blueprint px-4 py-1.5 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
-      >
-        Create
-      </button>
-      <button onClick={() => onDone()} className="px-2 py-1.5 text-sm text-graphite hover:text-ink">
-        Cancel
-      </button>
-      {create.isError && <p className="w-full text-sm text-critical">{(create.error as Error).message}</p>}
     </div>
   );
 }
