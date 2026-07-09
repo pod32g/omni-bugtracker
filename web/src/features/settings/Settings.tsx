@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../../lib/api";
+import { api, type User } from "../../lib/api";
 import { timeAgo } from "../../lib/activity";
+import { Avatar } from "../../components/Badges";
 import { IconPlus } from "../../components/icons";
+
+const ROLES = ["owner", "admin", "maintainer", "member", "reporter", "bot"];
 
 export function Settings() {
   const qc = useQueryClient();
@@ -10,6 +13,14 @@ export function Settings() {
   const [name, setName] = useState("");
   const [created, setCreated] = useState<string | null>(null); // plaintext, shown once
   const [copied, setCopied] = useState(false);
+
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
+  const canManageRoles = ["owner", "admin"].includes(me.data?.role ?? "");
+  const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers(), enabled: canManageRoles });
+  const setUserRole = useMutation({
+    mutationFn: ({ id, role }: { id: string; role: string }) => api.updateUserRole(id, role),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+  });
 
   const create = useMutation({
     mutationFn: () => api.createToken(name.trim()),
@@ -128,7 +139,72 @@ export function Settings() {
             ))}
           </div>
         </section>
+
+        {canManageRoles && (
+          <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
+            <div className="flex flex-col gap-1">
+              <h2 className="text-base font-semibold text-ink">Members</h2>
+              <p className="text-sm leading-relaxed text-graphite">
+                Roles set what each user can do. <span className="text-ink">Owner/admin</span> manage everything
+                including roles; <span className="text-ink">maintainer</span> manages projects;{" "}
+                <span className="text-ink">member</span> files &amp; works issues;{" "}
+                <span className="text-ink">reporter</span> only reports; <span className="text-ink">bot</span> is for
+                automation.
+              </p>
+            </div>
+            <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
+              {users.isLoading && <div className="p-4 text-sm text-graphite">Loading…</div>}
+              {users.data?.items.map((u: User) => (
+                <div key={u.id} className="flex items-center gap-3 p-3.5">
+                  <Avatar user={u} size={28} />
+                  <div className="min-w-0 grow">
+                    <div className="truncate text-sm font-medium text-ink">
+                      {u.display_name || u.email}
+                      {u.id === me.data?.id && (
+                        <span className="ml-2 text-xs font-normal text-graphite-soft">(you)</span>
+                      )}
+                    </div>
+                    <div className="truncate text-xs text-graphite-soft">{u.email}</div>
+                  </div>
+                  <RoleSelect
+                    value={u.role ?? "member"}
+                    disabled={u.id === me.data?.id || setUserRole.isPending}
+                    onChange={(role) => setUserRole.mutate({ id: u.id, role })}
+                  />
+                </div>
+              ))}
+            </div>
+            {setUserRole.isError && <p className="text-sm text-critical">{(setUserRole.error as Error).message}</p>}
+          </section>
+        )}
       </div>
     </div>
+  );
+}
+
+function RoleSelect({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (role: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label="Role"
+      title={disabled ? "You can't change your own role" : "Change role"}
+      className="shrink-0 rounded-md border border-hairline bg-paper px-2.5 py-1.5 text-sm capitalize text-ink outline-none focus:border-blueprint disabled:opacity-60"
+    >
+      {ROLES.map((r) => (
+        <option key={r} value={r}>
+          {r}
+        </option>
+      ))}
+    </select>
   );
 }

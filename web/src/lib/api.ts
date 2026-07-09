@@ -185,6 +185,8 @@ export const session = {
 export const api = {
   me: () => request<User>("/me"),
   listUsers: () => request<{ items: User[] }>("/users"),
+  updateUserRole: (id: string, role: string) =>
+    request<User>(`/users/${id}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
   dashboard: () => request<DashboardOverview>("/dashboards/overview"),
   listProjects: () => request<{ items: Project[] }>("/projects"),
   createProject: (body: { key: string; name: string; description_md?: string }) =>

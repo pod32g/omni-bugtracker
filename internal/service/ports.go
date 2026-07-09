@@ -54,6 +54,7 @@ type Repository interface {
 	RecentActivity(ctx context.Context, limit int32) ([]domain.Activity, error)
 	Dashboard(ctx context.Context) (domain.Dashboard, error)
 	ListUsers(ctx context.Context, limit int32) ([]domain.User, error)
+	UpdateUserRole(ctx context.Context, userID uuid.UUID, role domain.Role) (domain.User, error)
 
 	// Git integration
 	UpsertCommit(ctx context.Context, in CommitInput) (uuid.UUID, error)

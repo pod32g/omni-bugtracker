@@ -30,6 +30,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/me/tokens", h.createToken)
 	r.Delete("/me/tokens/{id}", h.revokeToken)
 	r.Get("/users", h.users)
+	r.Patch("/users/{id}/role", h.updateUserRole)
 	r.Get("/dashboards/overview", h.dashboard)
 	r.Get("/projects", h.listProjects)
 	r.Post("/projects", h.createProject)
@@ -141,6 +142,49 @@ func (h *httpHandlers) users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": users})
+}
+
+func (h *httpHandlers) updateUserRole(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermAdmin) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing admin:all")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad user id", "")
+		return
+	}
+	if id.String() == p.UserID {
+		httpapi.WriteProblem(w, http.StatusConflict, "forbidden", "you can't change your own role")
+		return
+	}
+	var body struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if !validRole(body.Role) {
+		httpapi.WriteValidation(w, map[string]string{"role": "must be owner, admin, maintainer, member, reporter, or bot"})
+		return
+	}
+	user, err := h.repo.UpdateUserRole(r.Context(), id, domain.Role(body.Role))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+func validRole(role string) bool {
+	switch domain.Role(role) {
+	case domain.RoleOwner, domain.RoleAdmin, domain.RoleMaintainer, domain.RoleMember, domain.RoleReporter, domain.RoleBot:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *httpHandlers) dashboard(w http.ResponseWriter, r *http.Request) {

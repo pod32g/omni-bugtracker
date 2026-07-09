@@ -62,6 +62,20 @@ paths:
         "204": { description: revoked }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /users/{id}/role:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    patch:
+      tags: [system]
+      operationId: updateUserRole
+      description: "Change a user's role (owner/admin only; cannot change your own)."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [role], properties: { role: { type: string, enum: [owner, admin, maintainer, member, reporter, bot] } } } } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /projects:
     get:
       tags: [projects]

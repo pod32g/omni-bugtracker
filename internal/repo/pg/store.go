@@ -34,9 +34,12 @@ func (s *Store) UpsertUser(ctx context.Context, in service.UpsertUserParams) (do
 	// COALESCE(NULLIF(...,'')) keeps existing profile fields when a caller (e.g. the
 	// per-request middleware validating an access token that carries no email/name)
 	// upserts with empty values — only the OIDC callback's id_token enrichment fills them.
+	// Bootstrap: the very first user to sign in on a fresh install becomes owner, so
+	// there's always an admin without hand-editing the DB. Everyone else defaults to member.
 	const q = `
-		INSERT INTO users (identity_sub, email, display_name, avatar_url)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO users (identity_sub, email, display_name, avatar_url, role)
+		VALUES ($1, $2, $3, $4,
+		        CASE WHEN NOT EXISTS (SELECT 1 FROM users) THEN 'owner'::app_role ELSE 'member'::app_role END)
 		ON CONFLICT (identity_sub) DO UPDATE
 		  SET email        = COALESCE(NULLIF(EXCLUDED.email, ''), users.email),
 		      display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), users.display_name),
@@ -674,6 +677,16 @@ func (s *Store) ListUsers(ctx context.Context, limit int32) ([]domain.User, erro
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) UpdateUserRole(ctx context.Context, userID uuid.UUID, role domain.Role) (domain.User, error) {
+	const q = `UPDATE users SET role = $2::app_role, updated_at = now()
+	           WHERE id = $1
+	           RETURNING id, identity_sub, email, display_name, avatar_url, role`
+	var u domain.User
+	err := s.pool.QueryRow(ctx, q, userID, string(role)).
+		Scan(&u.ID, &u.IdentitySub, &u.Email, &u.DisplayName, &u.AvatarURL, &u.Role)
+	return u, err
 }
 
 func scanCountMap(ctx context.Context, s *Store, dst map[string]int, query string) error {
