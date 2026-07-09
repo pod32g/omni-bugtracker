@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type IssueStatus } from "../../lib/api";
 import { PriorityBadge, SeverityBadge, StatusBadge } from "../../components/Badges";
+import { EditIssueForm } from "./EditIssueForm";
 
 const TRANSITIONS: IssueStatus[] = [
   "in_progress", "blocked", "ready_for_review", "resolved", "closed", "reopened",
@@ -13,7 +14,9 @@ const TRANSITIONS: IssueStatus[] = [
 export function IssueDetail() {
   const { issueKey = "" } = useParams();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [comment, setComment] = useState("");
+  const [editing, setEditing] = useState(false);
 
   const issue = useQuery({ queryKey: ["issue", issueKey], queryFn: () => api.getIssue(issueKey) });
   const comments = useQuery({ queryKey: ["comments", issueKey], queryFn: () => api.listComments(issueKey) });
@@ -23,6 +26,13 @@ export function IssueDetail() {
   const transition = useMutation({
     mutationFn: (to: IssueStatus) => api.transition(issueKey, to),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["issue", issueKey] }),
+  });
+  const del = useMutation({
+    mutationFn: () => api.deleteIssue(issueKey),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["issues"] });
+      navigate("/issues");
+    },
   });
   const addComment = useMutation({
     mutationFn: () => api.addComment(issueKey, comment),
@@ -47,6 +57,23 @@ export function IssueDetail() {
           <StatusBadge status={i.status} />
           <SeverityBadge severity={i.severity} />
           <PriorityBadge priority={i.priority} />
+          <div className="ml-auto flex gap-2">
+            <button
+              onClick={() => setEditing(true)}
+              className="rounded-lg border border-surface-border px-2.5 py-1 text-xs text-slate-300 hover:border-accent hover:text-accent-hover"
+            >
+              Edit
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm(`Delete ${i.key}? This removes it from lists (soft delete).`)) del.mutate();
+              }}
+              disabled={del.isPending}
+              className="rounded-lg border border-surface-border px-2.5 py-1 text-xs text-severity-high hover:border-severity-high disabled:opacity-50"
+            >
+              {del.isPending ? "Deleting…" : "Delete"}
+            </button>
+          </div>
         </div>
         <h1 className="mb-4 text-2xl font-semibold">{i.title}</h1>
 
@@ -143,6 +170,8 @@ export function IssueDetail() {
           </ul>
         </div>
       </aside>
+
+      {editing && <EditIssueForm issue={i} onClose={() => setEditing(false)} />}
     </div>
   );
 }

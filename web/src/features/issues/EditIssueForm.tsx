@@ -1,37 +1,46 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
-import { api, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
+import { api, type Issue, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
 import { Field, Modal, Select, TextInput, Textarea } from "./formFields";
 
 const TYPES: IssueType[] = ["bug", "task", "feature", "improvement"];
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
 const PRIORITIES: Priority[] = ["p0", "p1", "p2", "p3"];
 
-export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onClose: () => void }) {
+export function EditIssueForm({ issue, onClose }: { issue: Issue; onClose: () => void }) {
   const qc = useQueryClient();
-  const navigate = useNavigate();
-  const [form, setForm] = useState<NewIssue>({ type: "bug", title: "", priority: "p2", severity: "medium" });
+  const [form, setForm] = useState<NewIssue>({
+    type: issue.type,
+    title: issue.title,
+    priority: issue.priority,
+    severity: issue.severity ?? "medium",
+    description_md: issue.description_md ?? "",
+    repro_steps_md: issue.repro_steps_md ?? "",
+    expected_md: issue.expected_md ?? "",
+    actual_md: issue.actual_md ?? "",
+    environment_md: issue.environment_md ?? "",
+  });
 
   const set = <K extends keyof NewIssue>(k: K, v: NewIssue[K]) => setForm((f) => ({ ...f, [k]: v }));
 
-  const create = useMutation({
+  const save = useMutation({
     mutationFn: () => {
-      const body: NewIssue = { ...form };
-      if (body.type !== "bug") delete body.severity;
-      return api.createIssue(projectKey, body);
+      const patch: Partial<NewIssue> = { ...form };
+      if (patch.type !== "bug") delete patch.severity;
+      return api.updateIssue(issue.key, patch);
     },
-    onSuccess: (issue) => {
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["issue", issue.key] });
       qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: ["activity", issue.key] });
       onClose();
-      navigate(`/issues/${issue.key}`);
     },
   });
 
   const isBug = form.type === "bug";
 
   return (
-    <Modal title={`New issue in ${projectKey}`} onClose={onClose}>
+    <Modal title={`Edit ${issue.key}`} onClose={onClose}>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Type">
           <Select value={form.type} onChange={(v) => set("type", v as IssueType)} options={TYPES} />
@@ -70,16 +79,16 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
         </div>
       )}
 
-      {create.isError && <p className="mt-3 text-sm text-severity-high">{(create.error as Error).message}</p>}
+      {save.isError && <p className="mt-3 text-sm text-severity-high">{(save.error as Error).message}</p>}
 
       <div className="mt-5 flex justify-end gap-2">
         <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-slate-200">Cancel</button>
         <button
-          disabled={!form.title.trim() || create.isPending}
-          onClick={() => create.mutate()}
+          disabled={!form.title.trim() || save.isPending}
+          onClick={() => save.mutate()}
           className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
         >
-          {create.isPending ? "Creating…" : "Create issue"}
+          {save.isPending ? "Saving…" : "Save changes"}
         </button>
       </div>
     </Modal>

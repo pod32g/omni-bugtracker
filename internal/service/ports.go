@@ -39,6 +39,8 @@ type Repository interface {
 	GetIssueByKey(ctx context.Context, projectKey string, number int32) (domain.Issue, error)
 	ListIssues(ctx context.Context, f IssueFilter) ([]domain.Issue, int, error)
 	TransitionIssue(ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID, publish PublishFn) (domain.Issue, error)
+	UpdateIssue(ctx context.Context, id, actor uuid.UUID, in UpdateIssueInput, publish PublishFn) (domain.Issue, error)
+	SoftDeleteIssue(ctx context.Context, id, actor uuid.UUID, publish PublishFn) error
 
 	// Comments & timeline
 	AddComment(ctx context.Context, issueID, author uuid.UUID, body string, publish PublishFn) (domain.Comment, error)
@@ -114,6 +116,22 @@ type CreateIssueInput struct {
 	EnvironmentMD   string
 	Source          domain.IssueSource
 	DedupeKey       *string
+}
+
+// UpdateIssueInput is a partial update: nil fields are left unchanged.
+type UpdateIssueInput struct {
+	Title           *string
+	DescriptionMD   *string
+	Type            *domain.IssueType
+	Severity        *domain.Severity
+	Priority        *domain.Priority
+	AssigneeID      *uuid.UUID
+	VersionAffected *string
+	VersionFixed    *string
+	ReproStepsMD    *string
+	ExpectedMD      *string
+	ActualMD        *string
+	EnvironmentMD   *string
 }
 
 type IssueFilter struct {

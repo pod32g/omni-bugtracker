@@ -254,6 +254,73 @@ func (s *Store) TransitionIssue(ctx context.Context, id uuid.UUID, to domain.Iss
 	return scanIssue(row)
 }
 
+// UpdateIssue applies a partial update (COALESCE keeps unchanged fields), records an
+// "issue.updated" timeline entry, enqueues the event, and returns the refreshed issue.
+func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service.UpdateIssueInput, publish service.PublishFn) (domain.Issue, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	const q = `
+		UPDATE issues SET
+		  title            = COALESCE($2, title),
+		  description_md   = COALESCE($3, description_md),
+		  type             = COALESCE($4::issue_type, type),
+		  severity         = COALESCE($5::severity, severity),
+		  priority         = COALESCE($6::priority, priority),
+		  assignee_id      = COALESCE($7, assignee_id),
+		  version_affected = COALESCE($8, version_affected),
+		  version_fixed    = COALESCE($9, version_fixed),
+		  repro_steps_md   = COALESCE($10, repro_steps_md),
+		  expected_md      = COALESCE($11, expected_md),
+		  actual_md        = COALESCE($12, actual_md),
+		  environment_md   = COALESCE($13, environment_md),
+		  updated_at       = now()
+		WHERE id = $1 AND deleted_at IS NULL`
+	if _, err := tx.Exec(ctx, q, id,
+		in.Title, in.DescriptionMD, typePtr(in.Type), sevPtr(in.Severity), prioPtr(in.Priority),
+		in.AssigneeID, in.VersionAffected, in.VersionFixed,
+		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD); err != nil {
+		return domain.Issue{}, err
+	}
+	if err := recordActivity(ctx, tx, id, actor, "issue.updated", "issue", id); err != nil {
+		return domain.Issue{}, err
+	}
+	if publish != nil {
+		if err := publish(tx); err != nil {
+			return domain.Issue{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Issue{}, err
+	}
+	return scanIssue(s.pool.QueryRow(ctx, selectIssue+` WHERE i.id = $1`, id))
+}
+
+// SoftDeleteIssue marks the issue deleted, records the timeline entry, and emits the event.
+func (s *Store) SoftDeleteIssue(ctx context.Context, id, actor uuid.UUID, publish service.PublishFn) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, `UPDATE issues SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`, id); err != nil {
+		return err
+	}
+	if err := recordActivity(ctx, tx, id, actor, "issue.deleted", "issue", id); err != nil {
+		return err
+	}
+	if publish != nil {
+		if err := publish(tx); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 // ── comments & activity ──
 
 func (s *Store) AddComment(ctx context.Context, issueID, author uuid.UUID, body string, publish service.PublishFn) (domain.Comment, error) {
@@ -493,6 +560,22 @@ func sevPtr(s *domain.Severity) *string {
 		return nil
 	}
 	v := string(*s)
+	return &v
+}
+
+func typePtr(t *domain.IssueType) *string {
+	if t == nil {
+		return nil
+	}
+	v := string(*t)
+	return &v
+}
+
+func prioPtr(p *domain.Priority) *string {
+	if p == nil {
+		return nil
+	}
+	v := string(*p)
 	return &v
 }
 

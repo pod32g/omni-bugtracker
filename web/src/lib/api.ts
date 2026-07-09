@@ -155,6 +155,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  updateIssue: (issueKey: string, patch: Partial<NewIssue>) =>
+    request<Issue>(`/issues/${issueKey}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteIssue: (issueKey: string) =>
+    request<void>(`/issues/${issueKey}`, { method: "DELETE" }),
   transition: (issueKey: string, to: IssueStatus) =>
     request<Issue>(`/issues/${issueKey}/transition`, {
       method: "POST",

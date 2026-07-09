@@ -98,6 +98,24 @@ func (s *Issues) Transition(ctx context.Context, id uuid.UUID, from, to domain.I
 	})
 }
 
+// Update applies a partial edit and emits issue.updated.
+func (s *Issues) Update(ctx context.Context, id, actor uuid.UUID, in UpdateIssueInput) (domain.Issue, error) {
+	return s.repo.UpdateIssue(ctx, id, actor, in, func(tx pgx.Tx) error {
+		return s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
+			EventType: events.IssueUpdated, IssueID: id.String(), ActorID: actor.String(),
+		})
+	})
+}
+
+// Delete soft-deletes an issue and emits issue.deleted.
+func (s *Issues) Delete(ctx context.Context, id, actor uuid.UUID) error {
+	return s.repo.SoftDeleteIssue(ctx, id, actor, func(tx pgx.Tx) error {
+		return s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
+			EventType: events.IssueDeleted, IssueID: id.String(), ActorID: actor.String(),
+		})
+	})
+}
+
 // Comment adds a comment and emits comment.created.
 func (s *Issues) Comment(ctx context.Context, issueID, author uuid.UUID, body string) (domain.Comment, error) {
 	return s.repo.AddComment(ctx, issueID, author, body, func(tx pgx.Tx) error {

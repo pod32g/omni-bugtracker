@@ -31,6 +31,8 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/projects/{key}/issues", h.listIssues)
 	r.Post("/projects/{key}/issues", h.createIssue)
 	r.Get("/issues/{issueKey}", h.getIssue)
+	r.Patch("/issues/{issueKey}", h.updateIssue)
+	r.Delete("/issues/{issueKey}", h.deleteIssue)
 	r.Post("/issues/{issueKey}/transition", h.transition)
 	r.Get("/issues/{issueKey}/comments", h.listComments)
 	r.Post("/issues/{issueKey}/comments", h.addComment)
@@ -172,6 +174,71 @@ func (h *httpHandlers) getIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, issue)
+}
+
+func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermIssueUpdate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
+		return
+	}
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Title           *string           `json:"title"`
+		DescriptionMD   *string           `json:"description_md"`
+		Type            *domain.IssueType `json:"type"`
+		Severity        *domain.Severity  `json:"severity"`
+		Priority        *domain.Priority  `json:"priority"`
+		AssigneeID      *uuid.UUID        `json:"assignee_id"`
+		VersionAffected *string           `json:"version_affected"`
+		VersionFixed    *string           `json:"version_fixed"`
+		ReproStepsMD    *string           `json:"repro_steps_md"`
+		ExpectedMD      *string           `json:"expected_md"`
+		ActualMD        *string           `json:"actual_md"`
+		EnvironmentMD   *string           `json:"environment_md"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.Title != nil && strings.TrimSpace(*body.Title) == "" {
+		httpapi.WriteValidation(w, map[string]string{"title": "cannot be empty"})
+		return
+	}
+	actor, _ := uuid.Parse(p.UserID)
+	updated, err := h.issues.Update(r.Context(), issue.ID, actor, UpdateIssueInput{
+		Title: body.Title, DescriptionMD: body.DescriptionMD, Type: body.Type,
+		Severity: body.Severity, Priority: body.Priority, AssigneeID: body.AssigneeID,
+		VersionAffected: body.VersionAffected, VersionFixed: body.VersionFixed,
+		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
+		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (h *httpHandlers) deleteIssue(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermIssueDelete) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:delete")
+		return
+	}
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	actor, _ := uuid.Parse(p.UserID)
+	if err := h.issues.Delete(r.Context(), issue.ID, actor); err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *httpHandlers) transition(w http.ResponseWriter, r *http.Request) {

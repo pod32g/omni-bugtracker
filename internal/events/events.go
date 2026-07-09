@@ -17,6 +17,7 @@ import (
 const (
 	IssueCreated       = "issue.created"
 	IssueUpdated       = "issue.updated"
+	IssueDeleted       = "issue.deleted"
 	IssueAssigned      = "issue.assigned"
 	IssueStatusChanged = "issue.status_changed"
 	IssueResolved      = "issue.resolved"
