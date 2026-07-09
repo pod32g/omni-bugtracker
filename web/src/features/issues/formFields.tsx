@@ -2,10 +2,13 @@ import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 
+const inputClass =
+  "w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-blueprint";
+
 export function Field({ label, children, className = "" }: { label: string; children: ReactNode; className?: string }) {
   return (
     <label className={`block ${className}`}>
-      <span className="mb-1 block text-xs uppercase tracking-wide text-slate-500">{label}</span>
+      <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">{label}</span>
       {children}
     </label>
   );
@@ -13,27 +16,18 @@ export function Field({ label, children, className = "" }: { label: string; chil
 
 export function Select({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: string[] }) {
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 outline-none focus:border-accent"
-    >
+    <select value={value} onChange={(e) => onChange(e.target.value)} className={inputClass}>
       {options.map((o) => (
-        <option key={o} value={o}>{o}</option>
+        <option key={o} value={o}>
+          {o}
+        </option>
       ))}
     </select>
   );
 }
 
 export function Textarea({ value, onChange, rows }: { value: string; onChange: (v: string) => void; rows: number }) {
-  return (
-    <textarea
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      rows={rows}
-      className="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
-    />
-  );
+  return <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={rows} className={inputClass} />;
 }
 
 export function AssigneeSelect({
@@ -47,14 +41,12 @@ export function AssigneeSelect({
 }) {
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 outline-none focus:border-accent"
-    >
+    <select value={value} onChange={(e) => onChange(e.target.value)} className={inputClass}>
       <option value={unassignedValue}>Unassigned</option>
       {users.data?.items.map((u) => (
-        <option key={u.id} value={u.id}>{u.display_name || u.email}</option>
+        <option key={u.id} value={u.id}>
+          {u.display_name || u.email}
+        </option>
       ))}
     </select>
   );
@@ -84,11 +76,16 @@ export function LabelsInput({
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-surface-border bg-surface px-2 py-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-hairline bg-paper px-2 py-1.5">
         {value.map((l) => (
-          <span key={l} className="flex items-center gap-1 rounded-full bg-accent/20 px-2 py-0.5 text-xs text-accent-hover">
+          <span
+            key={l}
+            className="flex items-center gap-1 rounded-full bg-blueprint-soft px-2 py-0.5 text-xs font-medium text-blueprint"
+          >
             {l}
-            <button type="button" onClick={() => onChange(value.filter((v) => v !== l))} className="hover:text-white">×</button>
+            <button type="button" onClick={() => onChange(value.filter((v) => v !== l))} className="hover:text-ink">
+              ×
+            </button>
           </span>
         ))}
         <input
@@ -103,7 +100,7 @@ export function LabelsInput({
             }
           }}
           placeholder="Add label…"
-          className="min-w-[6rem] flex-1 bg-transparent text-sm outline-none"
+          className="min-w-[6rem] flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-graphite-soft"
         />
       </div>
       {suggestions.length > 0 && (
@@ -113,7 +110,7 @@ export function LabelsInput({
               key={s}
               type="button"
               onClick={() => add(s)}
-              className="rounded-full border border-surface-border px-2 py-0.5 text-xs text-slate-400 hover:border-accent hover:text-accent-hover"
+              className="rounded-full border border-hairline px-2 py-0.5 text-xs text-graphite transition hover:border-blueprint hover:text-blueprint"
             >
               + {s}
             </button>
@@ -124,28 +121,40 @@ export function LabelsInput({
   );
 }
 
-export function TextInput({ value, onChange, placeholder, autoFocus }: { value: string; onChange: (v: string) => void; placeholder?: string; autoFocus?: boolean }) {
+export function TextInput({
+  value,
+  onChange,
+  placeholder,
+  autoFocus,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+}) {
   return (
     <input
       autoFocus={autoFocus}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 outline-none focus:border-accent"
+      className={`${inputClass} placeholder:text-graphite-soft`}
     />
   );
 }
 
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/40 p-4" onClick={onClose}>
       <div
-        className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-2xl border border-surface-border bg-surface-raised p-6"
+        className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-lg border border-hairline bg-paper p-6 shadow-xl shadow-ink/10"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">✕</button>
+          <h2 className="text-lg font-bold text-ink">{title}</h2>
+          <button onClick={onClose} className="text-graphite transition hover:text-ink">
+            ✕
+          </button>
         </div>
         {children}
       </div>

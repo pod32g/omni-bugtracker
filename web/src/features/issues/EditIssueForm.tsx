@@ -91,14 +91,14 @@ export function EditIssueForm({ issue, onClose }: { issue: Issue; onClose: () =>
         </div>
       )}
 
-      {save.isError && <p className="mt-3 text-sm text-severity-high">{(save.error as Error).message}</p>}
+      {save.isError && <p className="mt-3 text-sm text-critical">{(save.error as Error).message}</p>}
 
       <div className="mt-5 flex justify-end gap-2">
-        <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-slate-200">Cancel</button>
+        <button onClick={onClose} className="rounded-md px-4 py-2 text-sm text-graphite hover:text-ink">Cancel</button>
         <button
           disabled={!form.title.trim() || save.isPending}
           onClick={() => save.mutate()}
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+          className="rounded-md bg-blueprint px-4 py-2 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
         >
           {save.isPending ? "Saving…" : "Save changes"}
         </button>

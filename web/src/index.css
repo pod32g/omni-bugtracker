@@ -3,26 +3,52 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+}
+
+html {
+  font-synthesis: none;
 }
 
 body {
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Rich code blocks in markdown bodies. */
-.markdown pre {
-  @apply bg-black/40 rounded-lg p-4 overflow-x-auto font-mono text-sm my-3 border border-surface-border;
-}
-.markdown code {
-  @apply font-mono text-[0.85em];
+/* Rendered Markdown bodies (issue description sections, comments). Tuned for the
+   light "blueprint" theme: plain ink prose, blueprint links, dark code blocks. */
+.markdown {
+  @apply text-[15px] leading-[1.7] text-ink;
 }
 .markdown p {
-  @apply my-2 leading-relaxed;
+  @apply my-2;
 }
-.markdown h1, .markdown h2, .markdown h3 {
-  @apply font-semibold mt-4 mb-2;
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  @apply mt-4 mb-2 font-semibold text-ink;
+}
+.markdown ul {
+  @apply my-2 ml-5 list-disc;
+}
+.markdown ol {
+  @apply my-2 ml-5 list-decimal;
+}
+.markdown li {
+  @apply my-1;
 }
 .markdown a {
-  @apply text-accent hover:text-accent-hover underline;
+  @apply text-blueprint underline underline-offset-2 hover:opacity-80;
+}
+.markdown pre {
+  @apply my-3 overflow-x-auto rounded-md bg-terminal p-4 font-mono text-[13px] leading-[1.6] text-terminal-ink;
+}
+.markdown :not(pre) > code {
+  @apply rounded border border-hairline bg-panel px-1 py-0.5 font-mono text-[0.9em] text-ink;
+}
+.markdown pre code {
+  @apply border-0 bg-transparent p-0 text-terminal-ink;
+}
+.markdown blockquote {
+  @apply my-2 border-l-2 border-hairline pl-3 text-graphite;
 }

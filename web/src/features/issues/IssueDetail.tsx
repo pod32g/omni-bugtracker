@@ -1,15 +1,16 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type IssueStatus } from "../../lib/api";
 import { humanizeVerb, timeAgo } from "../../lib/activity";
-import { Avatar, LabelChip, PriorityBadge, SeverityBadge, StatusBadge } from "../../components/Badges";
+import { Avatar, LabelChip, PriorityText, SeverityMark, SeverityPill, StatusPill, statusLabel, statusTone } from "../../components/Badges";
+import { IconBranch, IconChevronDown, IconCommit, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
 import { EditIssueForm } from "./EditIssueForm";
 
 const TRANSITIONS: IssueStatus[] = [
-  "in_progress", "blocked", "ready_for_review", "resolved", "closed", "reopened",
+  "open", "in_progress", "blocked", "ready_for_review", "resolved", "closed", "reopened",
 ];
 
 export function IssueDetail() {
@@ -18,6 +19,7 @@ export function IssueDetail() {
   const navigate = useNavigate();
   const [comment, setComment] = useState("");
   const [editing, setEditing] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const issue = useQuery({ queryKey: ["issue", issueKey], queryFn: () => api.getIssue(issueKey) });
   const comments = useQuery({ queryKey: ["comments", issueKey], queryFn: () => api.listComments(issueKey) });
@@ -26,7 +28,10 @@ export function IssueDetail() {
 
   const transition = useMutation({
     mutationFn: (to: IssueStatus) => api.transition(issueKey, to),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["issue", issueKey] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["issue", issueKey] });
+      qc.invalidateQueries({ queryKey: ["activity", issueKey] });
+    },
   });
   const del = useMutation({
     mutationFn: () => api.deleteIssue(issueKey),
@@ -44,164 +49,307 @@ export function IssueDetail() {
     },
   });
 
-  if (issue.isLoading) return <div className="text-slate-400">Loading…</div>;
+  if (issue.isLoading) return <div className="px-9 py-10 text-sm text-graphite">Loading…</div>;
   if (issue.isError || !issue.data)
-    return <div className="text-severity-high">{(issue.error as Error)?.message ?? "Not found"}</div>;
+    return <div className="px-9 py-10 text-sm text-critical">{(issue.error as Error)?.message ?? "Not found"}</div>;
 
   const i = issue.data;
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[1fr_16rem]">
-      <div>
-        <div className="mb-2 flex items-center gap-2 text-sm">
-          <span className="font-mono text-accent-hover">{i.key}</span>
-          <StatusBadge status={i.status} />
-          <SeverityBadge severity={i.severity} />
-          <PriorityBadge priority={i.priority} />
-          <div className="ml-auto flex gap-2">
-            <button
-              onClick={() => setEditing(true)}
-              className="rounded-lg border border-surface-border px-2.5 py-1 text-xs text-slate-300 hover:border-accent hover:text-accent-hover"
-            >
-              Edit
-            </button>
-            <button
-              onClick={() => {
-                if (window.confirm(`Delete ${i.key}? This removes it from lists (soft delete).`)) del.mutate();
-              }}
-              disabled={del.isPending}
-              className="rounded-lg border border-surface-border px-2.5 py-1 text-xs text-severity-high hover:border-severity-high disabled:opacity-50"
-            >
-              {del.isPending ? "Deleting…" : "Delete"}
-            </button>
-          </div>
+    <div>
+      {/* Topbar */}
+      <div className="sticky top-0 z-10 flex h-[60px] items-center justify-between border-b border-hairline bg-paper/80 px-8 backdrop-blur">
+        <div className="flex items-center gap-2.5 text-sm">
+          <Link to="/issues" className="text-graphite transition hover:text-ink">
+            Issues
+          </Link>
+          <span className="text-graphite-soft">›</span>
+          <span className="font-mono font-medium text-blueprint">{i.key}</span>
         </div>
-        <h1 className="mb-4 text-2xl font-semibold">{i.title}</h1>
-
-        <Section title="Description" body={i.description_md} />
-        {i.repro_steps_md && <Section title="Reproduction Steps" body={i.repro_steps_md} />}
-        {i.expected_md && <Section title="Expected Behavior" body={i.expected_md} />}
-        {i.actual_md && <Section title="Actual Behavior" body={i.actual_md} />}
-        {i.environment_md && <Section title="Environment" body={i.environment_md} />}
-
-        <h2 className="mb-3 mt-8 text-sm font-medium text-slate-300">Comments</h2>
-        <div className="space-y-3">
-          {comments.data?.map((c) => (
-            <div key={c.id} className="rounded-lg border border-surface-border bg-surface-raised p-4">
-              <div className="mb-1 text-xs text-slate-500">
-                {c.author?.display_name ?? "unknown"} · {new Date(c.created_at).toLocaleString()}
-              </div>
-              <div className="markdown">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{c.body_md}</ReactMarkdown>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-4">
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="Add a comment (Markdown supported)…"
-            className="w-full rounded-lg border border-surface-border bg-surface-raised px-3 py-2 text-sm outline-none focus:border-accent"
-            rows={3}
-          />
+        <div className="relative flex items-center gap-2.5">
           <button
-            disabled={!comment.trim() || addComment.isPending}
-            onClick={() => addComment.mutate()}
-            className="mt-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+            onClick={() => setEditing(true)}
+            className="flex h-[34px] items-center gap-1.5 rounded-md border border-hairline px-3.5 text-sm font-semibold text-ink transition hover:border-graphite"
           >
-            Comment
+            <IconPencil size={14} className="text-graphite" />
+            Edit
           </button>
+          <button
+            onClick={() => setMenuOpen((s) => !s)}
+            className="grid h-[34px] w-[34px] place-items-center rounded-md border border-hairline text-graphite transition hover:border-graphite hover:text-ink"
+            aria-label="More actions"
+          >
+            <IconKebab size={16} />
+          </button>
+          {menuOpen && (
+            <>
+              <button className="fixed inset-0 z-10 cursor-default" aria-hidden onClick={() => setMenuOpen(false)} />
+              <div className="absolute right-0 top-[38px] z-20 w-44 rounded-md border border-hairline bg-paper py-1 shadow-lg shadow-ink/5">
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (window.confirm(`Delete ${i.key}? This removes it from lists (soft delete).`)) del.mutate();
+                  }}
+                  disabled={del.isPending}
+                  className="block w-full px-3 py-2 text-left text-sm text-critical transition hover:bg-critical-soft disabled:opacity-50"
+                >
+                  {del.isPending ? "Deleting…" : "Delete issue"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      <aside className="space-y-6">
-        <div>
-          <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Transition</h3>
-          <div className="flex flex-wrap gap-2">
-            {TRANSITIONS.map((to) => (
-              <button
-                key={to}
-                onClick={() => transition.mutate(to)}
-                className="rounded-lg border border-surface-border px-2.5 py-1 text-xs text-slate-300 hover:border-accent hover:text-accent-hover"
-              >
-                {to.replace(/_/g, " ")}
-              </button>
+      {/* Body */}
+      <div className="grid lg:grid-cols-[1fr_320px]">
+        <article className="flex flex-col gap-8 px-10 py-9">
+          <header className="flex flex-col gap-3.5">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <SeverityPill severity={i.severity} />
+              <StatusPill status={i.status} />
+              <span className="rounded-sm border border-hairline bg-panel px-2.5 py-1 font-mono text-xs font-semibold text-ink">
+                {i.priority.toUpperCase()}
+              </span>
+            </div>
+            <h1 className="text-[28px] font-bold leading-[1.15] tracking-[-0.02em] text-ink">{i.title}</h1>
+            <div className="flex items-center gap-2">
+              <Avatar user={i.reporter} size={22} />
+              <p className="text-sm text-graphite">
+                {i.reporter?.display_name ?? i.reporter?.email ?? "Someone"} opened this · {timeAgo(i.created_at)} · #
+                {i.number}
+              </p>
+            </div>
+          </header>
+
+          <Section title="Description">
+            <Markdown body={i.description_md} />
+          </Section>
+
+          {i.repro_steps_md && (
+            <Section title="Steps to reproduce">
+              <Markdown body={i.repro_steps_md} />
+            </Section>
+          )}
+
+          {(i.expected_md || i.actual_md) && (
+            <div className="flex flex-col gap-4 sm:flex-row">
+              {i.expected_md && <Callout tone="resolved" label="Expected" body={i.expected_md} />}
+              {i.actual_md && <Callout tone="critical" label="Actual" body={i.actual_md} />}
+            </div>
+          )}
+
+          {i.environment_md && (
+            <Section title="Environment">
+              <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-terminal px-4 py-3.5 font-mono text-sm leading-[1.6] text-terminal-ink">
+                {i.environment_md}
+              </pre>
+            </Section>
+          )}
+
+          {/* Comments */}
+          <div className="flex flex-col gap-4 border-t border-hairline pt-6">
+            <MicroLabel>Comments</MicroLabel>
+            {comments.data?.map((c) => (
+              <div key={c.id} className="flex gap-3">
+                <Avatar user={c.author} size={28} />
+                <div className="flex min-w-0 grow flex-col gap-1 rounded-md border border-hairline bg-paper p-3.5">
+                  <div className="text-xs text-graphite-soft">
+                    <span className="font-medium text-ink">{c.author?.display_name ?? "unknown"}</span> ·{" "}
+                    {timeAgo(c.created_at)}
+                  </div>
+                  <div className="markdown">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{c.body_md}</ReactMarkdown>
+                  </div>
+                </div>
+              </div>
             ))}
-          </div>
-        </div>
-        <div>
-          <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Assignee</h3>
-          <div className="flex items-center gap-2 text-sm text-slate-300">
-            <Avatar user={i.assignee} />
-            {i.assignee?.display_name ?? i.assignee?.email ?? "Unassigned"}
-          </div>
-        </div>
-        <div>
-          <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Reporter</h3>
-          <div className="flex items-center gap-2 text-sm text-slate-300">
-            <Avatar user={i.reporter} />
-            {i.reporter?.display_name ?? i.reporter?.email ?? "—"}
-          </div>
-        </div>
-        {i.labels && i.labels.length > 0 && (
-          <div>
-            <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Labels</h3>
-            <div className="flex flex-wrap gap-1.5">
-              {i.labels.map((l) => <LabelChip key={l} name={l} />)}
+
+            <div className="flex items-start gap-3">
+              <Avatar user={i.reporter} size={28} />
+              <textarea
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                placeholder="Leave a comment… (Markdown supported)"
+                rows={2}
+                className="grow resize-y rounded-md border border-hairline bg-paper px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
+              />
+              <button
+                disabled={!comment.trim() || addComment.isPending}
+                onClick={() => addComment.mutate()}
+                className="h-11 shrink-0 rounded-md bg-blueprint px-4.5 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+              >
+                Comment
+              </button>
             </div>
           </div>
-        )}
-        <div>
-          <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Development</h3>
-          {commits.data && commits.data.length > 0 ? (
-            <ul className="space-y-2 text-xs">
-              {commits.data.map((c) => (
-                <li key={c.sha}>
-                  <a
-                    href={c.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-mono text-accent-hover hover:underline"
-                  >
-                    {c.sha.slice(0, 7)}
-                  </a>
-                  <span className="ml-1 rounded bg-white/5 px-1 text-slate-400">{c.verb}</span>
-                  <div className="truncate text-slate-500">{c.message.split("\n")[0]}</div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-xs text-slate-500">No linked commits yet.</p>
+        </article>
+
+        {/* Meta rail */}
+        <aside className="flex flex-col gap-6 border-hairline bg-mist px-6 py-8 lg:border-l">
+          <div className="flex flex-col gap-2">
+            <MicroLabel>Status</MicroLabel>
+            <StatusControl status={i.status} onChange={(to) => transition.mutate(to)} pending={transition.isPending} />
+          </div>
+
+          <MetaRow label="Assignee">
+            <div className="flex items-center gap-2.5">
+              <Avatar user={i.assignee} size={26} />
+              <span className="text-sm font-medium text-ink">
+                {i.assignee?.display_name ?? i.assignee?.email ?? "Unassigned"}
+              </span>
+            </div>
+          </MetaRow>
+
+          {i.labels && i.labels.length > 0 && (
+            <MetaRow label="Labels">
+              <div className="flex flex-wrap gap-1.5">
+                {i.labels.map((l) => (
+                  <LabelChip key={l} name={l} />
+                ))}
+              </div>
+            </MetaRow>
           )}
-        </div>
-        <div>
-          <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Activity</h3>
-          <ul className="space-y-2 text-xs text-slate-400">
-            {activity.data?.map((a) => (
-              <li key={a.id}>
-                <span className="text-slate-300">{a.actor?.display_name ?? "system"}</span>{" "}
-                {humanizeVerb(a.verb)}
-                <div className="text-slate-600">{timeAgo(a.occurred_at)}</div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </aside>
+
+          <div className="flex gap-4">
+            <MetaRow label="Priority" className="grow">
+              <PriorityText priority={i.priority} />
+            </MetaRow>
+            <MetaRow label="Severity" className="grow">
+              <SeverityMark severity={i.severity} />
+            </MetaRow>
+          </div>
+
+          {(i.version_fixed || i.version_affected) && (
+            <MetaRow label="Version">
+              <div className="flex items-center gap-2 text-sm font-medium text-ink">
+                <IconMilestone size={15} className="text-graphite" />
+                {i.version_fixed ? `${i.version_fixed} — fixed` : `${i.version_affected} — affected`}
+              </div>
+            </MetaRow>
+          )}
+
+          <div className="flex flex-col gap-3 border-t border-hairline pt-5">
+            <MicroLabel>Development</MicroLabel>
+            {commits.data && commits.data.length > 0 ? (
+              commits.data.map((c) => (
+                <a key={c.sha} href={c.url} target="_blank" rel="noreferrer" className="flex items-center gap-2.5">
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-sm bg-panel text-graphite">
+                    {c.verb.includes("pr") ? <IconBranch size={13} /> : <IconCommit size={13} />}
+                  </span>
+                  <span className="flex min-w-0 flex-col">
+                    <span className="font-mono text-sm font-medium text-blueprint hover:underline">
+                      {c.sha.slice(0, 7)}
+                    </span>
+                    <span className="truncate font-mono text-xs text-graphite-soft">
+                      {c.message.split("\n")[0]}
+                    </span>
+                  </span>
+                </a>
+              ))
+            ) : (
+              <p className="text-xs text-graphite-soft">No linked commits yet.</p>
+            )}
+          </div>
+
+          {activity.data && activity.data.length > 0 && (
+            <div className="flex flex-col gap-2.5 border-t border-hairline pt-5">
+              <MicroLabel>Activity</MicroLabel>
+              <ul className="flex flex-col gap-2">
+                {activity.data.map((a) => (
+                  <li key={a.id} className="text-xs text-graphite">
+                    <span className="font-medium text-ink">{a.actor?.display_name ?? "system"}</span>{" "}
+                    {humanizeVerb(a.verb)}
+                    <span className="text-graphite-soft"> · {timeAgo(a.occurred_at)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </aside>
+      </div>
 
       {editing && <EditIssueForm issue={i} onClose={() => setEditing(false)} />}
     </div>
   );
 }
 
-function Section({ title, body }: { title: string; body: string }) {
+function MicroLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="mb-5">
-      <h2 className="mb-2 text-sm font-medium text-slate-300">{title}</h2>
-      <div className="markdown rounded-lg border border-surface-border bg-surface-raised p-4">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{body || "_No content_"}</ReactMarkdown>
+    <span className="font-mono text-[10px] font-medium uppercase tracking-caps text-graphite-soft">{children}</span>
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3 border-t border-hairline pt-6">
+      <MicroLabel>{title}</MicroLabel>
+      {children}
+    </section>
+  );
+}
+
+function Markdown({ body }: { body?: string }) {
+  return (
+    <div className="markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{body || "_No content_"}</ReactMarkdown>
+    </div>
+  );
+}
+
+function Callout({ tone, label, body }: { tone: "resolved" | "critical"; label: string; body: string }) {
+  const border = tone === "resolved" ? "border-l-resolved" : "border-l-critical";
+  const text = tone === "resolved" ? "text-resolved" : "text-critical";
+  return (
+    <div className={`flex grow basis-0 flex-col gap-2 rounded-md border-l-[3px] bg-panel/50 px-4 py-3.5 ${border}`}>
+      <span className={`font-mono text-[10px] font-medium uppercase tracking-caps ${text}`}>{label}</span>
+      <div className="markdown text-[14px] leading-[1.55]">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
       </div>
+    </div>
+  );
+}
+
+function MetaRow({ label, children, className = "" }: { label: string; children: ReactNode; className?: string }) {
+  return (
+    <div className={`flex flex-col gap-2 ${className}`}>
+      <MicroLabel>{label}</MicroLabel>
+      {children}
+    </div>
+  );
+}
+
+function StatusControl({
+  status,
+  onChange,
+  pending,
+}: {
+  status: IssueStatus;
+  onChange: (to: IssueStatus) => void;
+  pending: boolean;
+}) {
+  const t = statusTone[status];
+  return (
+    <div className="relative">
+      <div className={`flex h-[38px] items-center justify-between rounded-md border px-3 ${t.bg} ${t.border}`}>
+        <span className="flex items-center gap-2">
+          <span className={`h-1.5 w-1.5 rounded-full ${t.dot}`} />
+          <span className={`text-sm font-semibold ${t.text}`}>{pending ? "Updating…" : statusLabel[status]}</span>
+        </span>
+        <IconChevronDown size={14} className={t.text} />
+      </div>
+      <select
+        value={status}
+        onChange={(e) => e.target.value !== status && onChange(e.target.value as IssueStatus)}
+        aria-label="Change status"
+        className="absolute inset-0 cursor-pointer opacity-0"
+      >
+        {TRANSITIONS.map((s) => (
+          <option key={s} value={s}>
+            {statusLabel[s]}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
