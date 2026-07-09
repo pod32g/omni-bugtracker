@@ -112,7 +112,7 @@ export function Avatar({ user, size = 28 }: { user?: User; size?: number }) {
     return (
       <span
         title="Unassigned"
-        className="grid shrink-0 place-items-center bg-[#EDEFF3] font-mono font-semibold text-graphite"
+        className="grid shrink-0 place-items-center bg-chip-empty font-mono font-semibold text-graphite"
         style={{ width: size, height: size, borderRadius: radius, fontSize }}
       >
         –
@@ -122,7 +122,7 @@ export function Avatar({ user, size = 28 }: { user?: User; size?: number }) {
   return (
     <span
       title={user.display_name || user.email}
-      className="grid shrink-0 place-items-center bg-ink font-mono font-semibold text-paper"
+      className="grid shrink-0 place-items-center bg-chip font-mono font-semibold text-white"
       style={{ width: size, height: size, borderRadius: radius, fontSize }}
     >
       {initials(user)}

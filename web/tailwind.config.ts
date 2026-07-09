@@ -1,25 +1,45 @@
 import type { Config } from "tailwindcss";
 
-// Design tokens mirror the Paper design system ("blueprint" developer tool, light mode).
-// darkMode:"class" is retained so a dark variant can be layered on later without a rebuild.
+// Colors are driven by CSS variables (channel triplets) defined in index.css, so the
+// whole palette flips between light and dark under the `.dark` class while Tailwind's
+// opacity utilities (bg-paper/80, shadow-ink/10) keep working. See index.css for values.
+const withAlpha = (v: string) => `rgb(var(${v}) / <alpha-value>)`;
+
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   darkMode: "class",
   theme: {
     extend: {
       colors: {
-        paper: "#FFFFFF", // primary surface (main content, cards)
-        panel: "#F5F7FA", // recessed surface (sidebar, column header, tracks)
-        mist: "#FAFBFC", // faint surface (issue meta rail)
-        hairline: "#E4E8EF", // borders / dividers
-        ink: "#131923", // primary text
-        graphite: { DEFAULT: "#5C6879", soft: "#8A94A6" }, // secondary / tertiary text
-        blueprint: { DEFAULT: "#2A4CDB", soft: "#EAEEFC", border: "#CDD8F7" }, // brand accent
-        critical: { DEFAULT: "#DA3633", soft: "#FBEBEA", border: "#F3D2D1" },
-        high: { DEFAULT: "#C2620E", soft: "#FBF4E9", border: "#F0E2C8" },
-        resolved: { DEFAULT: "#1F8A54", soft: "#E7F3EC", border: "#CFE8D9" },
-        medium: "#5B6B8C", // medium-severity marker (slate)
-        terminal: { DEFAULT: "#0F1420", ink: "#C7D2E4" }, // code / environment blocks
+        paper: withAlpha("--color-paper"),
+        panel: withAlpha("--color-panel"),
+        mist: withAlpha("--color-mist"),
+        hairline: withAlpha("--color-hairline"),
+        ink: withAlpha("--color-ink"),
+        graphite: { DEFAULT: withAlpha("--color-graphite"), soft: withAlpha("--color-graphite-soft") },
+        blueprint: {
+          DEFAULT: withAlpha("--color-blueprint"),
+          soft: withAlpha("--color-blueprint-soft"),
+          border: withAlpha("--color-blueprint-border"),
+        },
+        critical: {
+          DEFAULT: withAlpha("--color-critical"),
+          soft: withAlpha("--color-critical-soft"),
+          border: withAlpha("--color-critical-border"),
+        },
+        high: {
+          DEFAULT: withAlpha("--color-high"),
+          soft: withAlpha("--color-high-soft"),
+          border: withAlpha("--color-high-border"),
+        },
+        resolved: {
+          DEFAULT: withAlpha("--color-resolved"),
+          soft: withAlpha("--color-resolved-soft"),
+          border: withAlpha("--color-resolved-border"),
+        },
+        medium: withAlpha("--color-medium"),
+        terminal: { DEFAULT: withAlpha("--color-terminal"), ink: withAlpha("--color-terminal-ink") },
+        chip: { DEFAULT: withAlpha("--color-chip"), empty: withAlpha("--color-chip-empty") },
       },
       fontFamily: {
         sans: ['"Space Grotesk"', "system-ui", "sans-serif"],
@@ -31,7 +51,7 @@ export default {
         lg: "14px",
       },
       letterSpacing: {
-        caps: "0.12em", // uppercase mono micro-labels
+        caps: "0.12em",
       },
     },
   },

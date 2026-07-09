@@ -146,6 +146,22 @@ export const IconLogout = (p: P) => (
   </Svg>
 );
 
+export const IconSun = (p: P) => (
+  <Svg {...p} viewBox="0 0 18 18">
+    <circle cx="9" cy="9" r="3.2" strokeWidth={p.strokeWidth ?? 1.4} />
+    <path
+      d="M9 1.5v2M9 14.5v2M16.5 9h-2M3.5 9h-2M14.3 3.7l-1.4 1.4M5.1 12.9l-1.4 1.4M14.3 14.3l-1.4-1.4M5.1 5.1L3.7 3.7"
+      strokeWidth={p.strokeWidth ?? 1.3}
+    />
+  </Svg>
+);
+
+export const IconMoon = (p: P) => (
+  <Svg {...p} viewBox="0 0 18 18">
+    <path d="M15 10.5A6 6 0 1 1 7.5 3a4.8 4.8 0 0 0 7.5 7.5Z" strokeWidth={p.strokeWidth ?? 1.4} />
+  </Svg>
+);
+
 export const IconMark = (p: P) => (
   <Svg {...p} viewBox="0 0 20 20">
     <circle cx="10" cy="10" r="6.25" strokeWidth={p.strokeWidth ?? 1.5} />

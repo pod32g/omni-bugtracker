@@ -2,8 +2,63 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Design tokens as "R G B" channel triplets so Tailwind opacity utilities work.
+   Light is the default; adding `.dark` on <html> flips the whole palette. Values
+   mirror the Paper design system (light) and its "Blueprint at Night" dark variant. */
 :root {
+  --color-paper: 255 255 255;
+  --color-panel: 245 247 250;
+  --color-mist: 250 251 252;
+  --color-hairline: 228 232 239;
+  --color-ink: 19 25 35;
+  --color-graphite: 92 104 121;
+  --color-graphite-soft: 138 148 166;
+  --color-blueprint: 42 76 219;
+  --color-blueprint-soft: 234 238 252;
+  --color-blueprint-border: 205 216 247;
+  --color-critical: 218 54 51;
+  --color-critical-soft: 251 235 234;
+  --color-critical-border: 243 210 209;
+  --color-high: 194 98 14;
+  --color-high-soft: 251 244 233;
+  --color-high-border: 240 226 200;
+  --color-resolved: 31 138 84;
+  --color-resolved-soft: 231 243 236;
+  --color-resolved-border: 207 232 217;
+  --color-medium: 91 107 140;
+  --color-terminal: 15 20 32;
+  --color-terminal-ink: 199 210 228;
+  --color-chip: 19 25 35;
+  --color-chip-empty: 237 239 243;
   color-scheme: light;
+}
+
+.dark {
+  --color-paper: 14 18 25;
+  --color-panel: 21 27 38;
+  --color-mist: 16 21 30;
+  --color-hairline: 39 47 62;
+  --color-ink: 233 237 244;
+  --color-graphite: 155 167 187;
+  --color-graphite-soft: 124 137 160;
+  --color-blueprint: 94 124 255;
+  --color-blueprint-soft: 27 37 71;
+  --color-blueprint-border: 49 63 108;
+  --color-critical: 255 107 102;
+  --color-critical-soft: 42 22 25;
+  --color-critical-border: 73 38 43;
+  --color-high: 231 152 47;
+  --color-high-soft: 40 31 17;
+  --color-high-border: 71 53 27;
+  --color-resolved: 64 191 125;
+  --color-resolved-soft: 17 37 27;
+  --color-resolved-border: 35 74 51;
+  --color-medium: 138 151 180;
+  --color-terminal: 7 10 16;
+  --color-terminal-ink: 199 210 228;
+  --color-chip: 42 53 71;
+  --color-chip-empty: 42 53 71;
+  color-scheme: dark;
 }
 
 html {
@@ -15,8 +70,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Rendered Markdown bodies (issue description sections, comments). Tuned for the
-   light "blueprint" theme: plain ink prose, blueprint links, dark code blocks. */
+/* Rendered Markdown bodies (issue description sections, comments). Theme-aware via
+   the token variables: plain ink prose, blueprint links, dark code blocks. */
 .markdown {
   @apply text-[15px] leading-[1.7] text-ink;
 }

@@ -3,6 +3,7 @@ import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, session, type Project, type User } from "../lib/api";
 import { ProjectProvider, useProject } from "../lib/project";
+import { useTheme } from "../lib/theme";
 import { Avatar } from "./Badges";
 import {
   IconChevronDown,
@@ -10,6 +11,8 @@ import {
   IconFlag,
   IconLogout,
   IconMark,
+  IconMoon,
+  IconSun,
   IconTag,
   IconTarget,
 } from "./icons";
@@ -37,6 +40,7 @@ export function Layout() {
 
 function Sidebar({ me }: { me?: User }) {
   const { projects, projectKey, current, setProjectKey } = useProject();
+  const { theme, toggle } = useTheme();
   // Shares the ["dashboard"] cache with the Dashboard page — the open count is free here.
   const overview = useQuery({ queryKey: ["dashboard"], queryFn: () => api.dashboard(), retry: false });
   const openCount = overview.data?.open_issues;
@@ -80,13 +84,22 @@ function Sidebar({ me }: { me?: User }) {
             {(me?.role ?? "member").toUpperCase()}
           </span>
         </div>
-        <button
-          onClick={() => session.logout()}
-          title="Sign out"
-          className="text-graphite transition hover:text-ink"
-        >
-          <IconLogout size={17} />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={toggle}
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            className="grid h-7 w-7 place-items-center rounded-md text-graphite transition hover:bg-paper hover:text-ink"
+          >
+            {theme === "dark" ? <IconMoon size={16} /> : <IconSun size={16} />}
+          </button>
+          <button
+            onClick={() => session.logout()}
+            title="Sign out"
+            className="grid h-7 w-7 place-items-center rounded-md text-graphite transition hover:bg-paper hover:text-ink"
+          >
+            <IconLogout size={16} />
+          </button>
+        </div>
       </div>
     </aside>
   );
