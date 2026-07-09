@@ -29,6 +29,7 @@ type LinkedCommit struct {
 type Activity struct {
 	ID         uuid.UUID       `json:"id"`
 	IssueID    *uuid.UUID      `json:"issue_id,omitempty"`
+	IssueKey   string          `json:"issue_key,omitempty"`
 	Actor      *User           `json:"actor,omitempty"`
 	Verb       string          `json:"verb"`
 	EntityType string          `json:"entity_type"`

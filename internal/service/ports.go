@@ -46,6 +46,9 @@ type Repository interface {
 	AddComment(ctx context.Context, issueID, author uuid.UUID, body string, publish PublishFn) (domain.Comment, error)
 	ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, error)
 	ListActivity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, error)
+	RecentActivity(ctx context.Context, limit int32) ([]domain.Activity, error)
+	Dashboard(ctx context.Context) (domain.Dashboard, error)
+	ListUsers(ctx context.Context, limit int32) ([]domain.User, error)
 
 	// Git integration
 	UpsertCommit(ctx context.Context, in CommitInput) (uuid.UUID, error)

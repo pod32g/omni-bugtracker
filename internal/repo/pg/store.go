@@ -379,26 +379,164 @@ func (s *Store) ListComments(ctx context.Context, issueID uuid.UUID, limit, offs
 
 func (s *Store) ListActivity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, issue_id, actor_id, verb, entity_type, changes, occurred_at
-		 FROM activity WHERE issue_id = $1 ORDER BY occurred_at DESC LIMIT $2 OFFSET $3`,
+		`SELECT a.id, a.issue_id, a.actor_id, u.display_name, u.email, a.verb, a.entity_type,
+		        a.changes, a.occurred_at, p.key, i.number
+		 FROM activity a
+		 LEFT JOIN users u ON u.id = a.actor_id
+		 LEFT JOIN issues i ON i.id = a.issue_id
+		 LEFT JOIN projects p ON p.id = i.project_id
+		 WHERE a.issue_id = $1 ORDER BY a.occurred_at DESC LIMIT $2 OFFSET $3`,
 		issueID, clampLimit(limit), offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanActivityRows(rows)
+}
+
+// scanActivityRows scans the standard activity+actor+issue-key column set.
+func scanActivityRows(rows pgx.Rows) ([]domain.Activity, error) {
 	var out []domain.Activity
 	for rows.Next() {
 		var a domain.Activity
-		var actor *uuid.UUID
-		if err := rows.Scan(&a.ID, &a.IssueID, &actor, &a.Verb, &a.EntityType, &a.Changes, &a.OccurredAt); err != nil {
+		var actorID *uuid.UUID
+		var displayName, email, projectKey *string
+		var number *int32
+		if err := rows.Scan(&a.ID, &a.IssueID, &actorID, &displayName, &email, &a.Verb,
+			&a.EntityType, &a.Changes, &a.OccurredAt, &projectKey, &number); err != nil {
 			return nil, err
 		}
-		if actor != nil {
-			a.Actor = &domain.User{ID: *actor}
+		if actorID != nil {
+			u := &domain.User{ID: *actorID}
+			if displayName != nil {
+				u.DisplayName = *displayName
+			}
+			if email != nil {
+				u.Email = *email
+			}
+			a.Actor = u
+		}
+		if projectKey != nil && number != nil {
+			a.IssueKey = domain.IssueKey(*projectKey, *number)
 		}
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// ── dashboard, activity feed, users ──
+
+func (s *Store) RecentActivity(ctx context.Context, limit int32) ([]domain.Activity, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT a.id, a.issue_id, a.actor_id, u.display_name, u.email, a.verb, a.entity_type, a.changes, a.occurred_at,
+		        p.key, i.number
+		 FROM activity a
+		 LEFT JOIN users u ON u.id = a.actor_id
+		 LEFT JOIN issues i ON i.id = a.issue_id
+		 LEFT JOIN projects p ON p.id = i.project_id
+		 ORDER BY a.occurred_at DESC LIMIT $1`, clampLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanActivityRows(rows)
+}
+
+func (s *Store) Dashboard(ctx context.Context) (domain.Dashboard, error) {
+	d := domain.Dashboard{
+		IssuesByStatus:    map[string]int{},
+		IssuesByComponent: map[string]int{},
+		TeamWorkload:      map[string]int{},
+	}
+
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE status NOT IN ('resolved','closed')),
+		        count(*) FILTER (WHERE severity = 'critical' AND status NOT IN ('resolved','closed'))
+		 FROM issues WHERE deleted_at IS NULL`).Scan(&d.OpenIssues, &d.CriticalIssues); err != nil {
+		return d, err
+	}
+
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(EXTRACT(EPOCH FROM avg(resolved_at - created_at)) / 3600, 0),
+		        COALESCE(EXTRACT(EPOCH FROM avg(resolved_at - created_at)
+		                 FILTER (WHERE resolved_at > now() - interval '30 days')) / 3600, 0)
+		 FROM issues WHERE resolved_at IS NOT NULL AND deleted_at IS NULL`).
+		Scan(&d.AvgResolutionHours, &d.MTTRHours); err != nil {
+		return d, err
+	}
+
+	var reopened, terminal int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE status = 'reopened'),
+		        count(*) FILTER (WHERE status IN ('resolved','closed','reopened'))
+		 FROM issues WHERE deleted_at IS NULL`).Scan(&reopened, &terminal); err != nil {
+		return d, err
+	}
+	if terminal > 0 {
+		d.RegressionRate = float64(reopened) / float64(terminal)
+	}
+
+	if err := scanCountMap(ctx, s, d.IssuesByStatus,
+		`SELECT status::text, count(*) FROM issues WHERE deleted_at IS NULL GROUP BY status`); err != nil {
+		return d, err
+	}
+	if err := scanCountMap(ctx, s, d.IssuesByComponent,
+		`SELECT c.name, count(*) FROM issue_components ic
+		   JOIN components c ON c.id = ic.component_id
+		   JOIN issues i ON i.id = ic.issue_id
+		 WHERE i.deleted_at IS NULL GROUP BY c.name`); err != nil {
+		return d, err
+	}
+	if err := scanCountMap(ctx, s, d.TeamWorkload,
+		`SELECT u.display_name, count(*) FROM issues i
+		   JOIN users u ON u.id = i.assignee_id
+		 WHERE i.deleted_at IS NULL AND i.status NOT IN ('resolved','closed')
+		 GROUP BY u.display_name`); err != nil {
+		return d, err
+	}
+
+	acts, err := s.RecentActivity(ctx, 12)
+	if err != nil {
+		return d, err
+	}
+	d.RecentActivity = acts
+	return d, nil
+}
+
+func (s *Store) ListUsers(ctx context.Context, limit int32) ([]domain.User, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, identity_sub, email, display_name, avatar_url, role
+		 FROM users WHERE is_active = TRUE ORDER BY display_name LIMIT $1`, clampLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.User
+	for rows.Next() {
+		var u domain.User
+		if err := rows.Scan(&u.ID, &u.IdentitySub, &u.Email, &u.DisplayName, &u.AvatarURL, &u.Role); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func scanCountMap(ctx context.Context, s *Store, dst map[string]int, query string) error {
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		var n int
+		if err := rows.Scan(&k, &n); err != nil {
+			return err
+		}
+		dst[k] = n
+	}
+	return rows.Err()
 }
 
 // ── git integration ──

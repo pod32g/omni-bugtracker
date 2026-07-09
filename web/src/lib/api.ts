@@ -70,14 +70,6 @@ export interface Comment {
   created_at: string;
 }
 
-export interface Activity {
-  id: string;
-  actor?: User;
-  verb: string;
-  entity_type: string;
-  occurred_at: string;
-}
-
 export interface LinkedCommit {
   sha: string;
   repo: string;
@@ -88,14 +80,23 @@ export interface LinkedCommit {
   created_at: string;
 }
 
+export interface Activity {
+  id: string;
+  actor?: User;
+  verb: string;
+  entity_type: string;
+  issue_key?: string;
+  occurred_at: string;
+}
+
 export interface DashboardOverview {
   open_issues: number;
   critical_issues: number;
   avg_resolution_hours: number;
   mttr_hours: number;
   regression_rate: number;
+  issues_by_status: Record<string, number>;
   issues_by_component: Record<string, number>;
-  issues_by_release: Record<string, number>;
   team_workload: Record<string, number>;
   recent_activity: Activity[];
 }

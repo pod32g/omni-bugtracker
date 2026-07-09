@@ -26,6 +26,8 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 
 	r := chi.NewRouter()
 	r.Get("/me", h.me)
+	r.Get("/users", h.users)
+	r.Get("/dashboards/overview", h.dashboard)
 	r.Get("/projects", h.listProjects)
 	r.Post("/projects", h.createProject)
 	r.Get("/projects/{key}/issues", h.listIssues)
@@ -53,6 +55,24 @@ func (h *httpHandlers) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": p.UserID, "email": p.Email, "display_name": p.DisplayName, "role": p.Role,
 	})
+}
+
+func (h *httpHandlers) users(w http.ResponseWriter, r *http.Request) {
+	users, err := h.repo.ListUsers(r.Context(), 500)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": users})
+}
+
+func (h *httpHandlers) dashboard(w http.ResponseWriter, r *http.Request) {
+	d, err := h.repo.Dashboard(r.Context())
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "dashboard failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
 }
 
 func (h *httpHandlers) listProjects(w http.ResponseWriter, r *http.Request) {

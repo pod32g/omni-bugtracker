@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type IssueStatus } from "../../lib/api";
+import { humanizeVerb, timeAgo } from "../../lib/activity";
 import { PriorityBadge, SeverityBadge, StatusBadge } from "../../components/Badges";
 import { EditIssueForm } from "./EditIssueForm";
 
@@ -162,9 +163,9 @@ export function IssueDetail() {
           <ul className="space-y-2 text-xs text-slate-400">
             {activity.data?.map((a) => (
               <li key={a.id}>
-                <span className="text-slate-300">{a.verb}</span>
-                <br />
-                {new Date(a.occurred_at).toLocaleString()}
+                <span className="text-slate-300">{a.actor?.display_name ?? "system"}</span>{" "}
+                {humanizeVerb(a.verb)}
+                <div className="text-slate-600">{timeAgo(a.occurred_at)}</div>
               </li>
             ))}
           </ul>
