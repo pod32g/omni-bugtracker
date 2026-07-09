@@ -198,10 +198,12 @@ func (s *Store) TransitionIssue(ctx context.Context, id uuid.UUID, to domain.Iss
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// $2 is bound as text and cast per use — comparisons need text, the assignment needs
+	// the enum. Using a bare $2 for both makes Postgres deduce conflicting types (42P08).
 	const upd = `
-		UPDATE issues SET status = $2,
-		  resolved_at = CASE WHEN $2 IN ('resolved','closed') AND resolved_at IS NULL THEN now() ELSE resolved_at END,
-		  closed_at   = CASE WHEN $2 = 'closed' THEN now() ELSE closed_at END,
+		UPDATE issues SET status = $2::issue_status,
+		  resolved_at = CASE WHEN $2::text IN ('resolved','closed') AND resolved_at IS NULL THEN now() ELSE resolved_at END,
+		  closed_at   = CASE WHEN $2::text = 'closed' THEN now() ELSE closed_at END,
 		  updated_at  = now()
 		WHERE id = $1 AND deleted_at IS NULL`
 	if _, err := tx.Exec(ctx, upd, id, string(to)); err != nil {
@@ -367,9 +369,9 @@ func (s *Store) ApplyGitLink(ctx context.Context, in service.GitLinkInput, publi
 	}
 	if in.NewStatus != nil {
 		if _, err := tx.Exec(ctx,
-			`UPDATE issues SET status = $2,
-			   resolved_at = CASE WHEN $2 IN ('resolved','closed') AND resolved_at IS NULL THEN now() ELSE resolved_at END,
-			   closed_at   = CASE WHEN $2 = 'closed' THEN now() ELSE closed_at END,
+			`UPDATE issues SET status = $2::issue_status,
+			   resolved_at = CASE WHEN $2::text IN ('resolved','closed') AND resolved_at IS NULL THEN now() ELSE resolved_at END,
+			   closed_at   = CASE WHEN $2::text = 'closed' THEN now() ELSE closed_at END,
 			   updated_at  = now()
 			 WHERE id = $1 AND deleted_at IS NULL`, in.IssueID, string(*in.NewStatus)); err != nil {
 			return err
