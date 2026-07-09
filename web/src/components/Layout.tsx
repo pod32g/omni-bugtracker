@@ -10,6 +10,7 @@ import {
   IconChevronDown,
   IconDashboard,
   IconFlag,
+  IconGear,
   IconLogout,
   IconMark,
   IconMoon,
@@ -76,6 +77,7 @@ function Sidebar({ me }: { me?: User }) {
         <NavItem to="/board" icon={<IconBoard size={17} />} label="Board" />
         <NavItemSoon icon={<IconFlag size={17} />} label="Milestones" />
         <NavItemSoon icon={<IconTag size={17} />} label="Releases" />
+        <NavItem to="/settings" icon={<IconGear size={17} />} label="Settings" />
       </nav>
 
       <div className="mt-auto flex items-center gap-2.5 border-t border-hairline px-2.5 pb-1 pt-3">

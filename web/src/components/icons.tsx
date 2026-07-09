@@ -172,6 +172,16 @@ export const IconMoon = (p: P) => (
   </Svg>
 );
 
+export const IconGear = (p: P) => (
+  <Svg {...p} viewBox="0 0 18 18">
+    <circle cx="9" cy="9" r="2.4" strokeWidth={p.strokeWidth ?? 1.4} />
+    <path
+      d="M9 1.8v2M9 14.2v2M16.2 9h-2M3.8 9h-2M14.1 3.9l-1.4 1.4M5.3 12.7l-1.4 1.4M14.1 14.1l-1.4-1.4M5.3 5.3L3.9 3.9"
+      strokeWidth={p.strokeWidth ?? 1.3}
+    />
+  </Svg>
+);
+
 export const IconMark = (p: P) => (
   <Svg {...p} viewBox="0 0 20 20">
     <circle cx="10" cy="10" r="6.25" strokeWidth={p.strokeWidth ?? 1.5} />

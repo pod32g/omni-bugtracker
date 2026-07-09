@@ -26,6 +26,9 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 
 	r := chi.NewRouter()
 	r.Get("/me", h.me)
+	r.Get("/me/tokens", h.listTokens)
+	r.Post("/me/tokens", h.createToken)
+	r.Delete("/me/tokens/{id}", h.revokeToken)
 	r.Get("/users", h.users)
 	r.Get("/dashboards/overview", h.dashboard)
 	r.Get("/projects", h.listProjects)
@@ -59,6 +62,76 @@ func (h *httpHandlers) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": p.UserID, "email": p.Email, "display_name": p.DisplayName, "role": p.Role,
 	})
+}
+
+// ── personal API tokens (self-service) ──
+
+func (h *httpHandlers) listTokens(w http.ResponseWriter, r *http.Request) {
+	uid, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
+	tokens, err := h.repo.ListAPITokens(r.Context(), uid)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if tokens == nil {
+		tokens = []domain.APIToken{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": tokens})
+}
+
+func (h *httpHandlers) createToken(w http.ResponseWriter, r *http.Request) {
+	uid, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
+	var body struct {
+		Name   string   `json:"name"`
+		Scopes []string `json:"scopes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		httpapi.WriteValidation(w, map[string]string{"name": "required"})
+		return
+	}
+	plaintext, hash, err := auth.GenerateAPIToken()
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "token generation failed", err.Error())
+		return
+	}
+	tok, err := h.repo.CreateAPIToken(r.Context(), CreateTokenInput{
+		UserID: uid, Name: strings.TrimSpace(body.Name), Scopes: body.Scopes, TokenHash: hash,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
+		return
+	}
+	// `token` is the only time the plaintext is ever returned — shown once.
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"token":      plaintext,
+		"id":         tok.ID,
+		"name":       tok.Name,
+		"scopes":     tok.Scopes,
+		"created_at": tok.CreatedAt,
+	})
+}
+
+func (h *httpHandlers) revokeToken(w http.ResponseWriter, r *http.Request) {
+	uid, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
+	tid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad token id", "")
+		return
+	}
+	ok, err := h.repo.RevokeAPIToken(r.Context(), uid, tid)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "revoke failed", err.Error())
+		return
+	}
+	if !ok {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such token")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *httpHandlers) users(w http.ResponseWriter, r *http.Request) {

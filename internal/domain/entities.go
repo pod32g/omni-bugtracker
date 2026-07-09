@@ -24,6 +24,17 @@ type Project struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// APIToken is metadata about a personal API token. The secret itself is never
+// returned after creation — only its SHA-256 hash is stored.
+type APIToken struct {
+	ID         uuid.UUID  `json:"id"`
+	Name       string     `json:"name"`
+	Scopes     []string   `json:"scopes"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
 type Issue struct {
 	ID              uuid.UUID   `json:"id"`
 	Key             string      `json:"key"` // e.g. BUG-421

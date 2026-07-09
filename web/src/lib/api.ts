@@ -25,6 +25,15 @@ export interface Project {
   created_at: string;
 }
 
+export interface ApiToken {
+  id: string;
+  name: string;
+  scopes: string[];
+  last_used_at?: string;
+  expires_at?: string;
+  created_at: string;
+}
+
 export interface Label {
   id: string;
   name: string;
@@ -184,6 +193,10 @@ export const api = {
   updateProject: (key: string, patch: { name?: string; description_md?: string; is_archived?: boolean }) =>
     request<Project>(`/projects/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
   archiveProject: (key: string) => request<void>(`/projects/${key}`, { method: "DELETE" }),
+  listTokens: () => request<{ items: ApiToken[] }>("/me/tokens"),
+  createToken: (name: string, scopes: string[] = []) =>
+    request<ApiToken & { token: string }>("/me/tokens", { method: "POST", body: JSON.stringify({ name, scopes }) }),
+  revokeToken: (id: string) => request<void>(`/me/tokens/${id}`, { method: "DELETE" }),
   listLabels: (projectKey: string) => request<{ items: Label[] }>(`/projects/${projectKey}/labels`),
   listIssues: (projectKey: string, filter = "", sort = "") =>
     request<{ items: Issue[]; total: number }>(

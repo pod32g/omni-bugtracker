@@ -38,6 +38,30 @@ paths:
       responses:
         "200": { description: current user, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
 
+  /me/tokens:
+    get:
+      tags: [system]
+      operationId: listApiTokens
+      responses:
+        "200": { description: token list (metadata only), content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/ApiToken" } } } } } } }
+    post:
+      tags: [system]
+      operationId: createApiToken
+      description: "Creates a personal API token. The plaintext secret is returned exactly once."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, scopes: { type: array, items: { type: string } } } } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/CreatedApiToken" } } } }
+  /me/tokens/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    delete:
+      tags: [system]
+      operationId: revokeApiToken
+      responses:
+        "204": { description: revoked }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /projects:
     get:
       tags: [projects]
@@ -395,6 +419,25 @@ components:
         name: { type: string }
         description_md: { type: string }
         is_archived: { type: boolean }
+
+    ApiToken:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        scopes: { type: array, items: { type: string } }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        expires_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+    CreatedApiToken:
+      type: object
+      description: "Returned once on creation; `token` is the plaintext secret and is never shown again."
+      properties:
+        token: { type: string, description: "plaintext secret (obt_…)" }
+        id: { type: string, format: uuid }
+        name: { type: string }
+        scopes: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
 
     Issue:
       type: object

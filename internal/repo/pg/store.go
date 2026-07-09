@@ -188,6 +188,55 @@ func (s *Store) UpdateProject(ctx context.Context, in service.UpdateProjectInput
 	return p, err
 }
 
+// ── api tokens (self-service, per user) ──
+
+func (s *Store) CreateAPIToken(ctx context.Context, in service.CreateTokenInput) (domain.APIToken, error) {
+	scopes := in.Scopes
+	if scopes == nil {
+		scopes = []string{} // column is NOT NULL; a nil slice would encode as SQL NULL
+	}
+	const q = `INSERT INTO api_tokens (user_id, name, token_hash, scopes)
+	           VALUES ($1, $2, $3, $4)
+	           RETURNING id, name, scopes, last_used_at, expires_at, created_at`
+	var t domain.APIToken
+	err := s.pool.QueryRow(ctx, q, in.UserID, in.Name, in.TokenHash, scopes).
+		Scan(&t.ID, &t.Name, &t.Scopes, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt)
+	return t, err
+}
+
+func (s *Store) ListAPITokens(ctx context.Context, userID uuid.UUID) ([]domain.APIToken, error) {
+	const q = `SELECT id, name, scopes, last_used_at, expires_at, created_at
+	           FROM api_tokens
+	           WHERE user_id = $1 AND revoked_at IS NULL
+	           ORDER BY created_at DESC`
+	rows, err := s.pool.Query(ctx, q, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.APIToken
+	for rows.Next() {
+		var t domain.APIToken
+		if err := rows.Scan(&t.ID, &t.Name, &t.Scopes, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// RevokeAPIToken revokes a token owned by the user; reports whether a row was affected.
+func (s *Store) RevokeAPIToken(ctx context.Context, userID, tokenID uuid.UUID) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE api_tokens SET revoked_at = now()
+		 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+		tokenID, userID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // ── issues ──
 
 func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, publish service.PublishIssueFn) (domain.Issue, error) {

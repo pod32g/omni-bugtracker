@@ -28,6 +28,9 @@ type Repository interface {
 	UpsertUser(ctx context.Context, in UpsertUserParams) (domain.User, error)
 	GetUserByToken(ctx context.Context, tokenHash []byte) (TokenPrincipal, error)
 	TouchToken(ctx context.Context, tokenID uuid.UUID) error
+	CreateAPIToken(ctx context.Context, in CreateTokenInput) (domain.APIToken, error)
+	ListAPITokens(ctx context.Context, userID uuid.UUID) ([]domain.APIToken, error)
+	RevokeAPIToken(ctx context.Context, userID, tokenID uuid.UUID) (bool, error)
 
 	// Projects
 	GetProjectByKey(ctx context.Context, key string) (domain.Project, error)
@@ -109,6 +112,15 @@ type UpdateProjectInput struct {
 	Name          *string
 	DescriptionMD *string
 	IsArchived    *bool
+}
+
+// CreateTokenInput carries the pre-hashed token; the plaintext is generated and
+// returned by the handler (shown once), never stored.
+type CreateTokenInput struct {
+	UserID    uuid.UUID
+	Name      string
+	Scopes    []string
+	TokenHash []byte
 }
 
 type CreateIssueInput struct {
