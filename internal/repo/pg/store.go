@@ -77,6 +77,36 @@ func (s *Store) GetProjectByKey(ctx context.Context, key string) (domain.Project
 	return p, err
 }
 
+func (s *Store) ListProjects(ctx context.Context, limit, offset int32) ([]domain.Project, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, key, name, description_md, is_archived, created_at
+		 FROM projects WHERE is_archived = FALSE ORDER BY key LIMIT $1 OFFSET $2`,
+		clampLimit(limit), offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Project
+	for rows.Next() {
+		var p domain.Project
+		if err := rows.Scan(&p.ID, &p.Key, &p.Name, &p.DescriptionMD, &p.IsArchived, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateProject(ctx context.Context, in service.CreateProjectInput) (domain.Project, error) {
+	const q = `INSERT INTO projects (key, name, description_md)
+	           VALUES ($1, $2, $3)
+	           RETURNING id, key, name, description_md, is_archived, created_at`
+	var p domain.Project
+	err := s.pool.QueryRow(ctx, q, in.Key, in.Name, in.DescriptionMD).
+		Scan(&p.ID, &p.Key, &p.Name, &p.DescriptionMD, &p.IsArchived, &p.CreatedAt)
+	return p, err
+}
+
 // ── issues ──
 
 func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, publish service.PublishIssueFn) (domain.Issue, error) {

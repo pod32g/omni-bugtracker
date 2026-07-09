@@ -16,6 +16,27 @@ export interface User {
   role?: string;
 }
 
+export interface Project {
+  id: string;
+  key: string;
+  name: string;
+  description_md: string;
+  is_archived: boolean;
+  created_at: string;
+}
+
+export interface NewIssue {
+  type: IssueType;
+  title: string;
+  description_md?: string;
+  severity?: Severity;
+  priority: Priority;
+  repro_steps_md?: string;
+  expected_md?: string;
+  actual_md?: string;
+  environment_md?: string;
+}
+
 export interface Issue {
   id: string;
   key: string;
@@ -121,12 +142,15 @@ export const session = {
 
 export const api = {
   me: () => request<User>("/me"),
+  listProjects: () => request<{ items: Project[] }>("/projects"),
+  createProject: (body: { key: string; name: string; description_md?: string }) =>
+    request<Project>("/projects", { method: "POST", body: JSON.stringify(body) }),
   listIssues: (projectKey: string, filter = "") =>
     request<{ items: Issue[]; total: number }>(
       `/projects/${projectKey}/issues?filter=${encodeURIComponent(filter)}`,
     ),
   getIssue: (issueKey: string) => request<Issue>(`/issues/${issueKey}`),
-  createIssue: (projectKey: string, body: Partial<Issue>) =>
+  createIssue: (projectKey: string, body: NewIssue) =>
     request<Issue>(`/projects/${projectKey}/issues`, {
       method: "POST",
       body: JSON.stringify(body),

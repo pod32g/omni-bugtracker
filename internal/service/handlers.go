@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -25,6 +26,8 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 
 	r := chi.NewRouter()
 	r.Get("/me", h.me)
+	r.Get("/projects", h.listProjects)
+	r.Post("/projects", h.createProject)
 	r.Get("/projects/{key}/issues", h.listIssues)
 	r.Post("/projects/{key}/issues", h.createIssue)
 	r.Get("/issues/{issueKey}", h.getIssue)
@@ -41,11 +44,59 @@ type httpHandlers struct {
 	repo   Repository
 }
 
+var projectKeyRe = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,9}$`)
+
 func (h *httpHandlers) me(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": p.UserID, "email": p.Email, "display_name": p.DisplayName, "role": p.Role,
 	})
+}
+
+func (h *httpHandlers) listProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := h.repo.ListProjects(r.Context(), 200, 0)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": projects})
+}
+
+func (h *httpHandlers) createProject(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	var body struct {
+		Key           string `json:"key"`
+		Name          string `json:"name"`
+		DescriptionMD string `json:"description_md"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	fields := map[string]string{}
+	if !projectKeyRe.MatchString(body.Key) {
+		fields["key"] = "must be 2–10 uppercase letters/digits, starting with a letter"
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		fields["name"] = "required"
+	}
+	if len(fields) > 0 {
+		httpapi.WriteValidation(w, fields)
+		return
+	}
+	project, err := h.repo.CreateProject(r.Context(), CreateProjectInput{
+		Key: body.Key, Name: body.Name, DescriptionMD: body.DescriptionMD,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "create failed",
+			"a project with that key may already exist: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, project)
 }
 
 func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {

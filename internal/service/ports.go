@@ -31,6 +31,8 @@ type Repository interface {
 
 	// Projects
 	GetProjectByKey(ctx context.Context, key string) (domain.Project, error)
+	ListProjects(ctx context.Context, limit, offset int32) ([]domain.Project, error)
+	CreateProject(ctx context.Context, in CreateProjectInput) (domain.Project, error)
 
 	// Issues (transactional writes take a PublishFn for the outbox)
 	CreateIssue(ctx context.Context, in CreateIssueInput, publish PublishIssueFn) (domain.Issue, error)
@@ -86,6 +88,12 @@ type TokenPrincipal struct {
 	TokenID uuid.UUID
 	User    domain.User
 	Scopes  []string
+}
+
+type CreateProjectInput struct {
+	Key           string
+	Name          string
+	DescriptionMD string
 }
 
 type CreateIssueInput struct {
