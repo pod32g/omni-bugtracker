@@ -54,6 +54,7 @@ func (AutomationJobArgs) InsertOpts() river.InsertOpts { return river.InsertOpts
 // GitIngestArgs → parse a commit/PR webhook payload for issue references.
 type GitIngestArgs struct {
 	Provider string          `json:"provider"`
+	Event    string          `json:"event"` // push | pull_request
 	Payload  json.RawMessage `json:"payload"`
 }
 

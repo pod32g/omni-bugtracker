@@ -302,6 +302,117 @@ func (s *Store) ListActivity(ctx context.Context, issueID uuid.UUID, limit, offs
 	return out, rows.Err()
 }
 
+// ── git integration ──
+
+func (s *Store) UpsertCommit(ctx context.Context, in service.CommitInput) (uuid.UUID, error) {
+	var id uuid.UUID
+	var committedAt any
+	if !in.CommittedAt.IsZero() {
+		committedAt = in.CommittedAt
+	}
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO git_commits (repo, sha, author, message, url, committed_at)
+		 VALUES ($1,$2,$3,$4,$5,$6)
+		 ON CONFLICT (repo, sha) DO UPDATE SET message = EXCLUDED.message
+		 RETURNING id`,
+		in.Repo, in.SHA, in.Author, in.Message, in.URL, committedAt).Scan(&id)
+	return id, err
+}
+
+func (s *Store) UpsertPullRequest(ctx context.Context, in service.PRInput) (uuid.UUID, error) {
+	state := in.State
+	if state == "" {
+		state = "open"
+	}
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO pull_requests (repo, number, url, title, state, merged_at)
+		 VALUES ($1,$2,$3,$4,$5,$6)
+		 ON CONFLICT (repo, number) DO UPDATE
+		   SET state = EXCLUDED.state, title = EXCLUDED.title,
+		       merged_at = EXCLUDED.merged_at, updated_at = now()
+		 RETURNING id`,
+		in.Repo, in.Number, in.URL, in.Title, state, in.MergedAt).Scan(&id)
+	return id, err
+}
+
+// ApplyGitLink links a commit/PR to an issue, records a NULL-actor (system) timeline
+// entry, optionally transitions the issue, and enqueues the event — all in one tx.
+func (s *Store) ApplyGitLink(ctx context.Context, in service.GitLinkInput, publish service.PublishFn) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	entityType := "issue"
+	var entityID uuid.UUID = in.IssueID
+	if in.CommitID != nil {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO issue_commits (issue_id, commit_id, verb) VALUES ($1,$2,$3)
+			 ON CONFLICT (issue_id, commit_id) DO UPDATE SET verb = EXCLUDED.verb`,
+			in.IssueID, *in.CommitID, in.Verb); err != nil {
+			return err
+		}
+		entityType, entityID = "commit", *in.CommitID
+	}
+	if in.PRID != nil {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO issue_pull_requests (issue_id, pr_id, verb) VALUES ($1,$2,$3)
+			 ON CONFLICT (issue_id, pr_id) DO UPDATE SET verb = EXCLUDED.verb`,
+			in.IssueID, *in.PRID, in.Verb); err != nil {
+			return err
+		}
+		entityType, entityID = "pull_request", *in.PRID
+	}
+	if in.NewStatus != nil {
+		if _, err := tx.Exec(ctx,
+			`UPDATE issues SET status = $2,
+			   resolved_at = CASE WHEN $2 IN ('resolved','closed') AND resolved_at IS NULL THEN now() ELSE resolved_at END,
+			   closed_at   = CASE WHEN $2 = 'closed' THEN now() ELSE closed_at END,
+			   updated_at  = now()
+			 WHERE id = $1 AND deleted_at IS NULL`, in.IssueID, string(*in.NewStatus)); err != nil {
+			return err
+		}
+	}
+	detail := in.Detail
+	if len(detail) == 0 {
+		detail = []byte("{}")
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO activity (issue_id, actor_id, verb, entity_type, entity_id, changes)
+		 VALUES ($1, NULL, $2, $3, $4, $5)`,
+		in.IssueID, in.ActivityVerb, entityType, entityID, detail); err != nil {
+		return err
+	}
+	if publish != nil {
+		if err := publish(tx); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) ListCommitsForIssue(ctx context.Context, issueID uuid.UUID) ([]domain.LinkedCommit, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT c.sha, c.repo, c.author, c.message, c.url, ic.verb, c.created_at
+		 FROM git_commits c JOIN issue_commits ic ON ic.commit_id = c.id
+		 WHERE ic.issue_id = $1 ORDER BY c.committed_at DESC NULLS LAST, c.created_at DESC`, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.LinkedCommit
+	for rows.Next() {
+		var lc domain.LinkedCommit
+		if err := rows.Scan(&lc.SHA, &lc.Repo, &lc.Author, &lc.Message, &lc.URL, &lc.Verb, &lc.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, lc)
+	}
+	return out, rows.Err()
+}
+
 // ── helpers ──
 
 const selectIssue = `

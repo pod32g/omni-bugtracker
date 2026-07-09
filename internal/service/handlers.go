@@ -32,6 +32,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/issues/{issueKey}/comments", h.listComments)
 	r.Post("/issues/{issueKey}/comments", h.addComment)
 	r.Get("/issues/{issueKey}/activity", h.activity)
+	r.Get("/issues/{issueKey}/commits", h.commits)
 	return r
 }
 
@@ -209,6 +210,19 @@ func (h *httpHandlers) activity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, acts)
+}
+
+func (h *httpHandlers) commits(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	commits, err := h.repo.ListCommitsForIssue(r.Context(), issue.ID)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "commits failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, commits)
 }
 
 func (h *httpHandlers) resolveIssue(w http.ResponseWriter, r *http.Request) (domain.Issue, bool) {

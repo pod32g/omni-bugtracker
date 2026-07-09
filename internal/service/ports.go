@@ -5,6 +5,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -40,6 +42,37 @@ type Repository interface {
 	AddComment(ctx context.Context, issueID, author uuid.UUID, body string, publish PublishFn) (domain.Comment, error)
 	ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, error)
 	ListActivity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, error)
+
+	// Git integration
+	UpsertCommit(ctx context.Context, in CommitInput) (uuid.UUID, error)
+	UpsertPullRequest(ctx context.Context, in PRInput) (uuid.UUID, error)
+	ApplyGitLink(ctx context.Context, in GitLinkInput, publish PublishFn) error
+	ListCommitsForIssue(ctx context.Context, issueID uuid.UUID) ([]domain.LinkedCommit, error)
+}
+
+type CommitInput struct {
+	Repo, SHA, Author, Message, URL string
+	CommittedAt                     time.Time
+}
+
+type PRInput struct {
+	Repo       string
+	Number     int
+	URL, Title string
+	State      string
+	MergedAt   *time.Time
+}
+
+// GitLinkInput links a commit or PR to an issue, records a timeline entry, and optionally
+// transitions the issue — all in one transaction, with publish enqueuing the event.
+type GitLinkInput struct {
+	IssueID      uuid.UUID
+	CommitID     *uuid.UUID
+	PRID         *uuid.UUID
+	Verb         string // canonical ref_verb
+	NewStatus    *domain.IssueStatus
+	ActivityVerb string
+	Detail       json.RawMessage
 }
 
 type UpsertUserParams struct {

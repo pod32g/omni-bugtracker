@@ -18,6 +18,7 @@ export function IssueDetail() {
   const issue = useQuery({ queryKey: ["issue", issueKey], queryFn: () => api.getIssue(issueKey) });
   const comments = useQuery({ queryKey: ["comments", issueKey], queryFn: () => api.listComments(issueKey) });
   const activity = useQuery({ queryKey: ["activity", issueKey], queryFn: () => api.activity(issueKey) });
+  const commits = useQuery({ queryKey: ["commits", issueKey], queryFn: () => api.commits(issueKey) });
 
   const transition = useMutation({
     mutationFn: (to: IssueStatus) => api.transition(issueKey, to),
@@ -105,6 +106,29 @@ export function IssueDetail() {
         <div>
           <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Assignee</h3>
           <p className="text-sm text-slate-300">{i.assignee?.display_name ?? "Unassigned"}</p>
+        </div>
+        <div>
+          <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Development</h3>
+          {commits.data && commits.data.length > 0 ? (
+            <ul className="space-y-2 text-xs">
+              {commits.data.map((c) => (
+                <li key={c.sha}>
+                  <a
+                    href={c.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-accent-hover hover:underline"
+                  >
+                    {c.sha.slice(0, 7)}
+                  </a>
+                  <span className="ml-1 rounded bg-white/5 px-1 text-slate-400">{c.verb}</span>
+                  <div className="truncate text-slate-500">{c.message.split("\n")[0]}</div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-slate-500">No linked commits yet.</p>
+          )}
         </div>
         <div>
           <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">Activity</h3>

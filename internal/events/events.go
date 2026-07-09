@@ -70,5 +70,11 @@ func (p *Publisher) Publish(ctx context.Context, ev DomainEventArgs) error {
 	return err
 }
 
+// Enqueue inserts any River job (e.g. GitIngestArgs from an inbound webhook handler).
+func (p *Publisher) Enqueue(ctx context.Context, args river.JobArgs) error {
+	_, err := p.client.Insert(ctx, args, nil)
+	return err
+}
+
 // Noop keeps the events import referenced where the worker wires River directly.
 func Noop() error { return nil }

@@ -57,6 +57,16 @@ export interface Activity {
   occurred_at: string;
 }
 
+export interface LinkedCommit {
+  sha: string;
+  repo: string;
+  author: string;
+  message: string;
+  url: string;
+  verb: string;
+  created_at: string;
+}
+
 export interface DashboardOverview {
   open_issues: number;
   critical_issues: number;
@@ -133,6 +143,7 @@ export const api = {
       body: JSON.stringify({ body_md }),
     }),
   activity: (issueKey: string) => request<Activity[]>(`/issues/${issueKey}/activity`),
+  commits: (issueKey: string) => request<LinkedCommit[]>(`/issues/${issueKey}/commits`),
   dashboard: (project = "") =>
     request<DashboardOverview>(`/dashboards/overview?project=${project}`),
 };

@@ -133,6 +133,15 @@ paths:
       responses:
         "200": { description: timeline, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Activity" } } } } }
 
+  /issues/{issueKey}/commits:
+    parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    get:
+      tags: [issues]
+      operationId: listIssueCommits
+      description: Git commits linked to this issue via commit/PR references.
+      responses:
+        "200": { description: linked commits, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/LinkedCommit" } } } } }
+
   /issues/{issueKey}/comments:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
     get:
@@ -440,6 +449,17 @@ components:
         entity_type: { type: string }
         changes: { type: object, additionalProperties: true }
         occurred_at: { type: string, format: date-time }
+
+    LinkedCommit:
+      type: object
+      properties:
+        sha: { type: string }
+        repo: { type: string }
+        author: { type: string }
+        message: { type: string }
+        url: { type: string }
+        verb: { type: string, description: "fixes|closes|resolves|refs|related" }
+        created_at: { type: string, format: date-time }
 
     PresignedUpload:
       type: object

@@ -16,6 +16,16 @@ type Comment struct {
 	CreatedAt time.Time  `json:"created_at"`
 }
 
+type LinkedCommit struct {
+	SHA       string    `json:"sha"`
+	Repo      string    `json:"repo"`
+	Author    string    `json:"author"`
+	Message   string    `json:"message"`
+	URL       string    `json:"url"`
+	Verb      string    `json:"verb"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Activity struct {
 	ID         uuid.UUID       `json:"id"`
 	IssueID    *uuid.UUID      `json:"issue_id,omitempty"`
