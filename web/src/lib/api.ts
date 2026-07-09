@@ -128,16 +128,37 @@ function optionalToken(): Record<string, string> {
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(BASE + path, {
-    ...init,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...optionalToken(),
-      ...(init.headers ?? {}),
-    },
-  });
+// Deduped silent refresh: the 15-minute access token is renewed from the httpOnly
+// refresh cookie so the user stays signed in without re-authenticating.
+let refreshInFlight: Promise<boolean> | null = null;
+function tryRefresh(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = fetch("/auth/refresh", { method: "POST", credentials: "include" })
+      .then((r) => r.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
+async function request<T>(path: string, init: RequestInit = {}, allowRefresh = true): Promise<T> {
+  const doFetch = () =>
+    fetch(BASE + path, {
+      ...init,
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...optionalToken(),
+        ...(init.headers ?? {}),
+      },
+    });
+
+  let res = await doFetch();
+  if (res.status === 401 && allowRefresh && (await tryRefresh())) {
+    res = await doFetch();
+  }
   if (!res.ok) {
     const problem = await res.json().catch(() => ({ title: res.statusText }));
     throw new ApiError(res.status, problem.detail || problem.title || `HTTP ${res.status}`);

@@ -39,7 +39,7 @@ identity:
   userinfo_url: "http://192.168.68.34:8081/userinfo"
   end_session_url: "http://192.168.68.34:8081/logout"
   redirect_uri: "http://192.168.68.34:3002/auth/callback"
-  scopes: "openid email profile"
+  scopes: "openid email profile offline_access"
   post_logout_url: "http://192.168.68.34:3002/"
 
 integrations:

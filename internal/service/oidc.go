@@ -33,15 +33,38 @@ func NewOIDC(cfg config.Identity, repo Repository, logger *slog.Logger) *OIDC {
 	return &OIDC{cfg: cfg, repo: repo, http: &http.Client{Timeout: 10 * time.Second}, logger: logger}
 }
 
-const oauthTmpCookie = "obt_oauth" // short-lived PKCE state/verifier carrier
+const (
+	oauthTmpCookie = "obt_oauth"   // short-lived PKCE state/verifier carrier
+	refreshCookie  = "obt_refresh" // long-lived refresh token (Path=/auth only)
+	refreshMaxAge  = 30 * 24 * 3600
+)
 
 // Router returns the unauthenticated /auth endpoints, mounted at the root.
 func (o *OIDC) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/login", o.login)
 	r.Get("/callback", o.callback)
+	r.Post("/refresh", o.refresh)
 	r.Get("/logout", o.logout)
 	return r
+}
+
+// setSession writes the httpOnly access-token cookie (and refresh cookie when present).
+func (o *OIDC) setSession(w http.ResponseWriter, tok *tokenResp) {
+	maxAge := tok.ExpiresIn
+	if maxAge <= 0 {
+		maxAge = 900
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: auth.SessionCookie, Value: tok.AccessToken, Path: "/",
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: maxAge,
+	})
+	if tok.RefreshToken != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name: refreshCookie, Value: tok.RefreshToken, Path: "/auth",
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: refreshMaxAge,
+		})
+	}
 }
 
 func (o *OIDC) login(w http.ResponseWriter, r *http.Request) {
@@ -104,18 +127,7 @@ func (o *OIDC) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	maxAge := tok.ExpiresIn
-	if maxAge <= 0 {
-		maxAge = 900
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookie,
-		Value:    tok.AccessToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   maxAge,
-	})
+	o.setSession(w, tok)
 
 	// Best-effort profile enrichment from the id_token (access tokens carry no email/name).
 	o.enrich(r.Context(), tok.IDToken)
@@ -123,8 +135,29 @@ func (o *OIDC) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+// refresh exchanges the refresh-token cookie for a fresh access token and re-sets the
+// session cookie. The SPA calls this on a 401 so sessions survive the 15m token TTL.
+func (o *OIDC) refresh(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie(refreshCookie)
+	if err != nil || c.Value == "" {
+		http.Error(w, "no refresh token", http.StatusUnauthorized)
+		return
+	}
+	tok, err := o.refreshExchange(r.Context(), c.Value)
+	if err != nil {
+		// Refresh failed (expired/revoked) — clear cookies so the SPA shows sign-in.
+		clearCookie(w, auth.SessionCookie, "/")
+		clearCookie(w, refreshCookie, "/auth")
+		http.Error(w, "refresh failed", http.StatusUnauthorized)
+		return
+	}
+	o.setSession(w, tok)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (o *OIDC) logout(w http.ResponseWriter, r *http.Request) {
 	clearCookie(w, auth.SessionCookie, "/")
+	clearCookie(w, refreshCookie, "/auth")
 	dest := o.cfg.PostLogoutURL
 	if dest == "" {
 		dest = "/"
@@ -133,10 +166,19 @@ func (o *OIDC) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 type tokenResp struct {
-	AccessToken string `json:"access_token"`
-	IDToken     string `json:"id_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
+	AccessToken  string `json:"access_token"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+func (o *OIDC) refreshExchange(ctx context.Context, refreshToken string) (*tokenResp, error) {
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	form.Set("client_id", o.cfg.ClientID)
+	return o.postToken(ctx, form)
 }
 
 func (o *OIDC) exchange(ctx context.Context, code, verifier string) (*tokenResp, error) {
@@ -146,7 +188,11 @@ func (o *OIDC) exchange(ctx context.Context, code, verifier string) (*tokenResp,
 	form.Set("redirect_uri", o.cfg.RedirectURI)
 	form.Set("client_id", o.cfg.ClientID)
 	form.Set("code_verifier", verifier)
+	return o.postToken(ctx, form)
+}
 
+// postToken performs a token-endpoint request and decodes the response.
+func (o *OIDC) postToken(ctx context.Context, form url.Values) (*tokenResp, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.cfg.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
