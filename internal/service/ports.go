@@ -33,6 +33,7 @@ type Repository interface {
 	GetProjectByKey(ctx context.Context, key string) (domain.Project, error)
 	ListProjects(ctx context.Context, limit, offset int32) ([]domain.Project, error)
 	CreateProject(ctx context.Context, in CreateProjectInput) (domain.Project, error)
+	UpdateProject(ctx context.Context, in UpdateProjectInput) (domain.Project, error)
 	ListLabels(ctx context.Context, projectKey string) ([]domain.Label, error)
 
 	// Issues (transactional writes take a PublishFn for the outbox)
@@ -100,6 +101,14 @@ type CreateProjectInput struct {
 	Key           string
 	Name          string
 	DescriptionMD string
+}
+
+// UpdateProjectInput is a partial edit; nil fields are left unchanged (COALESCE).
+type UpdateProjectInput struct {
+	Key           string
+	Name          *string
+	DescriptionMD *string
+	IsArchived    *bool
 }
 
 type CreateIssueInput struct {

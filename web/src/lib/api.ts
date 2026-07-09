@@ -180,6 +180,10 @@ export const api = {
   listProjects: () => request<{ items: Project[] }>("/projects"),
   createProject: (body: { key: string; name: string; description_md?: string }) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(body) }),
+  getProject: (key: string) => request<Project>(`/projects/${key}`),
+  updateProject: (key: string, patch: { name?: string; description_md?: string; is_archived?: boolean }) =>
+    request<Project>(`/projects/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  archiveProject: (key: string) => request<void>(`/projects/${key}`, { method: "DELETE" }),
   listLabels: (projectKey: string) => request<{ items: Label[] }>(`/projects/${projectKey}/labels`),
   listIssues: (projectKey: string, filter = "", sort = "") =>
     request<{ items: Issue[]; total: number }>(

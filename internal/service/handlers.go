@@ -30,6 +30,9 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/dashboards/overview", h.dashboard)
 	r.Get("/projects", h.listProjects)
 	r.Post("/projects", h.createProject)
+	r.Get("/projects/{key}", h.getProject)
+	r.Patch("/projects/{key}", h.updateProject)
+	r.Delete("/projects/{key}", h.archiveProject)
 	r.Get("/projects/{key}/labels", h.listLabels)
 	r.Get("/projects/{key}/issues", h.listIssues)
 	r.Post("/projects/{key}/issues", h.createIssue)
@@ -120,6 +123,68 @@ func (h *httpHandlers) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, project)
+}
+
+func (h *httpHandlers) getProject(w http.ResponseWriter, r *http.Request) {
+	project, err := h.repo.GetProjectByKey(r.Context(), chi.URLParam(r, "key"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+		return
+	}
+	writeJSON(w, http.StatusOK, project)
+}
+
+func (h *httpHandlers) updateProject(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	key := chi.URLParam(r, "key")
+	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+		return
+	}
+	var body struct {
+		Name          *string `json:"name"`
+		DescriptionMD *string `json:"description_md"`
+		IsArchived    *bool   `json:"is_archived"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.Name != nil && strings.TrimSpace(*body.Name) == "" {
+		httpapi.WriteValidation(w, map[string]string{"name": "cannot be empty"})
+		return
+	}
+	project, err := h.repo.UpdateProject(r.Context(), UpdateProjectInput{
+		Key: key, Name: body.Name, DescriptionMD: body.DescriptionMD, IsArchived: body.IsArchived,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, project)
+}
+
+func (h *httpHandlers) archiveProject(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	key := chi.URLParam(r, "key")
+	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+		return
+	}
+	archived := true
+	if _, err := h.repo.UpdateProject(r.Context(), UpdateProjectInput{Key: key, IsArchived: &archived}); err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "archive failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *httpHandlers) listLabels(w http.ResponseWriter, r *http.Request) {

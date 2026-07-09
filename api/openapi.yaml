@@ -57,6 +57,31 @@ paths:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /projects/{key}:
+    parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
+    get:
+      tags: [projects]
+      operationId: getProject
+      responses:
+        "200": { description: project, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [projects]
+      operationId: updateProject
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UpdateProject" } } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [projects]
+      operationId: archiveProject
+      description: "Soft-delete: archives the project (excluded from list; unarchive via PATCH is_archived=false)."
+      responses:
+        "204": { description: archived }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /projects/{key}/issues:
     parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
     get:
@@ -362,6 +387,14 @@ components:
         key: { type: string, pattern: "^[A-Z][A-Z0-9]{1,9}$" }
         name: { type: string }
         description_md: { type: string }
+
+    UpdateProject:
+      type: object
+      description: Partial edit; omitted fields are left unchanged.
+      properties:
+        name: { type: string }
+        description_md: { type: string }
+        is_archived: { type: boolean }
 
     Issue:
       type: object

@@ -173,6 +173,21 @@ func (s *Store) CreateProject(ctx context.Context, in service.CreateProjectInput
 	return p, err
 }
 
+// UpdateProject applies a partial edit keyed by project key; nil fields keep their value.
+func (s *Store) UpdateProject(ctx context.Context, in service.UpdateProjectInput) (domain.Project, error) {
+	const q = `UPDATE projects SET
+	               name           = COALESCE($2, name),
+	               description_md  = COALESCE($3, description_md),
+	               is_archived    = COALESCE($4, is_archived),
+	               updated_at     = now()
+	           WHERE key = $1
+	           RETURNING id, key, name, description_md, is_archived, created_at`
+	var p domain.Project
+	err := s.pool.QueryRow(ctx, q, in.Key, in.Name, in.DescriptionMD, in.IsArchived).
+		Scan(&p.ID, &p.Key, &p.Name, &p.DescriptionMD, &p.IsArchived, &p.CreatedAt)
+	return p, err
+}
+
 // ── issues ──
 
 func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, publish service.PublishIssueFn) (domain.Issue, error) {
