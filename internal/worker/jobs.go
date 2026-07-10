@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -125,11 +126,91 @@ type notifyWorker struct {
 }
 
 func (w *notifyWorker) Work(ctx context.Context, job *river.Job[events.NotifyJobArgs]) error {
-	err := w.d.Adapters.Notify.Notify(ctx, integrations.NotifyEvent{
-		EventType: job.Args.EventType, IssueID: job.Args.IssueID, ActorID: job.Args.ActorID,
-		Recipients: job.Args.Recipients,
-	})
-	return softFail(w.d, "notify", err)
+	issueID, err := uuid.Parse(job.Args.IssueID)
+	if err != nil {
+		return nil //nolint:nilerr
+	}
+	issue, err := w.d.Store.GetIssueByID(ctx, issueID)
+	if err != nil {
+		return nil //nolint:nilerr // deleted before the job ran — nothing to say
+	}
+
+	// Recipients = watchers minus the actor (people don't need to hear about
+	// their own edits). Included as labels so Omni-Notify routes/templates can
+	// use them; concrete delivery channels are configured in Omni-Notify.
+	var recipients []string
+	if watchers, err := w.d.Store.ListWatchers(ctx, issue.ID); err == nil {
+		for _, u := range watchers {
+			if u.ID.String() != job.Args.ActorID {
+				recipients = append(recipients, u.Email)
+			}
+		}
+	}
+
+	severity := "info"
+	if issue.Severity != nil {
+		switch *issue.Severity {
+		case domain.SeverityCritical:
+			severity = "critical"
+		case domain.SeverityHigh:
+			severity = "error"
+		case domain.SeverityMedium:
+			severity = "warning"
+		}
+	}
+	status := "firing"
+	if job.Args.EventType == events.IssueResolved || job.Args.EventType == events.IssueClosed ||
+		job.Args.EventType == events.IssueDeleted {
+		status = "resolved"
+	}
+
+	labels := map[string]string{
+		"service": "omni-bugtracker",
+		"project": issue.ProjectKey,
+		"issue":   issue.Key,
+		"event":   job.Args.EventType,
+		"status":  string(issue.Status),
+	}
+	if issue.Assignee != nil {
+		labels["assignee"] = issue.Assignee.Email
+	}
+	if len(recipients) > 0 {
+		labels["recipients"] = strings.Join(recipients, ",")
+	}
+
+	ev := integrations.NotifyEvent{
+		// Fingerprint on issue+event so repeats inside Omni-Notify's dedupe
+		// window collapse (e.g. rapid successive edits).
+		EventID:   issue.Key + ":" + job.Args.EventType,
+		Type:      "issue",
+		Source:    "omni-bugtracker",
+		Status:    status,
+		Severity:  severity,
+		Title:     "[" + issue.Key + "] " + issue.Title,
+		Summary:   humanEventSummary(job.Args.EventType, issue),
+		Labels:    labels,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	return softFail(w.d, "notify", w.d.Adapters.Notify.Notify(ctx, ev))
+}
+
+func humanEventSummary(eventType string, issue domain.Issue) string {
+	switch eventType {
+	case events.IssueCreated:
+		return "New " + string(issue.Type) + " reported in " + issue.ProjectKey
+	case events.IssueResolved:
+		return issue.Key + " was resolved"
+	case events.IssueClosed:
+		return issue.Key + " was closed"
+	case events.IssueReopened:
+		return issue.Key + " was reopened"
+	case events.IssueCommented:
+		return "New comment on " + issue.Key
+	case events.IssueStatusChanged:
+		return issue.Key + " moved to " + string(issue.Status)
+	default:
+		return issue.Key + " was updated"
+	}
 }
 
 // webhookWorker delivers one outbound webhook. River handles retry/backoff via MaxAttempts.

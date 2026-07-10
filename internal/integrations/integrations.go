@@ -11,14 +11,18 @@ import (
 // ErrDisabled is returned by no-op adapters when an integration is turned off.
 var ErrDisabled = errors.New("integration disabled")
 
-// NotifyEvent is the payload sent to Omni-Notify.
+// NotifyEvent is the payload sent to Omni-Notify's POST /api/v1/events —
+// its native event schema (event_id/type/source/title/timestamp required).
 type NotifyEvent struct {
-	EventType  string   `json:"event_type"`
-	IssueKey   string   `json:"issue_key,omitempty"`
-	IssueID    string   `json:"issue_id,omitempty"`
-	ActorID    string   `json:"actor_id,omitempty"`
-	Title      string   `json:"title,omitempty"`
-	Recipients []string `json:"recipients,omitempty"`
+	EventID   string            `json:"event_id"`
+	Type      string            `json:"type"`
+	Source    string            `json:"source"`
+	Status    string            `json:"status,omitempty"`   // firing | resolved
+	Severity  string            `json:"severity,omitempty"` // critical|error|warning|info|debug
+	Title     string            `json:"title"`
+	Summary   string            `json:"summary,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	Timestamp string            `json:"timestamp"` // RFC3339
 }
 
 // SearchDoc is a document projected into Omni-Search.

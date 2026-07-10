@@ -47,6 +47,9 @@ services:
       OMNI_BT_REDIS__ADDR: redis:6379
       OMNI_BT_SERVER__ADDR: ":8080"
       OMNI_BT_STORAGE__ATTACHMENTS_DIR: /app/data/attachments
+      # Omni-Notify ingest (host-published behind its netviz sidecar). Token in .env.
+      OMNI_BT_INTEGRATIONS__NOTIFY__BASE_URL: ${OMNI_BT_NOTIFY_URL:-http://omni-notify:8080}
+      OMNI_BT_INTEGRATIONS__NOTIFY__API_TOKEN: ${OMNI_BT_NOTIFY_TOKEN:-}
     volumes: ["attachments:/app/data/attachments"]
     # Published host port is overridable so prod avoids conflicts (default dev 8080).
     ports: ["${OMNI_BT_API_PORT:-8080}:8080"]
@@ -60,6 +63,8 @@ services:
     environment:
       OMNI_BT_DATABASE__DSN: postgres://omni:omni@postgres:5432/omni_bugtracker?sslmode=disable
       OMNI_BT_REDIS__ADDR: redis:6379
+      OMNI_BT_INTEGRATIONS__NOTIFY__BASE_URL: ${OMNI_BT_NOTIFY_URL:-http://omni-notify:8080}
+      OMNI_BT_INTEGRATIONS__NOTIFY__API_TOKEN: ${OMNI_BT_NOTIFY_TOKEN:-}
     depends_on:
       postgres: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }

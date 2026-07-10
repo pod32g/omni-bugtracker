@@ -91,9 +91,10 @@ type Integrations struct {
 }
 
 type ServiceAdapter struct {
-	Enabled bool          `koanf:"enabled"`
-	BaseURL string        `koanf:"base_url"`
-	Timeout time.Duration `koanf:"timeout"`
+	Enabled  bool          `koanf:"enabled"`
+	BaseURL  string        `koanf:"base_url"`
+	Timeout  time.Duration `koanf:"timeout"`
+	APIToken string        `koanf:"api_token"` // bearer token, if the service requires auth
 }
 
 type Inbound struct {
