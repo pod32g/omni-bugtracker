@@ -60,6 +60,7 @@ type Repository interface {
 	// Issues (transactional writes take a PublishFn for the outbox)
 	CreateIssue(ctx context.Context, in CreateIssueInput, publish PublishIssueFn) (domain.Issue, error)
 	GetIssueByKey(ctx context.Context, projectKey string, number int32) (domain.Issue, error)
+	GetIssueByID(ctx context.Context, id uuid.UUID) (domain.Issue, error)
 	ListIssues(ctx context.Context, f IssueFilter) ([]domain.Issue, int, error)
 	TransitionIssue(ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID, publish PublishFn) (domain.Issue, error)
 	UpdateIssue(ctx context.Context, id, actor uuid.UUID, in UpdateIssueInput, publish PublishFn) (domain.Issue, error)

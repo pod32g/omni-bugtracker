@@ -679,11 +679,29 @@ paths:
     post:
       tags: [issues]
       operationId: bulkUpdateIssues
+      description: >
+        Applies a field patch, a status transition, and/or a project move to up to 100
+        issues. Each issue is processed independently with single-issue permission and
+        workflow semantics; failures are reported per issue without aborting the batch.
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/BulkUpdate" } } }
       responses:
-        "200": { description: result, content: { application/json: { schema: { type: object, properties: { updated: { type: integer } } } } } }
+        "200":
+          description: per-batch result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated: { type: integer }
+                  failed:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string }
+                        error: { type: string }
 
   /search:
     get:
@@ -1019,10 +1037,22 @@ components:
           description: "Replaces the set; names must exist as project components."
     BulkUpdate:
       type: object
+      required: [ids]
       properties:
-        ids: { type: array, items: { type: string, format: uuid } }
-        filter: { type: string }
-        patch: { $ref: "#/components/schemas/UpdateIssue" }
+        ids: { type: array, items: { type: string, format: uuid }, maxItems: 100 }
+        patch:
+          type: object
+          description: fields applied to every issue (nil fields unchanged)
+          properties:
+            priority: { $ref: "#/components/schemas/Priority" }
+            severity: { $ref: "#/components/schemas/Severity" }
+            assignee_id: { type: string, format: uuid, nullable: true }
+            labels: { type: array, items: { type: string } }
+            components: { type: array, items: { type: string } }
+            milestone_id: { type: string, format: uuid, nullable: true }
+            release_id: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/IssueStatus" }
+        target_project_key: { type: string }
 
     Comment:
       type: object

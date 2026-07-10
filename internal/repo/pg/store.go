@@ -332,6 +332,11 @@ func (s *Store) GetIssueByKey(ctx context.Context, projectKey string, number int
 	return scanIssue(row)
 }
 
+func (s *Store) GetIssueByID(ctx context.Context, id uuid.UUID) (domain.Issue, error) {
+	const q = selectIssue + ` WHERE i.id = $1 AND i.deleted_at IS NULL`
+	return scanIssue(s.pool.QueryRow(ctx, q, id))
+}
+
 func (s *Store) ListIssues(ctx context.Context, f service.IssueFilter) ([]domain.Issue, int, error) {
 	where := []string{"i.deleted_at IS NULL", "p.key = $1"}
 	args := []any{f.ProjectKey}

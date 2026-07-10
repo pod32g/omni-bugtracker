@@ -357,6 +357,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ body_md }),
     }),
+  bulkUpdateIssues: (body: {
+    ids: string[];
+    patch?: {
+      priority?: Priority;
+      severity?: Severity;
+      assignee_id?: string;
+      labels?: string[];
+      components?: string[];
+      milestone_id?: string;
+      release_id?: string;
+    };
+    status?: IssueStatus;
+    target_project_key?: string;
+  }) =>
+    request<{ updated: number; failed: { key: string; error: string }[] }>("/issues/bulk", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   listSavedSearches: () => request<{ items: SavedSearch[] }>("/me/saved-searches"),
   saveSavedSearch: (name: string, query: string) =>
     request<SavedSearch>("/me/saved-searches", { method: "POST", body: JSON.stringify({ name, query }) }),

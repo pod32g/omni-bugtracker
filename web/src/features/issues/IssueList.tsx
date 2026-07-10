@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, type Issue } from "../../lib/api";
+import { api, type Issue, type IssueStatus, type Priority } from "../../lib/api";
 import { useProject } from "../../lib/project";
 import { timeAgo } from "../../lib/activity";
 import { Avatar, LabelChip, PriorityText, SeverityBar, SeverityMark, StatusPill } from "../../components/Badges";
@@ -35,6 +35,7 @@ export function IssueList() {
   const [filter, setFilter] = useState(() => searchParams.get("filter") ?? "is:open");
   const [sort, setSort] = useState("");
   const [showNewIssue, setShowNewIssue] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
 
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me(), retry: false });
@@ -154,6 +155,17 @@ export function IssueList() {
 
           {/* Column header */}
           <div className="flex items-center gap-4 border-b border-hairline bg-panel px-9 py-2.5">
+            <span className="flex w-4 shrink-0 justify-center">
+              <input
+                type="checkbox"
+                aria-label="Select all"
+                checked={items.length > 0 && selected.size === items.length}
+                onChange={(e) =>
+                  setSelected(e.target.checked ? new Set(items.map((i) => i.id)) : new Set())
+                }
+                className="accent-blueprint"
+              />
+            </span>
             <Lane className="w-3" />
             <Lane className="w-[88px]">ID</Lane>
             <Lane className="grow">Issue</Lane>
@@ -170,7 +182,19 @@ export function IssueList() {
             <div className="px-9 py-8 text-sm text-critical">{(issues.error as Error).message}</div>
           )}
           {items.map((issue) => (
-            <IssueRow key={issue.id} issue={issue} />
+            <IssueRow
+              key={issue.id}
+              issue={issue}
+              selected={selected.has(issue.id)}
+              onToggle={() =>
+                setSelected((s) => {
+                  const next = new Set(s);
+                  if (next.has(issue.id)) next.delete(issue.id);
+                  else next.add(issue.id);
+                  return next;
+                })
+              }
+            />
           ))}
           {issues.isSuccess && items.length === 0 && (
             <div className="px-9 py-10 text-sm text-graphite-soft">No issues match this filter.</div>
@@ -196,6 +220,10 @@ export function IssueList() {
       {showNewIssue && projectKey && (
         <NewIssueForm projectKey={projectKey} onClose={() => setShowNewIssue(false)} />
       )}
+
+      {selected.size > 0 && (
+        <BulkBar ids={[...selected]} projectKey={projectKey} onDone={() => setSelected(new Set())} />
+      )}
     </div>
   );
 }
@@ -208,12 +236,24 @@ function Lane({ className = "", children }: { className?: string; children?: Rea
   );
 }
 
-function IssueRow({ issue }: { issue: Issue }) {
+function IssueRow({ issue, selected, onToggle }: { issue: Issue; selected: boolean; onToggle: () => void }) {
   return (
     <Link
       to={`/issues/${issue.key}`}
-      className="flex items-center gap-4 border-b border-hairline px-9 py-[11px] transition hover:bg-panel/60"
+      className={`flex items-center gap-4 border-b border-hairline px-9 py-[11px] transition hover:bg-panel/60 ${
+        selected ? "bg-blueprint-soft/40" : ""
+      }`}
     >
+      <span
+        className="flex w-4 shrink-0 justify-center"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggle();
+        }}
+      >
+        <input type="checkbox" aria-label={`Select ${issue.key}`} checked={selected} readOnly className="accent-blueprint" />
+      </span>
       <div className="flex w-3 shrink-0 justify-center">
         <SeverityBar severity={issue.severity} />
       </div>
@@ -351,5 +391,106 @@ function SavedSearches({ filter, onApply }: { filter: string; onApply: (f: strin
         </button>
       )}
     </>
+  );
+}
+
+// Floating action bar shown while rows are selected. Every action calls the
+// bulk endpoint, reports failures, refreshes the list, and clears selection.
+function BulkBar({ ids, projectKey, onDone }: { ids: string[]; projectKey: string; onDone: () => void }) {
+  const qc = useQueryClient();
+  const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
+  const { projects } = useProject();
+
+  const run = useMutation({
+    mutationFn: (body: Parameters<typeof api.bulkUpdateIssues>[0]) => api.bulkUpdateIssues(body),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      if (res.failed.length > 0)
+        window.alert(`${res.updated} updated, ${res.failed.length} failed:\n` +
+          res.failed.map((f) => `${f.key}: ${f.error}`).join("\n"));
+      onDone();
+    },
+  });
+
+  const selectClass =
+    "h-8 rounded-md border border-hairline bg-paper px-2 text-sm text-ink outline-none focus:border-blueprint";
+
+  return (
+    <div className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-hairline bg-paper px-4 py-3 shadow-xl shadow-ink/15">
+      <span className="font-mono text-xs font-semibold text-blueprint">{ids.length} selected</span>
+      <span className="h-5 w-px bg-hairline" />
+
+      <select
+        defaultValue=""
+        aria-label="Bulk status"
+        className={selectClass}
+        onChange={(e) => e.target.value && run.mutate({ ids, status: e.target.value as IssueStatus })}
+      >
+        <option value="">Status…</option>
+        {(["open", "in_progress", "blocked", "ready_for_review", "resolved", "closed", "reopened"] as IssueStatus[]).map(
+          (s) => (
+            <option key={s} value={s}>
+              {s.replace(/_/g, " ")}
+            </option>
+          ),
+        )}
+      </select>
+
+      <select
+        defaultValue=""
+        aria-label="Bulk assignee"
+        className={selectClass}
+        onChange={(e) => e.target.value && run.mutate({ ids, patch: { assignee_id: e.target.value } })}
+      >
+        <option value="">Assign…</option>
+        {users.data?.items.map((u) => (
+          <option key={u.id} value={u.id}>
+            {u.display_name || u.email}
+          </option>
+        ))}
+      </select>
+
+      <select
+        defaultValue=""
+        aria-label="Bulk priority"
+        className={selectClass}
+        onChange={(e) => e.target.value && run.mutate({ ids, patch: { priority: e.target.value as Priority } })}
+      >
+        <option value="">Priority…</option>
+        {["p0", "p1", "p2", "p3"].map((p) => (
+          <option key={p} value={p}>
+            {p.toUpperCase()}
+          </option>
+        ))}
+      </select>
+
+      <select
+        defaultValue=""
+        aria-label="Bulk move"
+        className={selectClass}
+        onChange={(e) => {
+          const key = e.target.value;
+          if (!key) return;
+          if (window.confirm(`Move ${ids.length} issue(s) to ${key}? They get new keys and lose milestone/release/components.`))
+            run.mutate({ ids, target_project_key: key });
+          else e.target.value = "";
+        }}
+      >
+        <option value="">Move to…</option>
+        {projects
+          .filter((p) => p.key !== projectKey)
+          .map((p) => (
+            <option key={p.key} value={p.key}>
+              {p.key}
+            </option>
+          ))}
+      </select>
+
+      {run.isPending && <span className="font-mono text-xs text-graphite-soft">Applying…</span>}
+      <button onClick={onDone} className="text-sm text-graphite transition hover:text-ink">
+        Clear
+      </button>
+    </div>
   );
 }

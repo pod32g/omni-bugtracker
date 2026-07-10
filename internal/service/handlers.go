@@ -78,6 +78,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Delete("/projects/{key}/members/{id}", h.deleteProjectMember)
 	r.Get("/projects/{key}/issues", h.listIssues)
 	r.Post("/projects/{key}/issues", h.createIssue)
+	r.Post("/issues/bulk", h.bulkUpdateIssues)
 	r.Get("/issues/{issueKey}", h.getIssue)
 	r.Patch("/issues/{issueKey}", h.updateIssue)
 	r.Delete("/issues/{issueKey}", h.deleteIssue)
@@ -958,6 +959,109 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, issue)
+}
+
+// bulkUpdateIssues applies a patch, a status transition, and/or a project move
+// to a set of issues. Each issue is processed independently with the same
+// permission checks and activity/event semantics as the single-issue
+// endpoints; failures don't abort the batch and are reported per issue.
+func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	var body struct {
+		IDs   []uuid.UUID `json:"ids"`
+		Patch *struct {
+			Priority    *domain.Priority   `json:"priority"`
+			Severity    *domain.Severity   `json:"severity"`
+			AssigneeID  *uuid.UUID         `json:"assignee_id"`
+			Labels      *[]string          `json:"labels"`
+			Components  *[]string          `json:"components"`
+			MilestoneID *uuid.UUID         `json:"milestone_id"`
+			ReleaseID   *uuid.UUID         `json:"release_id"`
+		} `json:"patch"`
+		Status           *domain.IssueStatus `json:"status"`
+		TargetProjectKey *string             `json:"target_project_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if len(body.IDs) == 0 || len(body.IDs) > 100 {
+		httpapi.WriteValidation(w, map[string]string{"ids": "between 1 and 100 issue ids"})
+		return
+	}
+	if body.Patch == nil && body.Status == nil && body.TargetProjectKey == nil {
+		httpapi.WriteValidation(w, map[string]string{"patch": "nothing to apply"})
+		return
+	}
+	var target string
+	if body.TargetProjectKey != nil {
+		target = strings.ToUpper(strings.TrimSpace(*body.TargetProjectKey))
+		if _, err := h.repo.GetProjectByKey(r.Context(), target); err != nil {
+			httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project: "+target)
+			return
+		}
+	}
+
+	actor, _ := uuid.Parse(p.UserID)
+	type failure struct {
+		Key   string `json:"key"`
+		Error string `json:"error"`
+	}
+	updated := 0
+	failed := []failure{}
+	fail := func(key, msg string) { failed = append(failed, failure{Key: key, Error: msg}) }
+
+	for _, id := range body.IDs {
+		issue, err := h.repo.GetIssueByID(r.Context(), id)
+		if err != nil {
+			fail(id.String(), "not found")
+			continue
+		}
+		if body.Patch != nil || body.Status != nil {
+			perm := auth.PermIssueUpdate
+			if body.Patch == nil {
+				perm = auth.PermIssueTransition
+			}
+			if !h.canOnProject(r.Context(), p, issue.ProjectKey, perm) {
+				fail(issue.Key, "forbidden")
+				continue
+			}
+		}
+		if body.Patch != nil {
+			if _, err := h.issues.Update(r.Context(), issue.ID, actor, UpdateIssueInput{
+				Priority: body.Patch.Priority, Severity: body.Patch.Severity,
+				AssigneeID: body.Patch.AssigneeID, Labels: body.Patch.Labels,
+				Components: body.Patch.Components, MilestoneID: body.Patch.MilestoneID,
+				ReleaseID: body.Patch.ReleaseID,
+			}); err != nil {
+				fail(issue.Key, "update: "+err.Error())
+				continue
+			}
+		}
+		if body.Status != nil && issue.Status != *body.Status {
+			if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueTransition) {
+				fail(issue.Key, "forbidden (transition)")
+				continue
+			}
+			if _, err := h.issues.Transition(r.Context(), issue.ID, issue.Status, *body.Status, actor); err != nil {
+				fail(issue.Key, "transition: "+err.Error())
+				continue
+			}
+		}
+		if target != "" && target != issue.ProjectKey {
+			if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueUpdate) ||
+				!h.canOnProject(r.Context(), p, target, auth.PermIssueCreate) {
+				fail(issue.Key, "forbidden (move)")
+				continue
+			}
+			if _, err := h.issues.Move(r.Context(), issue.ID, actor, target); err != nil {
+				fail(issue.Key, "move: "+err.Error())
+				continue
+			}
+		}
+		updated++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"updated": updated, "failed": failed})
 }
 
 func (h *httpHandlers) getIssue(w http.ResponseWriter, r *http.Request) {
