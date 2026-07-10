@@ -298,6 +298,11 @@ func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, pu
 			return domain.Issue{}, fmt.Errorf("set labels: %w", err)
 		}
 	}
+	if len(in.Components) > 0 {
+		if err := setIssueComponents(ctx, tx, projectID, issue.ID, in.Components, false); err != nil {
+			return domain.Issue{}, fmt.Errorf("set components: %w", err)
+		}
+	}
 	if err := recordActivity(ctx, tx, issue.ID, in.ReporterID, "issue.created", "issue", issue.ID); err != nil {
 		return domain.Issue{}, err
 	}
@@ -339,6 +344,9 @@ func (s *Store) ListIssues(ctx context.Context, f service.IssueFilter) ([]domain
 	}
 	if strings.TrimSpace(f.Label) != "" {
 		add("EXISTS (SELECT 1 FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id AND lower(l.name) = lower($%d))", f.Label)
+	}
+	if strings.TrimSpace(f.Component) != "" {
+		add("EXISTS (SELECT 1 FROM issue_components ic JOIN components c ON c.id = ic.component_id WHERE ic.issue_id = i.id AND lower(c.name) = lower($%d))", f.Component)
 	}
 	if strings.TrimSpace(f.Query) != "" {
 		add("i.fts @@ websearch_to_tsquery('english', $%d)", f.Query)
@@ -441,13 +449,20 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD); err != nil {
 		return domain.Issue{}, err
 	}
-	if in.Labels != nil {
+	if in.Labels != nil || in.Components != nil {
 		var projectID uuid.UUID
 		if err := tx.QueryRow(ctx, `SELECT project_id FROM issues WHERE id = $1`, id).Scan(&projectID); err != nil {
 			return domain.Issue{}, err
 		}
-		if err := setIssueLabels(ctx, tx, projectID, id, *in.Labels, true); err != nil {
-			return domain.Issue{}, fmt.Errorf("set labels: %w", err)
+		if in.Labels != nil {
+			if err := setIssueLabels(ctx, tx, projectID, id, *in.Labels, true); err != nil {
+				return domain.Issue{}, fmt.Errorf("set labels: %w", err)
+			}
+		}
+		if in.Components != nil {
+			if err := setIssueComponents(ctx, tx, projectID, id, *in.Components, true); err != nil {
+				return domain.Issue{}, fmt.Errorf("set components: %w", err)
+			}
 		}
 	}
 	if err := recordActivity(ctx, tx, id, actor, "issue.updated", "issue", id); err != nil {

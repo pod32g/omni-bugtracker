@@ -41,6 +41,8 @@ func ParseFilter(projectKey, raw, meUserID string) IssueFilter {
 			f.Type = &t
 		case "label":
 			f.Label = strings.Trim(val, `"`)
+		case "component":
+			f.Component = strings.Trim(val, `"`)
 		default:
 			freeText = append(freeText, tok)
 		}

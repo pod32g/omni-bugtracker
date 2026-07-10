@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, UNASSIGNED } from "../../lib/api";
+import { api, UNASSIGNED, type Component } from "../../lib/api";
 import { AssigneeSelect } from "../issues/formFields";
+import { IconPlus } from "../../components/icons";
 
 const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
 
@@ -134,6 +135,8 @@ export function ProjectSettings() {
           </div>
         </section>
 
+        <ComponentsSection projectKey={key} canManage={canManage} />
+
         {canManage && (
           <section className="flex flex-col gap-3 rounded-lg border border-critical/40 bg-paper p-6">
             <div className="flex flex-col gap-1">
@@ -159,6 +162,155 @@ export function ProjectSettings() {
           </section>
         )}
       </div>
+    </div>
+  );
+}
+
+function ComponentsSection({ projectKey, canManage }: { projectKey: string; canManage: boolean }) {
+  const qc = useQueryClient();
+  const components = useQuery({
+    queryKey: ["components", projectKey],
+    queryFn: () => api.listComponents(projectKey),
+  });
+  const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
+  const [newName, setNewName] = useState("");
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["components", projectKey] });
+  const create = useMutation({
+    mutationFn: () => api.createComponent(projectKey, { name: newName.trim() }),
+    onSuccess: () => {
+      setNewName("");
+      invalidate();
+    },
+  });
+  const update = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: { name?: string; lead_id?: string } }) =>
+      api.updateComponent(id, patch),
+    onSuccess: invalidate,
+  });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteComponent(id), onSuccess: invalidate });
+
+  const items = components.data?.items ?? [];
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold text-ink">Components</h2>
+        <p className="text-sm leading-relaxed text-graphite">
+          Areas of ownership (e.g. <span className="font-mono text-xs">api</span>,{" "}
+          <span className="font-mono text-xs">web</span>). Issues can be tagged with components and filtered with{" "}
+          <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-ink">component:name</code>.
+        </p>
+      </div>
+
+      {canManage && (
+        <div className="flex items-end gap-3">
+          <label className="grow text-sm">
+            <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+              New component
+            </span>
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newName.trim()) create.mutate();
+              }}
+              placeholder="e.g. api, web, infra"
+              className="w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
+            />
+          </label>
+          <button
+            disabled={!newName.trim() || create.isPending}
+            onClick={() => create.mutate()}
+            className="flex h-10 items-center gap-1.5 rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+          >
+            <IconPlus size={15} />
+            Add
+          </button>
+        </div>
+      )}
+      {create.isError && <p className="text-sm text-critical">{(create.error as Error).message}</p>}
+      {update.isError && <p className="text-sm text-critical">{(update.error as Error).message}</p>}
+
+      <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
+        {components.isLoading && <div className="p-4 text-sm text-graphite">Loading…</div>}
+        {components.isSuccess && items.length === 0 && (
+          <div className="p-4 text-sm text-graphite-soft">No components yet.</div>
+        )}
+        {items.map((c) => (
+          <ComponentRow
+            key={c.id}
+            component={c}
+            users={users.data?.items ?? []}
+            canManage={canManage}
+            onRename={(name) => update.mutate({ id: c.id, patch: { name } })}
+            onLead={(lead_id) => update.mutate({ id: c.id, patch: { lead_id } })}
+            onDelete={() => {
+              if (window.confirm(`Delete component “${c.name}”? It is removed from all issues.`)) del.mutate(c.id);
+            }}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ComponentRow({
+  component,
+  users,
+  canManage,
+  onRename,
+  onLead,
+  onDelete,
+}: {
+  component: Component;
+  users: { id: string; display_name: string; email: string }[];
+  canManage: boolean;
+  onRename: (name: string) => void;
+  onLead: (leadId: string) => void;
+  onDelete: () => void;
+}) {
+  const [name, setName] = useState(component.name);
+  useEffect(() => setName(component.name), [component.name]);
+
+  return (
+    <div className="flex items-center gap-3 p-3.5">
+      <input
+        value={name}
+        disabled={!canManage}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={() => {
+          const n = name.trim();
+          if (n && n !== component.name) onRename(n);
+          else setName(component.name);
+        }}
+        className="w-40 rounded-md border border-transparent bg-transparent px-2 py-1 font-mono text-sm font-medium text-ink outline-none transition hover:border-hairline focus:border-blueprint disabled:opacity-100"
+      />
+      <span className="grow font-mono text-xs text-graphite-soft">
+        {component.open_issues} open issue{component.open_issues === 1 ? "" : "s"}
+      </span>
+      <select
+        value={component.lead_id ?? UNASSIGNED}
+        disabled={!canManage}
+        onChange={(e) => onLead(e.target.value)}
+        aria-label="Component lead"
+        className="shrink-0 rounded-md border border-hairline bg-paper px-2.5 py-1.5 text-sm text-ink outline-none focus:border-blueprint disabled:opacity-60"
+      >
+        <option value={UNASSIGNED}>No lead</option>
+        {users.map((u) => (
+          <option key={u.id} value={u.id}>
+            {u.display_name || u.email}
+          </option>
+        ))}
+      </select>
+      {canManage && (
+        <button
+          onClick={onDelete}
+          className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-critical transition hover:border-critical"
+        >
+          Delete
+        </button>
+      )}
     </div>
   );
 }

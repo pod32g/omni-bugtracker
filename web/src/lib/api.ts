@@ -41,6 +41,15 @@ export interface Label {
   color: string;
 }
 
+export interface Component {
+  id: string;
+  name: string;
+  description_md: string;
+  lead_id?: string | null;
+  open_issues: number;
+  created_at: string;
+}
+
 export interface NewIssue {
   type: IssueType;
   title: string;
@@ -49,6 +58,7 @@ export interface NewIssue {
   priority: Priority;
   assignee_id?: string;
   labels?: string[];
+  components?: string[];
   repro_steps_md?: string;
   expected_md?: string;
   actual_md?: string;
@@ -203,6 +213,12 @@ export const api = {
     request<ApiToken & { token: string }>("/me/tokens", { method: "POST", body: JSON.stringify({ name, scopes }) }),
   revokeToken: (id: string) => request<void>(`/me/tokens/${id}`, { method: "DELETE" }),
   listLabels: (projectKey: string) => request<{ items: Label[] }>(`/projects/${projectKey}/labels`),
+  listComponents: (projectKey: string) => request<{ items: Component[] }>(`/projects/${projectKey}/components`),
+  createComponent: (projectKey: string, body: { name: string; description_md?: string; lead_id?: string }) =>
+    request<Component>(`/projects/${projectKey}/components`, { method: "POST", body: JSON.stringify(body) }),
+  updateComponent: (id: string, patch: { name?: string; description_md?: string; lead_id?: string }) =>
+    request<Component>(`/components/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteComponent: (id: string) => request<void>(`/components/${id}`, { method: "DELETE" }),
   listIssues: (projectKey: string, filter = "", sort = "") =>
     request<{ items: Issue[]; total: number }>(
       `/projects/${projectKey}/issues?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}`,

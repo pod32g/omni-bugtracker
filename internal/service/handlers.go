@@ -38,6 +38,10 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Patch("/projects/{key}", h.updateProject)
 	r.Delete("/projects/{key}", h.archiveProject)
 	r.Get("/projects/{key}/labels", h.listLabels)
+	r.Get("/projects/{key}/components", h.listComponents)
+	r.Post("/projects/{key}/components", h.createComponent)
+	r.Patch("/components/{id}", h.updateComponent)
+	r.Delete("/components/{id}", h.deleteComponent)
 	r.Get("/projects/{key}/issues", h.listIssues)
 	r.Post("/projects/{key}/issues", h.createIssue)
 	r.Get("/issues/{issueKey}", h.getIssue)
@@ -316,6 +320,112 @@ func (h *httpHandlers) listLabels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": labels})
 }
 
+// ── components ──
+
+func (h *httpHandlers) listComponents(w http.ResponseWriter, r *http.Request) {
+	components, err := h.repo.ListComponents(r.Context(), chi.URLParam(r, "key"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if components == nil {
+		components = []domain.Component{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": components})
+}
+
+func (h *httpHandlers) createComponent(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	key := chi.URLParam(r, "key")
+	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+		return
+	}
+	var body struct {
+		Name          string     `json:"name"`
+		DescriptionMD string     `json:"description_md"`
+		LeadID        *uuid.UUID `json:"lead_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		httpapi.WriteValidation(w, map[string]string{"name": "required"})
+		return
+	}
+	c, err := h.repo.CreateComponent(r.Context(), CreateComponentInput{
+		ProjectKey: key, Name: body.Name, DescriptionMD: body.DescriptionMD, LeadID: body.LeadID,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "create failed",
+			"a component with that name may already exist: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, c)
+}
+
+func (h *httpHandlers) updateComponent(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad component id", "")
+		return
+	}
+	var body struct {
+		Name          *string    `json:"name"`
+		DescriptionMD *string    `json:"description_md"`
+		LeadID        *uuid.UUID `json:"lead_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.Name != nil && strings.TrimSpace(*body.Name) == "" {
+		httpapi.WriteValidation(w, map[string]string{"name": "cannot be empty"})
+		return
+	}
+	c, err := h.repo.UpdateComponent(r.Context(), UpdateComponentInput{
+		ID: id, Name: body.Name, DescriptionMD: body.DescriptionMD, LeadID: body.LeadID,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "update failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+func (h *httpHandlers) deleteComponent(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad component id", "")
+		return
+	}
+	ok, err := h.repo.DeleteComponent(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	if !ok {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such component")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	key := chi.URLParam(r, "key")
@@ -415,6 +525,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		ActualMD        *string           `json:"actual_md"`
 		EnvironmentMD   *string           `json:"environment_md"`
 		Labels          *[]string         `json:"labels"`
+		Components      *[]string         `json:"components"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -431,6 +542,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		VersionAffected: body.VersionAffected, VersionFixed: body.VersionFixed,
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
 		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD, Labels: body.Labels,
+		Components: body.Components,
 	})
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())

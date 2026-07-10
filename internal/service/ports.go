@@ -39,6 +39,12 @@ type Repository interface {
 	UpdateProject(ctx context.Context, in UpdateProjectInput) (domain.Project, error)
 	ListLabels(ctx context.Context, projectKey string) ([]domain.Label, error)
 
+	// Components (project-scoped areas of ownership)
+	ListComponents(ctx context.Context, projectKey string) ([]domain.Component, error)
+	CreateComponent(ctx context.Context, in CreateComponentInput) (domain.Component, error)
+	UpdateComponent(ctx context.Context, in UpdateComponentInput) (domain.Component, error)
+	DeleteComponent(ctx context.Context, id uuid.UUID) (bool, error)
+
 	// Issues (transactional writes take a PublishFn for the outbox)
 	CreateIssue(ctx context.Context, in CreateIssueInput, publish PublishIssueFn) (domain.Issue, error)
 	GetIssueByKey(ctx context.Context, projectKey string, number int32) (domain.Issue, error)
@@ -108,6 +114,22 @@ type CreateProjectInput struct {
 	DescriptionMD string
 }
 
+type CreateComponentInput struct {
+	ProjectKey    string
+	Name          string
+	DescriptionMD string
+	LeadID        *uuid.UUID
+}
+
+// UpdateComponentInput is a partial edit; nil = unchanged. LeadID follows the
+// zero-UUID-clears convention.
+type UpdateComponentInput struct {
+	ID            uuid.UUID
+	Name          *string
+	DescriptionMD *string
+	LeadID        *uuid.UUID
+}
+
 // UpdateProjectInput is a partial edit; nil fields are left unchanged (COALESCE).
 // DefaultAssigneeID follows the issue-assignee convention: nil = unchanged,
 // zero UUID = clear, otherwise set.
@@ -163,6 +185,7 @@ type UpdateIssueInput struct {
 	ActualMD        *string
 	EnvironmentMD   *string
 	Labels          *[]string // nil = unchanged; non-nil replaces the label set
+	Components      *[]string // nil = unchanged; non-nil replaces (names must exist in the project)
 }
 
 type IssueFilter struct {
@@ -172,6 +195,7 @@ type IssueFilter struct {
 	Type       *domain.IssueType
 	Severity   *domain.Severity
 	Label      string
+	Component  string
 	Query      string // full-text
 	Sort       string
 	Limit      int32

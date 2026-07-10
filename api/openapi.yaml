@@ -148,6 +148,66 @@ paths:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Issue" } } } }
         "422": { $ref: "#/components/responses/Problem" }
 
+  /projects/{key}/components:
+    parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
+    get:
+      tags: [projects]
+      operationId: listComponents
+      responses:
+        "200":
+          description: components with open-issue counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Component" } }
+    post:
+      tags: [projects]
+      operationId: createComponent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description_md: { type: string }
+                lead_id: { type: string, format: uuid, nullable: true }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Component" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /components/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [projects]
+      operationId: updateComponent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description_md: { type: string }
+                lead_id: { type: string, format: uuid, nullable: true, description: "Zero UUID clears the lead." }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Component" } } } }
+    delete:
+      tags: [projects]
+      operationId: deleteComponent
+      responses:
+        "204": { description: deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /issues/{issueKey}:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
     get:
@@ -533,6 +593,16 @@ components:
         expected_md: { type: string }
         actual_md: { type: string }
         environment_md: { type: string }
+    Component:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description_md: { type: string }
+        lead_id: { type: string, format: uuid, nullable: true }
+        open_issues: { type: integer }
+        created_at: { type: string, format: date-time }
+
     UpdateIssue:
       type: object
       properties:
@@ -543,6 +613,11 @@ components:
         assignee_id: { type: string, format: uuid, nullable: true }
         milestone_id: { type: string, format: uuid, nullable: true }
         version_fixed: { type: string }
+        labels: { type: array, items: { type: string } }
+        components:
+          type: array
+          items: { type: string }
+          description: "Replaces the set; names must exist as project components."
     BulkUpdate:
       type: object
       properties:

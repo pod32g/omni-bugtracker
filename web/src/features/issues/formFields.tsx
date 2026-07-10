@@ -121,6 +121,51 @@ export function LabelsInput({
   );
 }
 
+// ComponentsSelect renders the project's components as toggleable chips. Components are
+// managed structure (created in project settings), so there's no free-text entry here.
+export function ComponentsSelect({
+  projectKey,
+  value,
+  onChange,
+}: {
+  projectKey: string;
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const components = useQuery({
+    queryKey: ["components", projectKey],
+    queryFn: () => api.listComponents(projectKey),
+    enabled: !!projectKey,
+  });
+  const items = components.data?.items ?? [];
+  if (components.isSuccess && items.length === 0) {
+    return <p className="text-xs text-graphite-soft">No components defined — add them in project settings.</p>;
+  }
+  const toggle = (name: string) =>
+    onChange(value.includes(name) ? value.filter((v) => v !== name) : [...value, name]);
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((c) => {
+        const active = value.includes(c.name);
+        return (
+          <button
+            key={c.id}
+            type="button"
+            onClick={() => toggle(c.name)}
+            className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${
+              active
+                ? "border-blueprint bg-blueprint-soft text-blueprint"
+                : "border-hairline text-graphite hover:border-blueprint hover:text-blueprint"
+            }`}
+          >
+            {c.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function TextInput({
   value,
   onChange,

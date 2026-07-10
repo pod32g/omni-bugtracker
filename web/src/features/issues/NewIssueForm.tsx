@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
-import { AssigneeSelect, Field, LabelsInput, Modal, Select, TextInput, Textarea } from "./formFields";
+import { AssigneeSelect, ComponentsSelect, Field, LabelsInput, Modal, Select, TextInput, Textarea } from "./formFields";
 
 const TYPES: IssueType[] = ["bug", "task", "feature", "improvement"];
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
@@ -58,6 +58,9 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
       </Field>
       <Field label="Labels" className="mt-3">
         <LabelsInput projectKey={projectKey} value={form.labels ?? []} onChange={(v) => set("labels", v)} />
+      </Field>
+      <Field label="Components" className="mt-3">
+        <ComponentsSelect projectKey={projectKey} value={form.components ?? []} onChange={(v) => set("components", v)} />
       </Field>
 
       {isBug && (

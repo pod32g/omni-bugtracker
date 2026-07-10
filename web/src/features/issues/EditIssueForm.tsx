@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, UNASSIGNED, type Issue, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
-import { AssigneeSelect, Field, LabelsInput, Modal, Select, TextInput, Textarea } from "./formFields";
+import { AssigneeSelect, ComponentsSelect, Field, LabelsInput, Modal, Select, TextInput, Textarea } from "./formFields";
 
 const TYPES: IssueType[] = ["bug", "task", "feature", "improvement"];
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
@@ -16,6 +16,7 @@ export function EditIssueForm({ issue, onClose }: { issue: Issue; onClose: () =>
     severity: issue.severity ?? "medium",
     assignee_id: issue.assignee?.id ?? UNASSIGNED,
     labels: issue.labels ?? [],
+    components: issue.components ?? [],
     description_md: issue.description_md ?? "",
     repro_steps_md: issue.repro_steps_md ?? "",
     expected_md: issue.expected_md ?? "",
@@ -72,6 +73,13 @@ export function EditIssueForm({ issue, onClose }: { issue: Issue; onClose: () =>
       </Field>
       <Field label="Labels" className="mt-3">
         <LabelsInput projectKey={issue.project_key} value={form.labels ?? []} onChange={(v) => set("labels", v)} />
+      </Field>
+      <Field label="Components" className="mt-3">
+        <ComponentsSelect
+          projectKey={issue.project_key}
+          value={form.components ?? []}
+          onChange={(v) => set("components", v)}
+        />
       </Field>
 
       {isBug && (

@@ -36,6 +36,16 @@ type APIToken struct {
 	CreatedAt  time.Time  `json:"created_at"`
 }
 
+// Component is a project-scoped area of ownership (e.g. "api", "web", "infra").
+type Component struct {
+	ID            uuid.UUID  `json:"id"`
+	Name          string     `json:"name"`
+	DescriptionMD string     `json:"description_md"`
+	LeadID        *uuid.UUID `json:"lead_id,omitempty"`
+	OpenIssues    int        `json:"open_issues"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
 type Issue struct {
 	ID              uuid.UUID   `json:"id"`
 	Key             string      `json:"key"` // e.g. BUG-421

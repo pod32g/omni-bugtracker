@@ -8,6 +8,7 @@ import { humanizeVerb, timeAgo } from "../../lib/activity";
 import { Avatar, LabelChip, PriorityText, SeverityMark, SeverityPill, StatusPill, statusLabel, statusTone } from "../../components/Badges";
 import { IconBranch, IconChevronDown, IconCommit, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
 import { EditIssueForm } from "./EditIssueForm";
+import { ComponentsSelect } from "./formFields";
 
 const TRANSITIONS: IssueStatus[] = [
   "open", "in_progress", "blocked", "ready_for_review", "resolved", "closed", "reopened",
@@ -256,6 +257,14 @@ export function IssueDetail() {
               </div>
             </MetaRow>
           )}
+
+          <MetaRow label="Components">
+            <ComponentsSelect
+              projectKey={i.project_key}
+              value={i.components ?? []}
+              onChange={(components) => patch.mutate({ components })}
+            />
+          </MetaRow>
 
           <div className="flex gap-4">
             <MetaRow label="Priority" className="grow">
