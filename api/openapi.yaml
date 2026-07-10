@@ -479,23 +479,60 @@ paths:
 
   /issues/{issueKey}/attachments:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    get:
+      tags: [issues]
+      operationId: listAttachments
+      responses:
+        "200":
+          description: attachments on the issue
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Attachment" } }
     post:
       tags: [issues]
-      operationId: requestAttachmentUpload
-      description: Returns a presigned Omni-Upload URL for direct browser upload, then confirm.
+      operationId: uploadAttachment
+      description: >
+        Direct multipart upload; bytes are stored on the server's attachment volume.
+        Size limit is configured via storage.max_upload_mb (default 25 MB).
       requestBody:
         required: true
         content:
-          application/json:
+          multipart/form-data:
             schema:
               type: object
-              required: [filename, content_type, size_bytes]
+              required: [file]
               properties:
-                filename: { type: string }
-                content_type: { type: string }
-                size_bytes: { type: integer, format: int64 }
+                file: { type: string, format: binary }
       responses:
-        "200": { description: presigned upload, content: { application/json: { schema: { $ref: "#/components/schemas/PresignedUpload" } } } }
+        "201": { description: uploaded, content: { application/json: { schema: { $ref: "#/components/schemas/Attachment" } } } }
+        "413": { $ref: "#/components/responses/Problem" }
+
+  /attachments/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [issues]
+      operationId: downloadAttachment
+      description: Streams the bytes. Images/PDF render inline; other types download.
+      responses:
+        "200":
+          description: attachment bytes
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+    delete:
+      tags: [issues]
+      operationId: deleteAttachment
+      description: Allowed for the uploader or anyone with project:manage on the issue's project.
+      responses:
+        "204": { description: deleted }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /issues/bulk:
     post:
@@ -866,13 +903,16 @@ components:
         verb: { type: string, description: "fixes|closes|resolves|refs|related" }
         created_at: { type: string, format: date-time }
 
-    PresignedUpload:
+    Attachment:
       type: object
       properties:
-        upload_url: { type: string }
-        object_key: { type: string }
-        method: { type: string }
-        headers: { type: object, additionalProperties: { type: string } }
+        id: { type: string, format: uuid }
+        issue_id: { type: string, format: uuid }
+        uploader: { $ref: "#/components/schemas/User" }
+        filename: { type: string }
+        content_type: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
 
     SearchHit:
       type: object

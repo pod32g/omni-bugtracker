@@ -2,9 +2,15 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,7 +30,18 @@ import (
 // will use post-`make generate`, so there is no business-logic duplication.
 func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *config.Config) http.Handler {
 	issues := NewIssues(repo, pub, logger)
-	h := &httpHandlers{issues: issues, repo: repo}
+
+	attachDir := "./data/attachments"
+	maxUploadMB := int64(25)
+	if cfg != nil {
+		if cfg.Storage.AttachmentsDir != "" {
+			attachDir = cfg.Storage.AttachmentsDir
+		}
+		if cfg.Storage.MaxUploadMB > 0 {
+			maxUploadMB = cfg.Storage.MaxUploadMB
+		}
+	}
+	h := &httpHandlers{issues: issues, repo: repo, attachDir: attachDir, maxUpload: maxUploadMB << 20}
 
 	r := chi.NewRouter()
 	r.Get("/me", h.me)
@@ -65,14 +82,20 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/issues/{issueKey}/move", h.moveIssue)
 	r.Get("/issues/{issueKey}/comments", h.listComments)
 	r.Post("/issues/{issueKey}/comments", h.addComment)
+	r.Get("/issues/{issueKey}/attachments", h.listAttachments)
+	r.Post("/issues/{issueKey}/attachments", h.uploadAttachment)
+	r.Get("/attachments/{id}", h.downloadAttachment)
+	r.Delete("/attachments/{id}", h.deleteAttachment)
 	r.Get("/issues/{issueKey}/activity", h.activity)
 	r.Get("/issues/{issueKey}/commits", h.commits)
 	return r
 }
 
 type httpHandlers struct {
-	issues *Issues
-	repo   Repository
+	issues    *Issues
+	repo      Repository
+	attachDir string // local-disk attachment storage root
+	maxUpload int64  // bytes
 }
 
 // canOnProject is the elevation-aware permission check: the principal passes
@@ -1093,6 +1116,159 @@ func (h *httpHandlers) commits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, commits)
+}
+
+// ── attachments (bytes on local disk, metadata in Postgres) ──
+
+func (h *httpHandlers) listAttachments(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.repo.ListAttachmentsForIssue(r.Context(), issue.ID)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.Attachment{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *httpHandlers) uploadAttachment(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	// Attaching evidence is part of collaborating on an issue — same bar as commenting.
+	if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermCommentCreate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing comment:create")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxUpload)
+	if err := r.ParseMultipartForm(4 << 20); err != nil { // 4MB in memory, rest to temp files
+		httpapi.WriteProblem(w, http.StatusRequestEntityTooLarge, "upload too large",
+			fmt.Sprintf("multipart parse failed (limit %d MB): %v", h.maxUpload>>20, err))
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		httpapi.WriteValidation(w, map[string]string{"file": "multipart field 'file' required"})
+		return
+	}
+	defer file.Close() //nolint:errcheck
+
+	// Keep only the base name; never trust client paths.
+	filename := filepath.Base(strings.TrimSpace(header.Filename))
+	if filename == "" || filename == "." || filename == "/" {
+		filename = "attachment"
+	}
+
+	// Object key is server-generated; the extension is kept only as a hint.
+	objectKey := uuid.NewString() + strings.ToLower(filepath.Ext(filename))
+	if err := os.MkdirAll(h.attachDir, 0o755); err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "storage unavailable", err.Error())
+		return
+	}
+	dst, err := os.Create(filepath.Join(h.attachDir, objectKey))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "storage unavailable", err.Error())
+		return
+	}
+	defer dst.Close() //nolint:errcheck
+
+	hasher := sha256.New()
+	size, err := io.Copy(dst, io.TeeReader(file, hasher))
+	if err != nil {
+		_ = os.Remove(filepath.Join(h.attachDir, objectKey))
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "write failed", err.Error())
+		return
+	}
+
+	contentType := header.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	uploader, _ := uuid.Parse(p.UserID)
+	att, err := h.repo.CreateAttachment(r.Context(), CreateAttachmentInput{
+		IssueID: issue.ID, UploaderID: uploader, Filename: filename, ContentType: contentType,
+		SizeBytes: size, ObjectKey: objectKey, Checksum: hex.EncodeToString(hasher.Sum(nil)),
+	})
+	if err != nil {
+		_ = os.Remove(filepath.Join(h.attachDir, objectKey))
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "save failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, att)
+}
+
+func (h *httpHandlers) downloadAttachment(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad attachment id", "")
+		return
+	}
+	att, err := h.repo.GetAttachment(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such attachment")
+		return
+	}
+	f, err := os.Open(filepath.Join(h.attachDir, filepath.Base(att.ObjectKey)))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "attachment bytes missing from storage")
+		return
+	}
+	defer f.Close() //nolint:errcheck
+
+	// Serve user content defensively: images/PDF render inline, everything else
+	// downloads; HTML-ish types are neutralized to text/plain.
+	ct := att.ContentType
+	disposition := "attachment"
+	switch {
+	case strings.HasPrefix(ct, "image/"), ct == "application/pdf":
+		disposition = "inline"
+	case strings.Contains(ct, "html"), strings.Contains(ct, "xml"), strings.Contains(ct, "svg"):
+		ct = "text/plain; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", strconv.FormatInt(att.SizeBytes, 10))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, att.Filename))
+	_, _ = io.Copy(w, f)
+}
+
+func (h *httpHandlers) deleteAttachment(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad attachment id", "")
+		return
+	}
+	att, err := h.repo.GetAttachment(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such attachment")
+		return
+	}
+	// The uploader may remove their own file; otherwise project management rights.
+	isUploader := att.Uploader != nil && att.Uploader.ID.String() == p.UserID
+	if !isUploader && !h.canOnProject(r.Context(), p, att.ProjectKey, auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "not the uploader and missing project:manage")
+		return
+	}
+	objectKey, found, err := h.repo.DeleteAttachment(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	if !found {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such attachment")
+		return
+	}
+	_ = os.Remove(filepath.Join(h.attachDir, filepath.Base(objectKey))) // best effort
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *httpHandlers) resolveIssue(w http.ResponseWriter, r *http.Request) (domain.Issue, bool) {

@@ -32,6 +32,20 @@ type LinkedCommit struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// Attachment is file metadata; bytes live in the configured storage backend
+// (local disk) under ObjectKey.
+type Attachment struct {
+	ID          uuid.UUID  `json:"id"`
+	IssueID     *uuid.UUID `json:"issue_id,omitempty"`
+	Uploader    *User      `json:"uploader,omitempty"`
+	Filename    string     `json:"filename"`
+	ContentType string     `json:"content_type"`
+	SizeBytes   int64      `json:"size_bytes"`
+	ObjectKey   string     `json:"-"` // storage-internal, never exposed
+	ProjectKey  string     `json:"-"` // for permission checks, resolved via join
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
 // SearchHit is one global-search result row (Postgres FTS over issues + comments).
 type SearchHit struct {
 	IssueKey   string  `json:"issue_key"`

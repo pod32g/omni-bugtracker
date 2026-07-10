@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
@@ -35,6 +35,7 @@ export function IssueDetail() {
 
   const issue = useQuery({ queryKey: ["issue", issueKey], queryFn: () => api.getIssue(issueKey) });
   const comments = useQuery({ queryKey: ["comments", issueKey], queryFn: () => api.listComments(issueKey) });
+  const attachments = useQuery({ queryKey: ["attachments", issueKey], queryFn: () => api.listAttachments(issueKey) });
   const activity = useQuery({ queryKey: ["activity", issueKey], queryFn: () => api.activity(issueKey) });
   const commits = useQuery({ queryKey: ["commits", issueKey], queryFn: () => api.commits(issueKey) });
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
@@ -184,6 +185,8 @@ export function IssueDetail() {
               {i.actual_md && <Callout tone="critical" label="Actual" body={i.actual_md} />}
             </div>
           )}
+
+          <AttachmentsSection issueKey={issueKey} items={attachments.data?.items ?? []} />
 
           {i.environment_md && (
             <Section title="Environment">
@@ -366,6 +369,94 @@ export function IssueDetail() {
 
       {editing && <EditIssueForm issue={i} onClose={() => setEditing(false)} />}
     </div>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function AttachmentsSection({ issueKey, items }: { issueKey: string; items: import("../../lib/api").Attachment[] }) {
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const upload = useMutation({
+    mutationFn: (file: File) => api.uploadAttachment(issueKey, file),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["attachments", issueKey] });
+      qc.invalidateQueries({ queryKey: ["activity", issueKey] });
+    },
+  });
+  const del = useMutation({
+    mutationFn: (id: string) => api.deleteAttachment(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["attachments", issueKey] }),
+  });
+
+  const onFiles = (files: FileList | null) => {
+    if (!files) return;
+    for (const f of Array.from(files)) upload.mutate(f);
+  };
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    onFiles(e.dataTransfer.files);
+  };
+
+  return (
+    <section
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={onDrop}
+      className={`flex flex-col gap-3 rounded-md border border-dashed p-4 transition ${
+        dragging ? "border-blueprint bg-blueprint-soft/40" : "border-hairline"
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <MicroLabel>Attachments</MicroLabel>
+        <button
+          onClick={() => fileRef.current?.click()}
+          disabled={upload.isPending}
+          className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-graphite transition hover:border-graphite hover:text-ink disabled:opacity-50"
+        >
+          {upload.isPending ? "Uploading…" : "Add file"}
+        </button>
+        <input ref={fileRef} type="file" multiple hidden onChange={(e) => onFiles(e.target.files)} />
+      </div>
+      {upload.isError && <p className="text-sm text-critical">{(upload.error as Error).message}</p>}
+      {items.length === 0 && !upload.isPending && (
+        <p className="text-xs text-graphite-soft">No files yet — drop them here or use “Add file”.</p>
+      )}
+      {items.map((a) => (
+        <div key={a.id} className="flex items-center gap-3">
+          <button
+            onClick={() => api.downloadAttachment(a.id, a.filename)}
+            className="truncate font-mono text-sm font-medium text-blueprint hover:underline"
+            title="Download"
+          >
+            {a.filename}
+          </button>
+          <span className="shrink-0 font-mono text-xs text-graphite-soft">
+            {formatBytes(a.size_bytes)} · {a.uploader?.display_name ?? "unknown"} · {timeAgo(a.created_at)}
+          </span>
+          <span className="grow" />
+          <button
+            onClick={() => {
+              if (window.confirm(`Delete ${a.filename}?`)) del.mutate(a.id);
+            }}
+            className="shrink-0 text-xs text-graphite-soft transition hover:text-critical"
+            aria-label={`Delete ${a.filename}`}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+    </section>
   );
 }
 

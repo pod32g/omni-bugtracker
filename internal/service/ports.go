@@ -79,6 +79,12 @@ type Repository interface {
 	// Global search (Postgres FTS over issues + comments)
 	Search(ctx context.Context, query string, limit int32) ([]domain.SearchHit, error)
 
+	// Attachments (metadata; bytes live on local disk under ObjectKey)
+	CreateAttachment(ctx context.Context, in CreateAttachmentInput) (domain.Attachment, error)
+	ListAttachmentsForIssue(ctx context.Context, issueID uuid.UUID) ([]domain.Attachment, error)
+	GetAttachment(ctx context.Context, id uuid.UUID) (domain.Attachment, error)
+	DeleteAttachment(ctx context.Context, id uuid.UUID) (objectKey string, found bool, err error)
+
 	// Comments & timeline
 	AddComment(ctx context.Context, issueID, author uuid.UUID, body string, publish PublishFn) (domain.Comment, error)
 	ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, error)
@@ -211,6 +217,16 @@ type CreateTokenInput struct {
 	Name      string
 	Scopes    []string
 	TokenHash []byte
+}
+
+type CreateAttachmentInput struct {
+	IssueID     uuid.UUID
+	UploaderID  uuid.UUID
+	Filename    string
+	ContentType string
+	SizeBytes   int64
+	ObjectKey   string
+	Checksum    string
 }
 
 type CreateIssueInput struct {

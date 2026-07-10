@@ -157,6 +157,16 @@ export interface Activity {
   occurred_at: string;
 }
 
+export interface Attachment {
+  id: string;
+  issue_id?: string;
+  uploader?: User;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+}
+
 export interface SearchHit {
   issue_key: string;
   project_key: string;
@@ -330,4 +340,41 @@ export const api = {
     }),
   activity: (issueKey: string) => request<Activity[]>(`/issues/${issueKey}/activity`),
   commits: (issueKey: string) => request<LinkedCommit[]>(`/issues/${issueKey}/commits`),
+  listAttachments: (issueKey: string) => request<{ items: Attachment[] }>(`/issues/${issueKey}/attachments`),
+  // Multipart upload — bypasses request() because the browser must set the
+  // multipart boundary itself; keeps the same silent-refresh-on-401 behavior.
+  uploadAttachment: async (issueKey: string, file: File): Promise<Attachment> => {
+    const doFetch = () => {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      return fetch(`${BASE}/issues/${issueKey}/attachments`, {
+        method: "POST",
+        credentials: "include",
+        headers: { ...optionalToken() },
+        body: fd,
+      });
+    };
+    let res = await doFetch();
+    if (res.status === 401 && (await tryRefresh())) res = await doFetch();
+    if (!res.ok) {
+      const problem = await res.json().catch(() => ({ title: res.statusText }));
+      throw new ApiError(res.status, problem.detail || problem.title || `HTTP ${res.status}`);
+    }
+    return res.json() as Promise<Attachment>;
+  },
+  // Blob download so it works with both cookie and bearer-token auth.
+  downloadAttachment: async (id: string, filename: string) => {
+    const res = await fetch(`${BASE}/attachments/${id}`, {
+      credentials: "include",
+      headers: { ...optionalToken() },
+    });
+    if (!res.ok) throw new ApiError(res.status, "download failed");
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+  deleteAttachment: (id: string) => request<void>(`/attachments/${id}`, { method: "DELETE" }),
 };

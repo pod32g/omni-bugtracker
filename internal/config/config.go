@@ -23,8 +23,15 @@ type Config struct {
 	Worker        Worker        `koanf:"worker"`
 	Identity      Identity      `koanf:"identity"`
 	Integrations  Integrations  `koanf:"integrations"`
+	Storage       Storage       `koanf:"storage"`
 	Log           Log           `koanf:"log"`
 	Observability Observability `koanf:"observability"`
+}
+
+// Storage configures native file storage for attachments (local disk).
+type Storage struct {
+	AttachmentsDir string `koanf:"attachments_dir"` // default ./data/attachments
+	MaxUploadMB    int64  `koanf:"max_upload_mb"`   // default 25
 }
 
 type Server struct {
