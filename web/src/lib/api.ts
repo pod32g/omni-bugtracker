@@ -150,6 +150,17 @@ export interface Activity {
   occurred_at: string;
 }
 
+export interface SearchHit {
+  issue_key: string;
+  project_key: string;
+  title: string;
+  status: IssueStatus;
+  type: IssueType;
+  snippet: string; // plain text with «…» match marks
+  rank: number;
+  matched_in: "issue" | "comment";
+}
+
 export interface DashboardOverview {
   open_issues: number;
   critical_issues: number;
@@ -229,6 +240,10 @@ export const api = {
   updateUserRole: (id: string, role: string) =>
     request<User>(`/users/${id}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
   dashboard: () => request<DashboardOverview>("/dashboards/overview"),
+  search: (q: string, limit = 20) =>
+    request<{ items: SearchHit[]; total: number; source: string }>(
+      `/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
   listProjects: () => request<{ items: Project[] }>("/projects"),
   createProject: (body: { key: string; name: string; description_md?: string }) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(body) }),

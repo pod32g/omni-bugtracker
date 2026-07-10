@@ -32,6 +32,18 @@ type LinkedCommit struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// SearchHit is one global-search result row (Postgres FTS over issues + comments).
+type SearchHit struct {
+	IssueKey   string  `json:"issue_key"`
+	ProjectKey string  `json:"project_key"`
+	Title      string  `json:"title"`
+	Status     string  `json:"status"`
+	Type       string  `json:"type"`
+	Snippet    string  `json:"snippet"` // plain text with «…» match marks
+	Rank       float32 `json:"rank"`
+	MatchedIn  string  `json:"matched_in"` // issue | comment
+}
+
 type Activity struct {
 	ID         uuid.UUID       `json:"id"`
 	IssueID    *uuid.UUID      `json:"issue_id,omitempty"`

@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, session, type Project, type User } from "../lib/api";
 import { ProjectProvider, useProject } from "../lib/project";
 import { useTheme } from "../lib/theme";
 import { Avatar } from "./Badges";
+import { SearchPalette } from "./SearchPalette";
 import {
   IconBoard,
   IconChevronDown,
@@ -15,6 +16,7 @@ import {
   IconMark,
   IconMoon,
   IconPlus,
+  IconSearch,
   IconSun,
   IconTag,
   IconTarget,
@@ -24,6 +26,25 @@ const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
 
 export function Layout() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me(), retry: false });
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Global search shortcuts: ⌘K / Ctrl-K anywhere, "/" outside form fields.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setSearchOpen(true);
+      } else if (e.key === "/") {
+        const t = e.target as HTMLElement;
+        if (t.tagName !== "INPUT" && t.tagName !== "TEXTAREA" && t.tagName !== "SELECT" && !t.isContentEditable) {
+          e.preventDefault();
+          setSearchOpen(true);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   if (me.isLoading) return <Centered>Loading…</Centered>;
 
@@ -36,16 +57,17 @@ export function Layout() {
       {/* App shell: fixed viewport, sidebar stays put, only <main> scrolls (its content
           grows internally instead of growing the whole page). */}
       <div className="flex h-screen overflow-hidden bg-paper">
-        <Sidebar me={me.data} />
+        <Sidebar me={me.data} onSearch={() => setSearchOpen(true)} />
         <main className="min-w-0 flex-1 overflow-auto">
           <Outlet />
         </main>
       </div>
+      <SearchPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
     </ProjectProvider>
   );
 }
 
-function Sidebar({ me }: { me?: User }) {
+function Sidebar({ me, onSearch }: { me?: User; onSearch: () => void }) {
   const { projects, projectKey, current, setProjectKey } = useProject();
   const { theme, toggle } = useTheme();
   const canManage = CAN_MANAGE.has(me?.role ?? "");
@@ -73,7 +95,20 @@ function Sidebar({ me }: { me?: User }) {
         canManage={canManage}
       />
 
-      <nav className="mt-6 flex grow flex-col gap-0.5">
+      <button
+        onClick={onSearch}
+        className="mt-4 flex items-center gap-2.5 rounded-md border border-hairline bg-paper px-2.5 py-2 text-graphite transition hover:border-graphite hover:text-ink"
+      >
+        <span className="grid h-[18px] w-[18px] place-items-center">
+          <IconSearch size={16} />
+        </span>
+        <span className="grow text-left text-sm font-medium">Search</span>
+        <kbd className="rounded border border-hairline bg-panel px-1.5 py-0.5 font-mono text-[10px] text-graphite-soft">
+          ⌘K
+        </kbd>
+      </button>
+
+      <nav className="mt-4 flex grow flex-col gap-0.5">
         <div className="px-2 pb-2 font-mono text-[10px] font-medium uppercase tracking-caps text-graphite-soft">
           Workspace
         </div>

@@ -465,14 +465,12 @@ paths:
     get:
       tags: [search]
       operationId: search
+      description: Global full-text search across issues and comments (Postgres FTS, websearch syntax).
       parameters:
         - name: q
           in: query
           required: true
-          schema: { type: string }
-        - name: types
-          in: query
-          schema: { type: string, default: "issues" }
+          schema: { type: string, minLength: 2 }
         - $ref: "#/components/parameters/Limit"
       responses:
         "200": { description: results, content: { application/json: { schema: { $ref: "#/components/schemas/SearchResults" } } } }
@@ -820,10 +818,21 @@ components:
         method: { type: string }
         headers: { type: object, additionalProperties: { type: string } }
 
+    SearchHit:
+      type: object
+      properties:
+        issue_key: { type: string }
+        project_key: { type: string }
+        title: { type: string }
+        status: { type: string }
+        type: { type: string }
+        snippet: { type: string, description: "plain text with «…» match marks (not HTML)" }
+        rank: { type: number }
+        matched_in: { type: string, enum: [issue, comment] }
     SearchResults:
       type: object
       properties:
-        issues: { type: array, items: { $ref: "#/components/schemas/Issue" } }
+        items: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
         source: { type: string, enum: [omni-search, postgres-fts] }
         total: { type: integer }
 

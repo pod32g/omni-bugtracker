@@ -66,6 +66,9 @@ type Repository interface {
 	MoveIssue(ctx context.Context, id, actor uuid.UUID, targetProjectKey string, publish PublishFn) (domain.Issue, error)
 	SoftDeleteIssue(ctx context.Context, id, actor uuid.UUID, publish PublishFn) error
 
+	// Global search (Postgres FTS over issues + comments)
+	Search(ctx context.Context, query string, limit int32) ([]domain.SearchHit, error)
+
 	// Comments & timeline
 	AddComment(ctx context.Context, issueID, author uuid.UUID, body string, publish PublishFn) (domain.Comment, error)
 	ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, error)

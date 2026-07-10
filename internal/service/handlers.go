@@ -33,6 +33,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/users", h.users)
 	r.Patch("/users/{id}/role", h.updateUserRole)
 	r.Get("/dashboards/overview", h.dashboard)
+	r.Get("/search", h.search)
 	r.Get("/projects", h.listProjects)
 	r.Post("/projects", h.createProject)
 	r.Get("/projects/{key}", h.getProject)
@@ -208,6 +209,28 @@ func (h *httpHandlers) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// search is global full-text search across projects (issues + comments).
+func (h *httpHandlers) search(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(q) < 2 {
+		httpapi.WriteValidation(w, map[string]string{"q": "at least 2 characters"})
+		return
+	}
+	limit := int32(atoiDefault(r.URL.Query().Get("limit"), 20))
+	if limit > 50 {
+		limit = 50
+	}
+	hits, err := h.repo.Search(r.Context(), q, limit)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "search failed", err.Error())
+		return
+	}
+	if hits == nil {
+		hits = []domain.SearchHit{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": hits, "total": len(hits), "source": "postgres-fts"})
 }
 
 func (h *httpHandlers) listProjects(w http.ResponseWriter, r *http.Request) {
