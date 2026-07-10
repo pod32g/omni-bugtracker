@@ -76,6 +76,11 @@ type Repository interface {
 	UpsertProjectMember(ctx context.Context, projectKey string, userID uuid.UUID, role domain.Role) (domain.ProjectMember, error)
 	RemoveProjectMember(ctx context.Context, projectKey string, userID uuid.UUID) (bool, error)
 
+	// Watchers (issue subscriptions; auto-watch on report/comment/assign)
+	ListWatchers(ctx context.Context, issueID uuid.UUID) ([]domain.User, error)
+	IsWatcher(ctx context.Context, issueID, userID uuid.UUID) (bool, error)
+	SetWatcher(ctx context.Context, issueID, userID uuid.UUID, watching bool) error
+
 	// Issue relations (blocks / duplicates / relates / caused_by)
 	ListRelations(ctx context.Context, issueID uuid.UUID) ([]domain.IssueRelation, error)
 	CreateRelation(ctx context.Context, fromIssue, toIssue uuid.UUID, kind string, actor uuid.UUID) (domain.IssueRelation, error)

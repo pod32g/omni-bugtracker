@@ -306,6 +306,15 @@ func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, pu
 	if err := recordActivity(ctx, tx, issue.ID, in.ReporterID, "issue.created", "issue", issue.ID); err != nil {
 		return domain.Issue{}, err
 	}
+	// Auto-watch: the reporter and initial assignee follow their issue.
+	if err := addWatcher(ctx, tx, issue.ID, in.ReporterID); err != nil {
+		return domain.Issue{}, err
+	}
+	if in.AssigneeID != nil {
+		if err := addWatcher(ctx, tx, issue.ID, *in.AssigneeID); err != nil {
+			return domain.Issue{}, err
+		}
+	}
 	if publish != nil {
 		if err := publish(tx, issue); err != nil {
 			return domain.Issue{}, fmt.Errorf("publish: %w", err)
@@ -508,6 +517,12 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 	if err := recordActivity(ctx, tx, id, actor, "issue.updated", "issue", id); err != nil {
 		return domain.Issue{}, err
 	}
+	// Auto-watch: a newly assigned user follows the issue.
+	if in.AssigneeID != nil && *in.AssigneeID != uuid.Nil {
+		if err := addWatcher(ctx, tx, id, *in.AssigneeID); err != nil {
+			return domain.Issue{}, err
+		}
+	}
 	if publish != nil {
 		if err := publish(tx); err != nil {
 			return domain.Issue{}, err
@@ -626,6 +641,10 @@ func (s *Store) AddComment(ctx context.Context, issueID, author uuid.UUID, body 
 		return domain.Comment{}, err
 	}
 	if err := recordActivity(ctx, tx, issueID, author, "comment.created", "comment", c.ID); err != nil {
+		return domain.Comment{}, err
+	}
+	// Auto-watch: commenting subscribes you to the conversation.
+	if err := addWatcher(ctx, tx, issueID, author); err != nil {
 		return domain.Comment{}, err
 	}
 	if publish != nil {

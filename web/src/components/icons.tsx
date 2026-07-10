@@ -55,6 +55,13 @@ export const IconTag = (p: P) => (
   </Svg>
 );
 
+export const IconEye = (p: P) => (
+  <Svg viewBox="0 0 24 24" {...p}>
+    <path strokeWidth={p.strokeWidth ?? 1.8} d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+    <circle cx="12" cy="12" r="3" strokeWidth={p.strokeWidth ?? 1.8} />
+  </Svg>
+);
+
 export const IconSearch = (p: P) => (
   <Svg {...p} viewBox="0 0 16 16">
     <circle cx="7" cy="7" r="4.5" strokeWidth={p.strokeWidth ?? 1.4} />

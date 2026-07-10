@@ -477,6 +477,36 @@ paths:
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } }
 
+  /issues/{issueKey}/watchers:
+    parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    get:
+      tags: [issues]
+      operationId: listWatchers
+      responses:
+        "200":
+          description: watchers plus whether the caller is watching
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/User" } }
+                  watching: { type: boolean }
+
+  /issues/{issueKey}/watchers/me:
+    parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    put:
+      tags: [issues]
+      operationId: watchIssue
+      description: Subscribe the caller. Reporters, commenters and assignees are auto-subscribed.
+      responses:
+        "204": { description: watching }
+    delete:
+      tags: [issues]
+      operationId: unwatchIssue
+      responses:
+        "204": { description: no longer watching }
+
   /issues/{issueKey}/relations:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
     get:

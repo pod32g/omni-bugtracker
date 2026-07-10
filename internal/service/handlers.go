@@ -87,6 +87,9 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/issues/{issueKey}/relations", h.listRelations)
 	r.Post("/issues/{issueKey}/relations", h.addRelation)
 	r.Delete("/relations/{id}", h.deleteRelation)
+	r.Get("/issues/{issueKey}/watchers", h.listWatchers)
+	r.Put("/issues/{issueKey}/watchers/me", h.watchIssue)
+	r.Delete("/issues/{issueKey}/watchers/me", h.unwatchIssue)
 	r.Get("/issues/{issueKey}/attachments", h.listAttachments)
 	r.Post("/issues/{issueKey}/attachments", h.uploadAttachment)
 	r.Get("/attachments/{id}", h.downloadAttachment)
@@ -1096,6 +1099,53 @@ func (h *httpHandlers) addComment(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, c)
 }
+
+// ── watchers ──
+
+func (h *httpHandlers) listWatchers(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.repo.ListWatchers(r.Context(), issue.ID)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.User{}
+	}
+	watching := false
+	for _, u := range items {
+		if u.ID.String() == p.UserID {
+			watching = true
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "watching": watching})
+}
+
+func (h *httpHandlers) setWatchState(w http.ResponseWriter, r *http.Request, watching bool) {
+	p := auth.FromContext(r.Context())
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	uid, err := uuid.Parse(p.UserID)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad principal", "")
+		return
+	}
+	if err := h.repo.SetWatcher(r.Context(), issue.ID, uid, watching); err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "watch update failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *httpHandlers) watchIssue(w http.ResponseWriter, r *http.Request)   { h.setWatchState(w, r, true) }
+func (h *httpHandlers) unwatchIssue(w http.ResponseWriter, r *http.Request) { h.setWatchState(w, r, false) }
 
 // ── issue relations ──
 

@@ -18,7 +18,7 @@ import {
 } from "../../lib/api";
 import { humanizeVerb, timeAgo } from "../../lib/activity";
 import { Avatar, LabelChip, PriorityText, SeverityMark, SeverityPill, StatusPill, statusLabel, statusTone } from "../../components/Badges";
-import { IconBranch, IconChevronDown, IconCommit, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
+import { IconBranch, IconChevronDown, IconCommit, IconEye, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
 import { EditIssueForm } from "./EditIssueForm";
 import { ComponentsSelect } from "./formFields";
 
@@ -117,6 +117,7 @@ export function IssueDetail() {
           <span className="font-mono font-medium text-blueprint">{i.key}</span>
         </div>
         <div className="relative flex items-center gap-2.5">
+          <WatchButton issueKey={issueKey} />
           <button
             onClick={() => setEditing(true)}
             className="flex h-[34px] items-center gap-1.5 rounded-md border border-hairline px-3.5 text-sm font-semibold text-ink transition hover:border-graphite"
@@ -369,6 +370,35 @@ export function IssueDetail() {
 
       {editing && <EditIssueForm issue={i} onClose={() => setEditing(false)} />}
     </div>
+  );
+}
+
+function WatchButton({ issueKey }: { issueKey: string }) {
+  const qc = useQueryClient();
+  const watchers = useQuery({ queryKey: ["watchers", issueKey], queryFn: () => api.listWatchers(issueKey) });
+  const watching = watchers.data?.watching ?? false;
+  const count = watchers.data?.items.length ?? 0;
+
+  const toggle = useMutation({
+    mutationFn: () => (watching ? api.unwatchIssue(issueKey) : api.watchIssue(issueKey)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["watchers", issueKey] }),
+  });
+
+  return (
+    <button
+      onClick={() => toggle.mutate()}
+      disabled={toggle.isPending || watchers.isLoading}
+      title={watching ? "Stop watching this issue" : "Get notified about changes to this issue"}
+      className={`flex h-[34px] items-center gap-1.5 rounded-md border px-3.5 text-sm font-semibold transition disabled:opacity-60 ${
+        watching
+          ? "border-blueprint bg-blueprint-soft text-blueprint"
+          : "border-hairline text-ink hover:border-graphite"
+      }`}
+    >
+      <IconEye size={15} className={watching ? "text-blueprint" : "text-graphite"} />
+      {watching ? "Watching" : "Watch"}
+      {count > 0 && <span className="font-mono text-xs">{count}</span>}
+    </button>
   );
 }
 

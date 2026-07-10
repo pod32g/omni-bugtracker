@@ -350,6 +350,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ body_md }),
     }),
+  listWatchers: (issueKey: string) =>
+    request<{ items: User[]; watching: boolean }>(`/issues/${issueKey}/watchers`),
+  watchIssue: (issueKey: string) => request<void>(`/issues/${issueKey}/watchers/me`, { method: "PUT" }),
+  unwatchIssue: (issueKey: string) => request<void>(`/issues/${issueKey}/watchers/me`, { method: "DELETE" }),
   listRelations: (issueKey: string) => request<{ items: IssueRelation[] }>(`/issues/${issueKey}/relations`),
   addRelation: (issueKey: string, kind: RelationKind, otherIssueKey: string) =>
     request<IssueRelation>(`/issues/${issueKey}/relations`, {
