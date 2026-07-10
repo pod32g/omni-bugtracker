@@ -74,15 +74,15 @@ func (s *Store) TouchToken(ctx context.Context, tokenID uuid.UUID) error {
 // ── projects ──
 
 func (s *Store) GetProjectByKey(ctx context.Context, key string) (domain.Project, error) {
-	const q = `SELECT id, key, name, description_md, is_archived, created_at FROM projects WHERE key = $1`
+	const q = `SELECT id, key, name, description_md, default_assignee_id, is_archived, created_at FROM projects WHERE key = $1`
 	var p domain.Project
-	err := s.pool.QueryRow(ctx, q, key).Scan(&p.ID, &p.Key, &p.Name, &p.DescriptionMD, &p.IsArchived, &p.CreatedAt)
+	err := s.pool.QueryRow(ctx, q, key).Scan(&p.ID, &p.Key, &p.Name, &p.DescriptionMD, &p.DefaultAssigneeID, &p.IsArchived, &p.CreatedAt)
 	return p, err
 }
 
 func (s *Store) ListProjects(ctx context.Context, limit, offset int32) ([]domain.Project, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, key, name, description_md, is_archived, created_at
+		`SELECT id, key, name, description_md, default_assignee_id, is_archived, created_at
 		 FROM projects WHERE is_archived = FALSE ORDER BY key LIMIT $1 OFFSET $2`,
 		clampLimit(limit), offset)
 	if err != nil {
@@ -92,7 +92,7 @@ func (s *Store) ListProjects(ctx context.Context, limit, offset int32) ([]domain
 	var out []domain.Project
 	for rows.Next() {
 		var p domain.Project
-		if err := rows.Scan(&p.ID, &p.Key, &p.Name, &p.DescriptionMD, &p.IsArchived, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Key, &p.Name, &p.DescriptionMD, &p.DefaultAssigneeID, &p.IsArchived, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -182,12 +182,17 @@ func (s *Store) UpdateProject(ctx context.Context, in service.UpdateProjectInput
 	               name           = COALESCE($2, name),
 	               description_md  = COALESCE($3, description_md),
 	               is_archived    = COALESCE($4, is_archived),
+	               -- nil = unchanged; the zero UUID clears; otherwise set ($5::uuid, see 42P08 note).
+	               default_assignee_id = CASE
+	                                       WHEN $5::uuid IS NULL THEN default_assignee_id
+	                                       WHEN $5::uuid = '00000000-0000-0000-0000-000000000000'::uuid THEN NULL
+	                                       ELSE $5::uuid END,
 	               updated_at     = now()
 	           WHERE key = $1
-	           RETURNING id, key, name, description_md, is_archived, created_at`
+	           RETURNING id, key, name, description_md, default_assignee_id, is_archived, created_at`
 	var p domain.Project
-	err := s.pool.QueryRow(ctx, q, in.Key, in.Name, in.DescriptionMD, in.IsArchived).
-		Scan(&p.ID, &p.Key, &p.Name, &p.DescriptionMD, &p.IsArchived, &p.CreatedAt)
+	err := s.pool.QueryRow(ctx, q, in.Key, in.Name, in.DescriptionMD, in.IsArchived, in.DefaultAssigneeID).
+		Scan(&p.ID, &p.Key, &p.Name, &p.DescriptionMD, &p.DefaultAssigneeID, &p.IsArchived, &p.CreatedAt)
 	return p, err
 }
 
@@ -249,14 +254,19 @@ func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, pu
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
-	// Allocate the next per-project number atomically.
+	// Allocate the next per-project number atomically. Also picks up the project's
+	// default assignee so unassigned new issues land with someone responsible.
 	var projectID uuid.UUID
 	var number int32
+	var defaultAssignee *uuid.UUID
 	if err := tx.QueryRow(ctx,
 		`UPDATE projects SET next_issue_number = next_issue_number + 1, updated_at = now()
-		 WHERE key = $1 RETURNING id, next_issue_number - 1`, in.ProjectKey).
-		Scan(&projectID, &number); err != nil {
+		 WHERE key = $1 RETURNING id, next_issue_number - 1, default_assignee_id`, in.ProjectKey).
+		Scan(&projectID, &number, &defaultAssignee); err != nil {
 		return domain.Issue{}, fmt.Errorf("allocate number: %w", err)
+	}
+	if in.AssigneeID == nil {
+		in.AssigneeID = defaultAssignee
 	}
 
 	const insert = `

@@ -264,9 +264,10 @@ func (h *httpHandlers) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name          *string `json:"name"`
-		DescriptionMD *string `json:"description_md"`
-		IsArchived    *bool   `json:"is_archived"`
+		Name              *string    `json:"name"`
+		DescriptionMD     *string    `json:"description_md"`
+		IsArchived        *bool      `json:"is_archived"`
+		DefaultAssigneeID *uuid.UUID `json:"default_assignee_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -278,6 +279,7 @@ func (h *httpHandlers) updateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	project, err := h.repo.UpdateProject(r.Context(), UpdateProjectInput{
 		Key: key, Name: body.Name, DescriptionMD: body.DescriptionMD, IsArchived: body.IsArchived,
+		DefaultAssigneeID: body.DefaultAssigneeID,
 	})
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())

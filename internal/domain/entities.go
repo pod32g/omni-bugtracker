@@ -16,12 +16,13 @@ type User struct {
 }
 
 type Project struct {
-	ID            uuid.UUID `json:"id"`
-	Key           string    `json:"key"`
-	Name          string    `json:"name"`
-	DescriptionMD string    `json:"description_md"`
-	IsArchived    bool      `json:"is_archived"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID                uuid.UUID  `json:"id"`
+	Key               string     `json:"key"`
+	Name              string     `json:"name"`
+	DescriptionMD     string     `json:"description_md"`
+	DefaultAssigneeID *uuid.UUID `json:"default_assignee_id,omitempty"`
+	IsArchived        bool       `json:"is_archived"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
 // APIToken is metadata about a personal API token. The secret itself is never

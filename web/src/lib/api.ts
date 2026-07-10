@@ -21,6 +21,7 @@ export interface Project {
   key: string;
   name: string;
   description_md: string;
+  default_assignee_id?: string | null;
   is_archived: boolean;
   created_at: string;
 }
@@ -192,8 +193,10 @@ export const api = {
   createProject: (body: { key: string; name: string; description_md?: string }) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(body) }),
   getProject: (key: string) => request<Project>(`/projects/${key}`),
-  updateProject: (key: string, patch: { name?: string; description_md?: string; is_archived?: boolean }) =>
-    request<Project>(`/projects/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  updateProject: (
+    key: string,
+    patch: { name?: string; description_md?: string; is_archived?: boolean; default_assignee_id?: string },
+  ) => request<Project>(`/projects/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
   archiveProject: (key: string) => request<void>(`/projects/${key}`, { method: "DELETE" }),
   listTokens: () => request<{ items: ApiToken[] }>("/me/tokens"),
   createToken: (name: string, scopes: string[] = []) =>

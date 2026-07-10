@@ -434,6 +434,7 @@ components:
         key: { type: string }
         name: { type: string }
         description_md: { type: string }
+        default_assignee_id: { type: string, format: uuid, nullable: true }
         is_archived: { type: boolean }
         created_at: { type: string, format: date-time }
     ProjectList:
@@ -456,6 +457,11 @@ components:
         name: { type: string }
         description_md: { type: string }
         is_archived: { type: boolean }
+        default_assignee_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: "Zero UUID clears the default assignee."
 
     ApiToken:
       type: object

@@ -109,11 +109,14 @@ type CreateProjectInput struct {
 }
 
 // UpdateProjectInput is a partial edit; nil fields are left unchanged (COALESCE).
+// DefaultAssigneeID follows the issue-assignee convention: nil = unchanged,
+// zero UUID = clear, otherwise set.
 type UpdateProjectInput struct {
-	Key           string
-	Name          *string
-	DescriptionMD *string
-	IsArchived    *bool
+	Key               string
+	Name              *string
+	DescriptionMD     *string
+	IsArchived        *bool
+	DefaultAssigneeID *uuid.UUID
 }
 
 // CreateTokenInput carries the pre-hashed token; the plaintext is generated and

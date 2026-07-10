@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, session, type Project, type User } from "../lib/api";
 import { ProjectProvider, useProject } from "../lib/project";
@@ -179,6 +179,7 @@ function ProjectSwitcher({
   canManage: boolean;
 }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
 
@@ -225,6 +226,18 @@ function ProjectSwitcher({
             {canManage && (
               <>
                 {projects.length > 0 && <div className="my-1 border-t border-hairline" />}
+                {current && (
+                  <button
+                    onClick={() => {
+                      setOpen(false);
+                      navigate(`/projects/${current.key}/settings`);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-graphite transition hover:bg-panel hover:text-ink"
+                  >
+                    <IconGear size={14} />
+                    Project settings
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setOpen(false);
