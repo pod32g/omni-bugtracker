@@ -43,6 +43,10 @@ func ParseFilter(projectKey, raw, meUserID string) IssueFilter {
 			f.Label = strings.Trim(val, `"`)
 		case "component":
 			f.Component = strings.Trim(val, `"`)
+		case "milestone": // UI-generated deep links pass the milestone id
+			if id, err := uuid.Parse(val); err == nil {
+				f.MilestoneID = &id
+			}
 		default:
 			freeText = append(freeText, tok)
 		}

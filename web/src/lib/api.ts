@@ -50,6 +50,17 @@ export interface Component {
   created_at: string;
 }
 
+export interface Milestone {
+  id: string;
+  title: string;
+  description_md: string;
+  due_on?: string | null;
+  state: "open" | "closed";
+  open_issues: number;
+  closed_issues: number;
+  created_at: string;
+}
+
 export interface NewIssue {
   type: IssueType;
   title: string;
@@ -59,6 +70,7 @@ export interface NewIssue {
   assignee_id?: string;
   labels?: string[];
   components?: string[];
+  milestone_id?: string; // PATCH only; zero UUID clears
   repro_steps_md?: string;
   expected_md?: string;
   actual_md?: string;
@@ -83,6 +95,8 @@ export interface Issue {
   reporter?: User;
   labels: string[];
   components: string[];
+  milestone_id?: string | null;
+  milestone?: string;
   version_affected?: string;
   version_fixed?: string;
   repro_steps_md?: string;
@@ -219,6 +233,14 @@ export const api = {
   updateComponent: (id: string, patch: { name?: string; description_md?: string; lead_id?: string }) =>
     request<Component>(`/components/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteComponent: (id: string) => request<void>(`/components/${id}`, { method: "DELETE" }),
+  listMilestones: (projectKey: string) => request<{ items: Milestone[] }>(`/projects/${projectKey}/milestones`),
+  createMilestone: (projectKey: string, body: { title: string; description_md?: string; due_on?: string }) =>
+    request<Milestone>(`/projects/${projectKey}/milestones`, { method: "POST", body: JSON.stringify(body) }),
+  updateMilestone: (
+    id: string,
+    patch: { title?: string; description_md?: string; due_on?: string; state?: "open" | "closed" },
+  ) => request<Milestone>(`/milestones/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteMilestone: (id: string) => request<void>(`/milestones/${id}`, { method: "DELETE" }),
   listIssues: (projectKey: string, filter = "", sort = "") =>
     request<{ items: Issue[]; total: number }>(
       `/projects/${projectKey}/issues?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}`,

@@ -45,6 +45,12 @@ type Repository interface {
 	UpdateComponent(ctx context.Context, in UpdateComponentInput) (domain.Component, error)
 	DeleteComponent(ctx context.Context, id uuid.UUID) (bool, error)
 
+	// Milestones
+	ListMilestones(ctx context.Context, projectKey string) ([]domain.Milestone, error)
+	CreateMilestone(ctx context.Context, in CreateMilestoneInput) (domain.Milestone, error)
+	UpdateMilestone(ctx context.Context, in UpdateMilestoneInput) (domain.Milestone, error)
+	DeleteMilestone(ctx context.Context, id uuid.UUID) (bool, error)
+
 	// Issues (transactional writes take a PublishFn for the outbox)
 	CreateIssue(ctx context.Context, in CreateIssueInput, publish PublishIssueFn) (domain.Issue, error)
 	GetIssueByKey(ctx context.Context, projectKey string, number int32) (domain.Issue, error)
@@ -130,6 +136,24 @@ type UpdateComponentInput struct {
 	LeadID        *uuid.UUID
 }
 
+type CreateMilestoneInput struct {
+	ProjectKey    string
+	Title         string
+	DescriptionMD string
+	DueOn         *time.Time
+}
+
+// UpdateMilestoneInput is a partial edit; nil = unchanged. ClearDueOn removes
+// the due date (DueOn nil alone means "leave as is").
+type UpdateMilestoneInput struct {
+	ID            uuid.UUID
+	Title         *string
+	DescriptionMD *string
+	DueOn         *time.Time
+	ClearDueOn    bool
+	State         *string // open | closed
+}
+
 // UpdateProjectInput is a partial edit; nil fields are left unchanged (COALESCE).
 // DefaultAssigneeID follows the issue-assignee convention: nil = unchanged,
 // zero UUID = clear, otherwise set.
@@ -184,8 +208,9 @@ type UpdateIssueInput struct {
 	ExpectedMD      *string
 	ActualMD        *string
 	EnvironmentMD   *string
-	Labels          *[]string // nil = unchanged; non-nil replaces the label set
-	Components      *[]string // nil = unchanged; non-nil replaces (names must exist in the project)
+	Labels          *[]string  // nil = unchanged; non-nil replaces the label set
+	Components      *[]string  // nil = unchanged; non-nil replaces (names must exist in the project)
+	MilestoneID     *uuid.UUID // nil = unchanged; zero UUID clears; must belong to the issue's project
 }
 
 type IssueFilter struct {
@@ -193,10 +218,11 @@ type IssueFilter struct {
 	Status     *domain.IssueStatus
 	AssigneeID *uuid.UUID
 	Type       *domain.IssueType
-	Severity   *domain.Severity
-	Label      string
-	Component  string
-	Query      string // full-text
+	Severity    *domain.Severity
+	Label       string
+	Component   string
+	MilestoneID *uuid.UUID
+	Query       string // full-text
 	Sort       string
 	Limit      int32
 	Offset     int32

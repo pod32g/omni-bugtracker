@@ -208,6 +208,68 @@ paths:
         "204": { description: deleted }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /projects/{key}/milestones:
+    parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
+    get:
+      tags: [projects]
+      operationId: listMilestones
+      responses:
+        "200":
+          description: milestones with open/closed issue counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Milestone" } }
+    post:
+      tags: [projects]
+      operationId: createMilestone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                description_md: { type: string }
+                due_on: { type: string, format: date, description: "YYYY-MM-DD" }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Milestone" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /milestones/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [projects]
+      operationId: updateMilestone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description_md: { type: string }
+                due_on: { type: string, format: date, nullable: true, description: "empty string clears" }
+                state: { type: string, enum: [open, closed] }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Milestone" } } } }
+    delete:
+      tags: [projects]
+      operationId: deleteMilestone
+      description: Issues keep existing; their milestone_id becomes null.
+      responses:
+        "204": { description: deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /issues/{issueKey}:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
     get:
@@ -559,6 +621,8 @@ components:
         assignee: { $ref: "#/components/schemas/User" }
         labels: { type: array, items: { type: string } }
         components: { type: array, items: { type: string } }
+        milestone_id: { type: string, format: uuid, nullable: true }
+        milestone: { type: string, description: "milestone title" }
         version_affected: { type: string }
         version_fixed: { type: string }
         git_commit_sha: { type: string }
@@ -593,6 +657,18 @@ components:
         expected_md: { type: string }
         actual_md: { type: string }
         environment_md: { type: string }
+    Milestone:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description_md: { type: string }
+        due_on: { type: string, format: date, nullable: true }
+        state: { type: string, enum: [open, closed] }
+        open_issues: { type: integer }
+        closed_issues: { type: integer }
+        created_at: { type: string, format: date-time }
+
     Component:
       type: object
       properties:

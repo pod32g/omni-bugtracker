@@ -85,7 +85,7 @@ function Sidebar({ me }: { me?: User }) {
           trailing={openCount != null ? String(openCount) : undefined}
         />
         <NavItem to="/board" icon={<IconBoard size={17} />} label="Board" />
-        <NavItemSoon icon={<IconFlag size={17} />} label="Milestones" />
+        <NavItem to="/milestones" icon={<IconFlag size={17} />} label="Milestones" />
         <NavItemSoon icon={<IconTag size={17} />} label="Releases" />
         <NavItem to="/settings" icon={<IconGear size={17} />} label="Settings" />
       </nav>

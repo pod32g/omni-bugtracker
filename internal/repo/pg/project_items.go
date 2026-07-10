@@ -77,6 +77,83 @@ func (s *Store) DeleteComponent(ctx context.Context, id uuid.UUID) (bool, error)
 	return tag.RowsAffected() > 0, nil
 }
 
+// ── milestones ──
+
+const selectMilestone = `
+	SELECT m.id, m.title, m.description_md, m.due_on, m.state, m.created_at,
+	       (SELECT count(*) FROM issues i WHERE i.milestone_id = m.id AND i.deleted_at IS NULL
+	          AND i.status NOT IN ('resolved','closed')) AS open_issues,
+	       (SELECT count(*) FROM issues i WHERE i.milestone_id = m.id AND i.deleted_at IS NULL
+	          AND i.status IN ('resolved','closed')) AS closed_issues
+	FROM milestones m`
+
+func scanMilestone(row scanner) (domain.Milestone, error) {
+	var m domain.Milestone
+	err := row.Scan(&m.ID, &m.Title, &m.DescriptionMD, &m.DueOn, &m.State, &m.CreatedAt,
+		&m.OpenIssues, &m.ClosedIssues)
+	return m, err
+}
+
+func (s *Store) ListMilestones(ctx context.Context, projectKey string) ([]domain.Milestone, error) {
+	q := selectMilestone + `
+		JOIN projects p ON p.id = m.project_id
+		WHERE p.key = $1
+		ORDER BY (m.state = 'closed'), m.due_on ASC NULLS LAST, m.created_at`
+	rows, err := s.pool.Query(ctx, q, projectKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Milestone
+	for rows.Next() {
+		m, err := scanMilestone(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateMilestone(ctx context.Context, in service.CreateMilestoneInput) (domain.Milestone, error) {
+	const q = `
+		INSERT INTO milestones (project_id, title, description_md, due_on)
+		SELECT p.id, $2, $3, $4 FROM projects p WHERE p.key = $1
+		RETURNING id`
+	var id uuid.UUID
+	if err := s.pool.QueryRow(ctx, q, in.ProjectKey, strings.TrimSpace(in.Title), in.DescriptionMD, in.DueOn).
+		Scan(&id); err != nil {
+		return domain.Milestone{}, err
+	}
+	return scanMilestone(s.pool.QueryRow(ctx, selectMilestone+` WHERE m.id = $1`, id))
+}
+
+func (s *Store) UpdateMilestone(ctx context.Context, in service.UpdateMilestoneInput) (domain.Milestone, error) {
+	const q = `
+		UPDATE milestones SET
+		  title          = COALESCE($2, title),
+		  description_md = COALESCE($3, description_md),
+		  state          = COALESCE($4::milestone_state, state),
+		  due_on         = CASE WHEN $6 THEN NULL ELSE COALESCE($5, due_on) END
+		WHERE id = $1
+		RETURNING id`
+	var id uuid.UUID
+	if err := s.pool.QueryRow(ctx, q, in.ID, in.Title, in.DescriptionMD, in.State, in.DueOn, in.ClearDueOn).
+		Scan(&id); err != nil {
+		return domain.Milestone{}, err
+	}
+	return scanMilestone(s.pool.QueryRow(ctx, selectMilestone+` WHERE m.id = $1`, id))
+}
+
+func (s *Store) DeleteMilestone(ctx context.Context, id uuid.UUID) (bool, error) {
+	// issues.milestone_id is ON DELETE SET NULL, so issues survive the delete.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM milestones WHERE id = $1`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // setIssueComponents replaces (or appends to) an issue's component set. Unlike labels,
 // components are managed structure — names that don't exist in the project are ignored
 // rather than auto-created.

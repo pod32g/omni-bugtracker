@@ -342,6 +342,9 @@ func (s *Store) ListIssues(ctx context.Context, f service.IssueFilter) ([]domain
 	if f.Severity != nil {
 		add("i.severity = $%d", string(*f.Severity))
 	}
+	if f.MilestoneID != nil {
+		add("i.milestone_id = $%d", *f.MilestoneID)
+	}
 	if strings.TrimSpace(f.Label) != "" {
 		add("EXISTS (SELECT 1 FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id AND lower(l.name) = lower($%d))", f.Label)
 	}
@@ -422,6 +425,20 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// Guard against cross-project dangling pointers: an assigned milestone must
+	// belong to the issue's own project.
+	if in.MilestoneID != nil && *in.MilestoneID != uuid.Nil {
+		var ok bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM milestones m JOIN issues i ON i.project_id = m.project_id
+			 WHERE m.id = $1 AND i.id = $2)`, *in.MilestoneID, id).Scan(&ok); err != nil {
+			return domain.Issue{}, err
+		}
+		if !ok {
+			return domain.Issue{}, fmt.Errorf("milestone does not belong to the issue's project")
+		}
+	}
+
 	const q = `
 		UPDATE issues SET
 		  title            = COALESCE($2, title),
@@ -441,12 +458,17 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		  expected_md      = COALESCE($11, expected_md),
 		  actual_md        = COALESCE($12, actual_md),
 		  environment_md   = COALESCE($13, environment_md),
+		  milestone_id     = CASE
+		                       WHEN $14::uuid IS NULL THEN milestone_id
+		                       WHEN $14::uuid = '00000000-0000-0000-0000-000000000000'::uuid THEN NULL
+		                       ELSE $14::uuid END,
 		  updated_at       = now()
 		WHERE id = $1 AND deleted_at IS NULL`
 	if _, err := tx.Exec(ctx, q, id,
 		in.Title, in.DescriptionMD, typePtr(in.Type), sevPtr(in.Severity), prioPtr(in.Priority),
 		in.AssigneeID, in.VersionAffected, in.VersionFixed,
-		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD); err != nil {
+		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD,
+		in.MilestoneID); err != nil {
 		return domain.Issue{}, err
 	}
 	if in.Labels != nil || in.Components != nil {
@@ -918,11 +940,13 @@ const selectIssue = `
 	       ru.id, ru.display_name, ru.email,
 	       au.id, au.display_name, au.email,
 	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
-	       COALESCE(array(SELECT c.name FROM issue_components ic JOIN components c ON c.id = ic.component_id WHERE ic.issue_id = i.id ORDER BY c.name), '{}') AS components
+	       COALESCE(array(SELECT c.name FROM issue_components ic JOIN components c ON c.id = ic.component_id WHERE ic.issue_id = i.id ORDER BY c.name), '{}') AS components,
+	       i.milestone_id, m.title
 	FROM issues i
 	JOIN projects p ON p.id = i.project_id
 	LEFT JOIN users ru ON ru.id = i.reporter_id
-	LEFT JOIN users au ON au.id = i.assignee_id`
+	LEFT JOIN users au ON au.id = i.assignee_id
+	LEFT JOIN milestones m ON m.id = i.milestone_id`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -932,7 +956,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	var i domain.Issue
 	var sev *string
 	var reporterID, assigneeID *uuid.UUID
-	var reporterName, reporterEmail, assigneeName, assigneeEmail *string
+	var reporterName, reporterEmail, assigneeName, assigneeEmail, milestoneTitle *string
 	err := row.Scan(
 		&i.ID, &i.ProjectKey, &i.Number, &i.Type, &i.Title, &i.DescriptionMD, &i.Status, &sev, &i.Priority,
 		&i.VersionAffected, &i.VersionFixed, &i.GitCommitSHA, &i.PullRequestURL,
@@ -941,10 +965,12 @@ func scanIssue(row scanner) (domain.Issue, error) {
 		&reporterID, &reporterName, &reporterEmail,
 		&assigneeID, &assigneeName, &assigneeEmail,
 		&i.Labels, &i.Components,
+		&i.MilestoneID, &milestoneTitle,
 	)
 	if err != nil {
 		return domain.Issue{}, err
 	}
+	i.Milestone = deref(milestoneTitle)
 	if sev != nil {
 		sv := domain.Severity(*sev)
 		i.Severity = &sv

@@ -3,7 +3,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, UNASSIGNED, type IssueStatus, type NewIssue, type Priority, type Project, type User } from "../../lib/api";
+import {
+  api,
+  UNASSIGNED,
+  type IssueStatus,
+  type Milestone,
+  type NewIssue,
+  type Priority,
+  type Project,
+  type User,
+} from "../../lib/api";
 import { humanizeVerb, timeAgo } from "../../lib/activity";
 import { Avatar, LabelChip, PriorityText, SeverityMark, SeverityPill, StatusPill, statusLabel, statusTone } from "../../components/Badges";
 import { IconBranch, IconChevronDown, IconCommit, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
@@ -29,6 +38,12 @@ export function IssueDetail() {
   const commits = useQuery({ queryKey: ["commits", issueKey], queryFn: () => api.commits(issueKey) });
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => api.listProjects() });
+  const projectKeyOfIssue = issue.data?.project_key ?? "";
+  const milestones = useQuery({
+    queryKey: ["milestones", projectKeyOfIssue],
+    queryFn: () => api.listMilestones(projectKeyOfIssue),
+    enabled: !!projectKeyOfIssue,
+  });
 
   // Inline quick-edit of rail fields (assignee, priority), à la Jira.
   const patch = useMutation({
@@ -266,6 +281,15 @@ export function IssueDetail() {
             />
           </MetaRow>
 
+          <MetaRow label="Milestone">
+            <MilestoneControl
+              milestoneId={i.milestone_id ?? null}
+              milestoneTitle={i.milestone}
+              milestones={milestones.data?.items ?? []}
+              onChange={(milestone_id) => patch.mutate({ milestone_id })}
+            />
+          </MetaRow>
+
           <div className="flex gap-4">
             <MetaRow label="Priority" className="grow">
               <PriorityControl priority={i.priority} onChange={(priority) => patch.mutate({ priority })} />
@@ -477,6 +501,45 @@ function ProjectControl({
         {projects.map((p) => (
           <option key={p.key} value={p.key}>
             {p.key} — {p.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function MilestoneControl({
+  milestoneId,
+  milestoneTitle,
+  milestones,
+  onChange,
+}: {
+  milestoneId: string | null;
+  milestoneTitle?: string;
+  milestones: Milestone[];
+  onChange: (milestoneId: string) => void;
+}) {
+  const open = milestones.filter((m) => m.state === "open" || m.id === milestoneId);
+  return (
+    <div className="relative">
+      <div className="-mx-1.5 flex items-center gap-2 rounded-md px-1.5 py-1 transition hover:bg-panel">
+        <IconMilestone size={15} className="text-graphite" />
+        <span className={`text-sm font-medium ${milestoneId ? "text-ink" : "text-graphite-soft"}`}>
+          {milestoneId ? milestoneTitle || "Milestone" : "No milestone"}
+        </span>
+        <IconChevronDown size={12} className="text-graphite-soft" />
+      </div>
+      <select
+        value={milestoneId ?? UNASSIGNED}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Change milestone"
+        className="absolute inset-0 cursor-pointer opacity-0"
+      >
+        <option value={UNASSIGNED}>No milestone</option>
+        {open.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.title}
+            {m.state === "closed" ? " (closed)" : ""}
           </option>
         ))}
       </select>

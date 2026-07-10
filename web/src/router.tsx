@@ -6,6 +6,7 @@ import { IssueList } from "./features/issues/IssueList";
 import { IssueDetail } from "./features/issues/IssueDetail";
 import { Settings } from "./features/settings/Settings";
 import { ProjectSettings } from "./features/projects/ProjectSettings";
+import { Milestones } from "./features/milestones/Milestones";
 
 export const router = createBrowserRouter([
   {
@@ -16,6 +17,7 @@ export const router = createBrowserRouter([
       { path: "board", element: <Board /> },
       { path: "issues", element: <IssueList /> },
       { path: "issues/:issueKey", element: <IssueDetail /> },
+      { path: "milestones", element: <Milestones /> },
       { path: "settings", element: <Settings /> },
       { path: "projects/:key/settings", element: <ProjectSettings /> },
     ],

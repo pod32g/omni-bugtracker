@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -42,6 +43,10 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/projects/{key}/components", h.createComponent)
 	r.Patch("/components/{id}", h.updateComponent)
 	r.Delete("/components/{id}", h.deleteComponent)
+	r.Get("/projects/{key}/milestones", h.listMilestones)
+	r.Post("/projects/{key}/milestones", h.createMilestone)
+	r.Patch("/milestones/{id}", h.updateMilestone)
+	r.Delete("/milestones/{id}", h.deleteMilestone)
 	r.Get("/projects/{key}/issues", h.listIssues)
 	r.Post("/projects/{key}/issues", h.createIssue)
 	r.Get("/issues/{issueKey}", h.getIssue)
@@ -426,6 +431,141 @@ func (h *httpHandlers) deleteComponent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ── milestones ──
+
+// parseDueOn accepts "YYYY-MM-DD" and returns nil for empty input.
+func parseDueOn(s string) (*time.Time, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (h *httpHandlers) listMilestones(w http.ResponseWriter, r *http.Request) {
+	milestones, err := h.repo.ListMilestones(r.Context(), chi.URLParam(r, "key"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if milestones == nil {
+		milestones = []domain.Milestone{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": milestones})
+}
+
+func (h *httpHandlers) createMilestone(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	key := chi.URLParam(r, "key")
+	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+		return
+	}
+	var body struct {
+		Title         string `json:"title"`
+		DescriptionMD string `json:"description_md"`
+		DueOn         string `json:"due_on"` // YYYY-MM-DD, optional
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Title) == "" {
+		httpapi.WriteValidation(w, map[string]string{"title": "required"})
+		return
+	}
+	dueOn, err := parseDueOn(body.DueOn)
+	if err != nil {
+		httpapi.WriteValidation(w, map[string]string{"due_on": "expected YYYY-MM-DD"})
+		return
+	}
+	m, err := h.repo.CreateMilestone(r.Context(), CreateMilestoneInput{
+		ProjectKey: key, Title: body.Title, DescriptionMD: body.DescriptionMD, DueOn: dueOn,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "create failed",
+			"a milestone with that title may already exist: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, m)
+}
+
+func (h *httpHandlers) updateMilestone(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad milestone id", "")
+		return
+	}
+	var body struct {
+		Title         *string `json:"title"`
+		DescriptionMD *string `json:"description_md"`
+		DueOn         *string `json:"due_on"` // nil = unchanged, "" = clear, else YYYY-MM-DD
+		State         *string `json:"state"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.State != nil && *body.State != "open" && *body.State != "closed" {
+		httpapi.WriteValidation(w, map[string]string{"state": "must be open or closed"})
+		return
+	}
+	in := UpdateMilestoneInput{ID: id, Title: body.Title, DescriptionMD: body.DescriptionMD, State: body.State}
+	if body.DueOn != nil {
+		if strings.TrimSpace(*body.DueOn) == "" {
+			in.ClearDueOn = true
+		} else {
+			dueOn, err := parseDueOn(*body.DueOn)
+			if err != nil {
+				httpapi.WriteValidation(w, map[string]string{"due_on": "expected YYYY-MM-DD"})
+				return
+			}
+			in.DueOn = dueOn
+		}
+	}
+	m, err := h.repo.UpdateMilestone(r.Context(), in)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "update failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+func (h *httpHandlers) deleteMilestone(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad milestone id", "")
+		return
+	}
+	ok, err := h.repo.DeleteMilestone(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	if !ok {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such milestone")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	key := chi.URLParam(r, "key")
@@ -526,6 +666,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		EnvironmentMD   *string           `json:"environment_md"`
 		Labels          *[]string         `json:"labels"`
 		Components      *[]string         `json:"components"`
+		MilestoneID     *uuid.UUID        `json:"milestone_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -542,7 +683,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		VersionAffected: body.VersionAffected, VersionFixed: body.VersionFixed,
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
 		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD, Labels: body.Labels,
-		Components: body.Components,
+		Components: body.Components, MilestoneID: body.MilestoneID,
 	})
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())

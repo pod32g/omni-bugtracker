@@ -36,6 +36,18 @@ type APIToken struct {
 	CreatedAt  time.Time  `json:"created_at"`
 }
 
+// Milestone is a project-scoped goalpost issues can be grouped under.
+type Milestone struct {
+	ID            uuid.UUID  `json:"id"`
+	Title         string     `json:"title"`
+	DescriptionMD string     `json:"description_md"`
+	DueOn         *time.Time `json:"due_on,omitempty"`
+	State         string     `json:"state"` // open | closed
+	OpenIssues    int        `json:"open_issues"`
+	ClosedIssues  int        `json:"closed_issues"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
 // Component is a project-scoped area of ownership (e.g. "api", "web", "infra").
 type Component struct {
 	ID            uuid.UUID  `json:"id"`
@@ -61,6 +73,8 @@ type Issue struct {
 	Assignee        *User       `json:"assignee,omitempty"`
 	Labels          []string    `json:"labels"`
 	Components      []string    `json:"components"`
+	MilestoneID     *uuid.UUID  `json:"milestone_id,omitempty"`
+	Milestone       string      `json:"milestone,omitempty"` // title, resolved via join
 	VersionAffected string      `json:"version_affected"`
 	VersionFixed    string      `json:"version_fixed"`
 	GitCommitSHA    string      `json:"git_commit_sha"`
