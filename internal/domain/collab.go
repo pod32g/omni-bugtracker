@@ -34,6 +34,14 @@ type LinkedCommit struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// SavedSearch is a personal, named filter-grammar string.
+type SavedSearch struct {
+	ID        uuid.UUID `json:"id"`
+	Name      string    `json:"name"`
+	Query     string    `json:"query"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // IssueRelation is one edge of the relation graph as seen from a given issue.
 // Kind is the stored canonical kind; Direction says whether this issue is the
 // from-side ("out") or to-side ("in") — the UI renders the inverse label for "in".

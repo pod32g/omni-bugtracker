@@ -48,6 +48,9 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/me/tokens", h.listTokens)
 	r.Post("/me/tokens", h.createToken)
 	r.Delete("/me/tokens/{id}", h.revokeToken)
+	r.Get("/me/saved-searches", h.listSavedSearches)
+	r.Post("/me/saved-searches", h.saveSavedSearch)
+	r.Delete("/me/saved-searches/{id}", h.deleteSavedSearch)
 	r.Get("/users", h.users)
 	r.Patch("/users/{id}/role", h.updateUserRole)
 	r.Get("/dashboards/overview", h.dashboard)
@@ -198,6 +201,69 @@ func (h *httpHandlers) revokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such token")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── saved searches (personal) ──
+
+func (h *httpHandlers) listSavedSearches(w http.ResponseWriter, r *http.Request) {
+	uid, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
+	items, err := h.repo.ListSavedSearches(r.Context(), uid)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.SavedSearch{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *httpHandlers) saveSavedSearch(w http.ResponseWriter, r *http.Request) {
+	uid, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
+	var body struct {
+		Name  string `json:"name"`
+		Query string `json:"query"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	fields := map[string]string{}
+	if strings.TrimSpace(body.Name) == "" {
+		fields["name"] = "required"
+	}
+	if strings.TrimSpace(body.Query) == "" {
+		fields["query"] = "required"
+	}
+	if len(fields) > 0 {
+		httpapi.WriteValidation(w, fields)
+		return
+	}
+	ss, err := h.repo.UpsertSavedSearch(r.Context(), uid, body.Name, body.Query)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "save failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, ss)
+}
+
+func (h *httpHandlers) deleteSavedSearch(w http.ResponseWriter, r *http.Request) {
+	uid, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad id", "")
+		return
+	}
+	ok, err := h.repo.DeleteSavedSearch(r.Context(), uid, id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	if !ok {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such saved search")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

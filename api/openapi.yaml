@@ -62,6 +62,49 @@ paths:
         "204": { description: revoked }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /me/saved-searches:
+    get:
+      tags: [search]
+      operationId: listSavedSearches
+      responses:
+        "200":
+          description: the caller's saved filters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/SavedSearch" } }
+    post:
+      tags: [search]
+      operationId: saveSavedSearch
+      description: Upserts by name — re-saving an existing name replaces its query.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, query]
+              properties:
+                name: { type: string }
+                query: { type: string, description: "filter-grammar string" }
+      responses:
+        "201": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/SavedSearch" } } } }
+
+  /me/saved-searches/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [search]
+      operationId: deleteSavedSearch
+      responses:
+        "204": { description: deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /users/{id}/role:
     parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
     patch:
@@ -1020,6 +1063,14 @@ components:
         filename: { type: string }
         content_type: { type: string }
         size_bytes: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+
+    SavedSearch:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        query: { type: string }
         created_at: { type: string, format: date-time }
 
     SearchHit:

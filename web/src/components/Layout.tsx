@@ -35,6 +35,8 @@ export function Layout() {
         e.preventDefault();
         setSearchOpen(true);
       } else if (e.key === "/") {
+        // The issues list binds "/" to its own filter box — don't fight it there.
+        if (window.location.pathname === "/issues") return;
         const t = e.target as HTMLElement;
         if (t.tagName !== "INPUT" && t.tagName !== "TEXTAREA" && t.tagName !== "SELECT" && !t.isContentEditable) {
           e.preventDefault();

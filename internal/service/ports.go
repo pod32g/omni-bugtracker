@@ -76,6 +76,11 @@ type Repository interface {
 	UpsertProjectMember(ctx context.Context, projectKey string, userID uuid.UUID, role domain.Role) (domain.ProjectMember, error)
 	RemoveProjectMember(ctx context.Context, projectKey string, userID uuid.UUID) (bool, error)
 
+	// Saved searches (personal named filters)
+	ListSavedSearches(ctx context.Context, userID uuid.UUID) ([]domain.SavedSearch, error)
+	UpsertSavedSearch(ctx context.Context, userID uuid.UUID, name, query string) (domain.SavedSearch, error)
+	DeleteSavedSearch(ctx context.Context, userID, id uuid.UUID) (bool, error)
+
 	// Watchers (issue subscriptions; auto-watch on report/comment/assign)
 	ListWatchers(ctx context.Context, issueID uuid.UUID) ([]domain.User, error)
 	IsWatcher(ctx context.Context, issueID, userID uuid.UUID) (bool, error)

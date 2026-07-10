@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type Issue } from "../../lib/api";
 import { useProject } from "../../lib/project";
@@ -142,6 +142,7 @@ export function IssueList() {
                 <IconLabelLines size={13} />
                 <span className="font-mono text-xs">label:</span>
               </button>
+              <SavedSearches filter={filter} onApply={setFilter} />
             </div>
             <div className="flex items-center gap-4">
               <span className="font-mono text-xs text-graphite">
@@ -263,5 +264,92 @@ function SortSelect({ value, onChange }: { value: string; onChange: (v: string) 
         ))}
       </select>
     </div>
+  );
+}
+
+// Saved searches: personal named filters rendered as chips next to the quick
+// filters. Saving upserts by name; the × on an active chip deletes it.
+function SavedSearches({ filter, onApply }: { filter: string; onApply: (f: string) => void }) {
+  const qc = useQueryClient();
+  const saved = useQuery({ queryKey: ["saved-searches"], queryFn: () => api.listSavedSearches() });
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["saved-searches"] });
+  const save = useMutation({
+    mutationFn: () => api.saveSavedSearch(name.trim(), filter),
+    onSuccess: () => {
+      setNaming(false);
+      setName("");
+      invalidate();
+    },
+  });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteSavedSearch(id), onSuccess: invalidate });
+
+  const items = saved.data?.items ?? [];
+
+  return (
+    <>
+      {items.map((s) => {
+        const active = filter === s.query;
+        return (
+          <span key={s.id} className="group relative inline-flex">
+            <button
+              onClick={() => onApply(s.query)}
+              title={s.query}
+              className={`flex h-[30px] items-center rounded-full px-3.5 pr-6 text-sm transition ${
+                active
+                  ? "bg-blueprint font-semibold text-paper"
+                  : "border border-hairline font-medium text-graphite hover:border-graphite hover:text-ink"
+              }`}
+            >
+              {s.name}
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm(`Delete saved search “${s.name}”?`)) del.mutate(s.id);
+              }}
+              aria-label={`Delete saved search ${s.name}`}
+              className={`absolute right-2 top-1/2 -translate-y-1/2 text-xs opacity-0 transition group-hover:opacity-100 ${
+                active ? "text-paper" : "text-graphite-soft hover:text-critical"
+              }`}
+            >
+              ×
+            </button>
+          </span>
+        );
+      })}
+      {naming ? (
+        <span className="flex h-[30px] items-center gap-1 rounded-full border border-blueprint bg-paper px-2">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && name.trim() && filter.trim()) save.mutate();
+              else if (e.key === "Escape") setNaming(false);
+            }}
+            placeholder="Name this filter…"
+            className="w-32 bg-transparent text-sm text-ink outline-none placeholder:text-graphite-soft"
+          />
+          <button
+            disabled={!name.trim() || !filter.trim() || save.isPending}
+            onClick={() => save.mutate()}
+            className="text-xs font-semibold text-blueprint disabled:opacity-50"
+          >
+            Save
+          </button>
+        </span>
+      ) : (
+        <button
+          onClick={() => setNaming(true)}
+          disabled={!filter.trim()}
+          title={filter.trim() ? "Save the current filter" : "Type a filter first"}
+          className="flex h-[30px] items-center gap-1 rounded-full border border-dashed border-hairline px-3 font-mono text-xs text-graphite-soft transition hover:border-graphite hover:text-graphite disabled:opacity-40"
+        >
+          ☆ save
+        </button>
+      )}
+    </>
   );
 }

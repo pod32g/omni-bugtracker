@@ -158,6 +158,13 @@ export interface Activity {
   occurred_at: string;
 }
 
+export interface SavedSearch {
+  id: string;
+  name: string;
+  query: string;
+  created_at: string;
+}
+
 export type RelationKind = "blocks" | "blocked_by" | "duplicates" | "relates" | "caused_by";
 
 export interface IssueRelation {
@@ -350,6 +357,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ body_md }),
     }),
+  listSavedSearches: () => request<{ items: SavedSearch[] }>("/me/saved-searches"),
+  saveSavedSearch: (name: string, query: string) =>
+    request<SavedSearch>("/me/saved-searches", { method: "POST", body: JSON.stringify({ name, query }) }),
+  deleteSavedSearch: (id: string) => request<void>(`/me/saved-searches/${id}`, { method: "DELETE" }),
   listWatchers: (issueKey: string) =>
     request<{ items: User[]; watching: boolean }>(`/issues/${issueKey}/watchers`),
   watchIssue: (issueKey: string) => request<void>(`/issues/${issueKey}/watchers/me`, { method: "PUT" }),
