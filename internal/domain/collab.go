@@ -14,6 +14,8 @@ type Comment struct {
 	BodyMD    string     `json:"body_md"`
 	EditedAt  *time.Time `json:"edited_at,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
+	// ProjectKey is resolved via join for permission checks; not serialized.
+	ProjectKey string `json:"-"`
 }
 
 type Label struct {

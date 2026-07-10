@@ -82,6 +82,8 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/issues/{issueKey}/move", h.moveIssue)
 	r.Get("/issues/{issueKey}/comments", h.listComments)
 	r.Post("/issues/{issueKey}/comments", h.addComment)
+	r.Patch("/comments/{id}", h.updateComment)
+	r.Delete("/comments/{id}", h.deleteComment)
 	r.Get("/issues/{issueKey}/attachments", h.listAttachments)
 	r.Post("/issues/{issueKey}/attachments", h.uploadAttachment)
 	r.Get("/attachments/{id}", h.downloadAttachment)
@@ -1090,6 +1092,70 @@ func (h *httpHandlers) addComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, c)
+}
+
+// updateComment lets the author revise their own comment (stamps edited_at).
+func (h *httpHandlers) updateComment(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad comment id", "")
+		return
+	}
+	c, err := h.repo.GetComment(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such comment")
+		return
+	}
+	if c.Author == nil || c.Author.ID.String() != p.UserID {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "only the author can edit a comment")
+		return
+	}
+	var body struct {
+		BodyMD string `json:"body_md"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.BodyMD) == "" {
+		httpapi.WriteValidation(w, map[string]string{"body_md": "required"})
+		return
+	}
+	actor, _ := uuid.Parse(p.UserID)
+	updated, err := h.repo.UpdateComment(r.Context(), id, actor, body.BodyMD)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// deleteComment soft-deletes; allowed for the author or project managers.
+func (h *httpHandlers) deleteComment(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad comment id", "")
+		return
+	}
+	c, err := h.repo.GetComment(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such comment")
+		return
+	}
+	isAuthor := c.Author != nil && c.Author.ID.String() == p.UserID
+	if !isAuthor && !h.canOnProject(r.Context(), p, c.ProjectKey, auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "not the author and missing project:manage")
+		return
+	}
+	actor, _ := uuid.Parse(p.UserID)
+	ok, err := h.repo.SoftDeleteComment(r.Context(), id, actor)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	if !ok {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such comment")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *httpHandlers) activity(w http.ResponseWriter, r *http.Request) {

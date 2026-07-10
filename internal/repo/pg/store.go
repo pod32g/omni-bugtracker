@@ -665,6 +665,76 @@ func (s *Store) ListComments(ctx context.Context, issueID uuid.UUID, limit, offs
 	return out, rows.Err()
 }
 
+// GetComment returns a live (non-deleted) comment, with the owning project's
+// key resolved for permission checks.
+func (s *Store) GetComment(ctx context.Context, id uuid.UUID) (domain.Comment, error) {
+	const q = `
+		SELECT c.id, c.issue_id, c.author_id, u.display_name, u.email, c.body_md, c.edited_at, c.created_at, p.key
+		FROM comments c
+		LEFT JOIN users u ON u.id = c.author_id
+		JOIN issues i ON i.id = c.issue_id
+		JOIN projects p ON p.id = i.project_id
+		WHERE c.id = $1 AND c.deleted_at IS NULL`
+	var c domain.Comment
+	var authorID *uuid.UUID
+	var displayName, email *string
+	if err := s.pool.QueryRow(ctx, q, id).
+		Scan(&c.ID, &c.IssueID, &authorID, &displayName, &email, &c.BodyMD, &c.EditedAt, &c.CreatedAt, &c.ProjectKey); err != nil {
+		return domain.Comment{}, err
+	}
+	if authorID != nil {
+		c.Author = &domain.User{ID: *authorID, DisplayName: deref(displayName), Email: deref(email)}
+	}
+	return c, nil
+}
+
+// UpdateComment replaces the body and stamps edited_at; records comment.edited.
+func (s *Store) UpdateComment(ctx context.Context, id, actor uuid.UUID, bodyMD string) (domain.Comment, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Comment{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var issueID uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`UPDATE comments SET body_md = $2, edited_at = now()
+		 WHERE id = $1 AND deleted_at IS NULL RETURNING issue_id`, id, bodyMD).Scan(&issueID); err != nil {
+		return domain.Comment{}, err
+	}
+	if err := recordActivity(ctx, tx, issueID, actor, "comment.edited", "comment", id); err != nil {
+		return domain.Comment{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Comment{}, err
+	}
+	return s.GetComment(ctx, id)
+}
+
+// SoftDeleteComment hides the comment (deleted_at) and records comment.deleted.
+func (s *Store) SoftDeleteComment(ctx context.Context, id, actor uuid.UUID) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var issueID uuid.UUID
+	err = tx.QueryRow(ctx,
+		`UPDATE comments SET deleted_at = now()
+		 WHERE id = $1 AND deleted_at IS NULL RETURNING issue_id`, id).Scan(&issueID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := recordActivity(ctx, tx, issueID, actor, "comment.deleted", "comment", id); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
 func (s *Store) ListActivity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT a.id, a.issue_id, a.actor_id, u.display_name, u.email, a.verb, a.entity_type,

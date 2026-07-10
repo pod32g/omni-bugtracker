@@ -477,6 +477,29 @@ paths:
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } }
 
+  /comments/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [comments]
+      operationId: updateComment
+      description: Author-only; stamps edited_at.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [body_md], properties: { body_md: { type: string } } } } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } }
+    delete:
+      tags: [comments]
+      operationId: deleteComment
+      description: Soft delete; allowed for the author or anyone with project:manage.
+      responses:
+        "204": { description: deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /issues/{issueKey}/attachments:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
     get:

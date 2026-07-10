@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import {
   api,
   UNASSIGNED,
+  type Comment,
   type IssueStatus,
   type Milestone,
   type NewIssue,
@@ -39,6 +40,7 @@ export function IssueDetail() {
   const activity = useQuery({ queryKey: ["activity", issueKey], queryFn: () => api.activity(issueKey) });
   const commits = useQuery({ queryKey: ["commits", issueKey], queryFn: () => api.commits(issueKey) });
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => api.listProjects() });
   const projectKeyOfIssue = issue.data?.project_key ?? "";
   const milestones = useQuery({
@@ -200,18 +202,13 @@ export function IssueDetail() {
           <div className="flex flex-col gap-4 border-t border-hairline pt-6">
             <MicroLabel>Comments</MicroLabel>
             {comments.data?.map((c) => (
-              <div key={c.id} className="flex gap-3">
-                <Avatar user={c.author} size={28} />
-                <div className="flex min-w-0 grow flex-col gap-1 rounded-md border border-hairline bg-paper p-3.5">
-                  <div className="text-xs text-graphite-soft">
-                    <span className="font-medium text-ink">{c.author?.display_name ?? "unknown"}</span> ·{" "}
-                    {timeAgo(c.created_at)}
-                  </div>
-                  <div className="markdown">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{c.body_md}</ReactMarkdown>
-                  </div>
-                </div>
-              </div>
+              <CommentCard
+                key={c.id}
+                comment={c}
+                isAuthor={!!me.data && c.author?.id === me.data.id}
+                canModerate={["owner", "admin", "maintainer"].includes(me.data?.role ?? "")}
+                issueKey={issueKey}
+              />
             ))}
 
             <div className="flex items-start gap-3">
@@ -368,6 +365,98 @@ export function IssueDetail() {
       </div>
 
       {editing && <EditIssueForm issue={i} onClose={() => setEditing(false)} />}
+    </div>
+  );
+}
+
+function CommentCard({
+  comment: c,
+  isAuthor,
+  canModerate,
+  issueKey,
+}: {
+  comment: Comment;
+  isAuthor: boolean;
+  canModerate: boolean;
+  issueKey: string;
+}) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(c.body_md);
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["comments", issueKey] });
+    qc.invalidateQueries({ queryKey: ["activity", issueKey] });
+  };
+  const save = useMutation({
+    mutationFn: () => api.updateComment(c.id, draft),
+    onSuccess: () => {
+      setEditing(false);
+      invalidate();
+    },
+  });
+  const del = useMutation({ mutationFn: () => api.deleteComment(c.id), onSuccess: invalidate });
+
+  return (
+    <div className="group flex gap-3">
+      <Avatar user={c.author} size={28} />
+      <div className="flex min-w-0 grow flex-col gap-1 rounded-md border border-hairline bg-paper p-3.5">
+        <div className="flex items-center gap-2 text-xs text-graphite-soft">
+          <span className="font-medium text-ink">{c.author?.display_name ?? "unknown"}</span>·
+          <span>{timeAgo(c.created_at)}</span>
+          {c.edited_at && <span className="italic">(edited)</span>}
+          <span className="grow" />
+          {isAuthor && !editing && (
+            <button
+              onClick={() => {
+                setDraft(c.body_md);
+                setEditing(true);
+              }}
+              className="opacity-0 transition hover:text-ink group-hover:opacity-100"
+            >
+              Edit
+            </button>
+          )}
+          {(isAuthor || canModerate) && !editing && (
+            <button
+              onClick={() => {
+                if (window.confirm("Delete this comment?")) del.mutate();
+              }}
+              className="opacity-0 transition hover:text-critical group-hover:opacity-100"
+            >
+              Delete
+            </button>
+          )}
+        </div>
+        {editing ? (
+          <div className="flex flex-col gap-2">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={3}
+              autoFocus
+              className="w-full resize-y rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-blueprint"
+            />
+            {save.isError && <p className="text-sm text-critical">{(save.error as Error).message}</p>}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setEditing(false)} className="px-3 py-1.5 text-sm text-graphite hover:text-ink">
+                Cancel
+              </button>
+              <button
+                disabled={!draft.trim() || save.isPending}
+                onClick={() => save.mutate()}
+                className="rounded-md bg-blueprint px-3 py-1.5 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+              >
+                {save.isPending ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="markdown">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{c.body_md}</ReactMarkdown>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

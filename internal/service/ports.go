@@ -88,6 +88,9 @@ type Repository interface {
 	// Comments & timeline
 	AddComment(ctx context.Context, issueID, author uuid.UUID, body string, publish PublishFn) (domain.Comment, error)
 	ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, error)
+	GetComment(ctx context.Context, id uuid.UUID) (domain.Comment, error)
+	UpdateComment(ctx context.Context, id, actor uuid.UUID, bodyMD string) (domain.Comment, error)
+	SoftDeleteComment(ctx context.Context, id, actor uuid.UUID) (bool, error)
 	ListActivity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, error)
 	RecentActivity(ctx context.Context, limit int32) ([]domain.Activity, error)
 	Dashboard(ctx context.Context) (domain.Dashboard, error)

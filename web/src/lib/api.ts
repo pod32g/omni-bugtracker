@@ -338,6 +338,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ body_md }),
     }),
+  updateComment: (id: string, body_md: string) =>
+    request<Comment>(`/comments/${id}`, { method: "PATCH", body: JSON.stringify({ body_md }) }),
+  deleteComment: (id: string) => request<void>(`/comments/${id}`, { method: "DELETE" }),
   activity: (issueKey: string) => request<Activity[]>(`/issues/${issueKey}/activity`),
   commits: (issueKey: string) => request<LinkedCommit[]>(`/issues/${issueKey}/commits`),
   listAttachments: (issueKey: string) => request<{ items: Attachment[] }>(`/issues/${issueKey}/attachments`),
