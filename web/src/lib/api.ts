@@ -120,6 +120,7 @@ export interface Issue {
   milestone?: string;
   release_id?: string | null;
   release?: string;
+  open_blockers: number;
   version_affected?: string;
   version_fixed?: string;
   repro_steps_md?: string;
@@ -155,6 +156,17 @@ export interface Activity {
   entity_type: string;
   issue_key?: string;
   occurred_at: string;
+}
+
+export type RelationKind = "blocks" | "blocked_by" | "duplicates" | "relates" | "caused_by";
+
+export interface IssueRelation {
+  id: string;
+  kind: RelationKind;
+  direction: "out" | "in";
+  issue_key: string;
+  title: string;
+  status: IssueStatus;
 }
 
 export interface Attachment {
@@ -338,6 +350,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ body_md }),
     }),
+  listRelations: (issueKey: string) => request<{ items: IssueRelation[] }>(`/issues/${issueKey}/relations`),
+  addRelation: (issueKey: string, kind: RelationKind, otherIssueKey: string) =>
+    request<IssueRelation>(`/issues/${issueKey}/relations`, {
+      method: "POST",
+      body: JSON.stringify({ kind, issue_key: otherIssueKey }),
+    }),
+  deleteRelation: (id: string) => request<void>(`/relations/${id}`, { method: "DELETE" }),
   updateComment: (id: string, body_md: string) =>
     request<Comment>(`/comments/${id}`, { method: "PATCH", body: JSON.stringify({ body_md }) }),
   deleteComment: (id: string) => request<void>(`/comments/${id}`, { method: "DELETE" }),

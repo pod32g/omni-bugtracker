@@ -1029,7 +1029,11 @@ const selectIssue = `
 	       au.id, au.display_name, au.email,
 	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
 	       COALESCE(array(SELECT c.name FROM issue_components ic JOIN components c ON c.id = ic.component_id WHERE ic.issue_id = i.id ORDER BY c.name), '{}') AS components,
-	       i.milestone_id, m.title, i.release_id, r.version
+	       i.milestone_id, m.title, i.release_id, r.version,
+	       (SELECT count(*) FROM issue_relations rel
+	          JOIN issues b ON b.id = CASE WHEN rel.kind = 'blocks' AND rel.to_issue = i.id THEN rel.from_issue
+	                                       WHEN rel.kind = 'blocked_by' AND rel.from_issue = i.id THEN rel.to_issue END
+	         WHERE b.deleted_at IS NULL AND b.status NOT IN ('resolved','closed')) AS open_blockers
 	FROM issues i
 	JOIN projects p ON p.id = i.project_id
 	LEFT JOIN users ru ON ru.id = i.reporter_id
@@ -1055,6 +1059,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 		&assigneeID, &assigneeName, &assigneeEmail,
 		&i.Labels, &i.Components,
 		&i.MilestoneID, &milestoneTitle, &i.ReleaseID, &releaseVersion,
+		&i.OpenBlockers,
 	)
 	if err != nil {
 		return domain.Issue{}, err

@@ -12,6 +12,7 @@ import {
   type NewIssue,
   type Priority,
   type Project,
+  type RelationKind,
   type Release,
   type User,
 } from "../../lib/api";
@@ -323,6 +324,8 @@ export function IssueDetail() {
             </MetaRow>
           )}
 
+          <LinkedIssues issueKey={issueKey} />
+
           <div className="flex flex-col gap-3 border-t border-hairline pt-5">
             <MicroLabel>Development</MicroLabel>
             {commits.data && commits.data.length > 0 ? (
@@ -365,6 +368,97 @@ export function IssueDetail() {
       </div>
 
       {editing && <EditIssueForm issue={i} onClose={() => setEditing(false)} />}
+    </div>
+  );
+}
+
+// Human labels per direction: an incoming "blocks" edge means the other issue
+// blocks this one, so it reads "blocked by", and so on.
+const RELATION_LABELS: Record<RelationKind, { out: string; in: string }> = {
+  blocks: { out: "blocks", in: "blocked by" },
+  blocked_by: { out: "blocked by", in: "blocks" },
+  duplicates: { out: "duplicates", in: "duplicated by" },
+  relates: { out: "relates to", in: "relates to" },
+  caused_by: { out: "caused by", in: "causes" },
+};
+const RELATION_KINDS: RelationKind[] = ["blocks", "blocked_by", "duplicates", "relates", "caused_by"];
+
+function LinkedIssues({ issueKey }: { issueKey: string }) {
+  const qc = useQueryClient();
+  const relations = useQuery({ queryKey: ["relations", issueKey], queryFn: () => api.listRelations(issueKey) });
+  const [kind, setKind] = useState<RelationKind>("blocks");
+  const [otherKey, setOtherKey] = useState("");
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["relations", issueKey] });
+    qc.invalidateQueries({ queryKey: ["activity", issueKey] });
+    qc.invalidateQueries({ queryKey: ["issues"] }); // open_blockers on cards
+  };
+  const add = useMutation({
+    mutationFn: () => api.addRelation(issueKey, kind, otherKey.trim()),
+    onSuccess: () => {
+      setOtherKey("");
+      invalidate();
+    },
+  });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteRelation(id), onSuccess: invalidate });
+
+  const items = relations.data?.items ?? [];
+
+  return (
+    <div className="flex flex-col gap-2.5 border-t border-hairline pt-5">
+      <MicroLabel>Linked issues</MicroLabel>
+      {items.map((rel) => (
+        <div key={`${rel.id}-${rel.direction}`} className="group flex items-center gap-2 text-sm">
+          <span className="shrink-0 text-xs text-graphite">{RELATION_LABELS[rel.kind][rel.direction]}</span>
+          <Link to={`/issues/${rel.issue_key}`} className="shrink-0 font-mono text-xs font-medium text-blueprint hover:underline">
+            {rel.issue_key}
+          </Link>
+          <span className="truncate text-xs text-graphite-soft" title={rel.title}>
+            {rel.title}
+          </span>
+          <span className="grow" />
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusTone[rel.status].dot}`} title={statusLabel[rel.status]} />
+          <button
+            onClick={() => del.mutate(rel.id)}
+            aria-label="Remove link"
+            className="shrink-0 text-xs text-graphite-soft opacity-0 transition hover:text-critical group-hover:opacity-100"
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      <div className="flex items-center gap-1.5">
+        <select
+          value={kind}
+          onChange={(e) => setKind(e.target.value as RelationKind)}
+          aria-label="Relation kind"
+          className="shrink-0 rounded-md border border-hairline bg-paper px-1.5 py-1 text-xs text-ink outline-none focus:border-blueprint"
+        >
+          {RELATION_KINDS.map((k) => (
+            <option key={k} value={k}>
+              {RELATION_LABELS[k].out}
+            </option>
+          ))}
+        </select>
+        <input
+          value={otherKey}
+          onChange={(e) => setOtherKey(e.target.value.toUpperCase())}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && otherKey.trim()) add.mutate();
+          }}
+          placeholder="BUG-42"
+          className="w-20 grow rounded-md border border-hairline bg-paper px-2 py-1 font-mono text-xs text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
+        />
+        <button
+          disabled={!otherKey.trim() || add.isPending}
+          onClick={() => add.mutate()}
+          className="shrink-0 rounded-md border border-hairline px-2 py-1 text-xs font-medium text-graphite transition hover:border-graphite hover:text-ink disabled:opacity-50"
+        >
+          Link
+        </button>
+      </div>
+      {add.isError && <p className="text-xs text-critical">{(add.error as Error).message}</p>}
     </div>
   );
 }

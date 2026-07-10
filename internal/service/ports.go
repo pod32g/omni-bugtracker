@@ -76,6 +76,12 @@ type Repository interface {
 	UpsertProjectMember(ctx context.Context, projectKey string, userID uuid.UUID, role domain.Role) (domain.ProjectMember, error)
 	RemoveProjectMember(ctx context.Context, projectKey string, userID uuid.UUID) (bool, error)
 
+	// Issue relations (blocks / duplicates / relates / caused_by)
+	ListRelations(ctx context.Context, issueID uuid.UUID) ([]domain.IssueRelation, error)
+	CreateRelation(ctx context.Context, fromIssue, toIssue uuid.UUID, kind string, actor uuid.UUID) (domain.IssueRelation, error)
+	GetRelationProjectKeys(ctx context.Context, id uuid.UUID) (fromKey, toKey string, err error)
+	DeleteRelation(ctx context.Context, id, actor uuid.UUID) (bool, error)
+
 	// Global search (Postgres FTS over issues + comments)
 	Search(ctx context.Context, query string, limit int32) ([]domain.SearchHit, error)
 

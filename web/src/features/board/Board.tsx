@@ -111,6 +111,11 @@ function BoardCard({ issue }: { issue: Issue }) {
         <SeverityBar severity={issue.severity} />
         <span className="grow text-sm font-medium leading-tight text-ink">{issue.title}</span>
       </div>
+      {issue.open_blockers > 0 && (
+        <span className="self-start rounded-full bg-critical-soft px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-caps text-critical">
+          blocked · {issue.open_blockers}
+        </span>
+      )}
       {issue.labels && issue.labels.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           {issue.labels.slice(0, 3).map((l) => (

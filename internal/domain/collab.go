@@ -34,6 +34,18 @@ type LinkedCommit struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// IssueRelation is one edge of the relation graph as seen from a given issue.
+// Kind is the stored canonical kind; Direction says whether this issue is the
+// from-side ("out") or to-side ("in") — the UI renders the inverse label for "in".
+type IssueRelation struct {
+	ID        uuid.UUID   `json:"id"`
+	Kind      string      `json:"kind"`
+	Direction string      `json:"direction"` // out | in
+	IssueKey  string      `json:"issue_key"` // the other issue
+	Title     string      `json:"title"`
+	Status    IssueStatus `json:"status"`
+}
+
 // Attachment is file metadata; bytes live in the configured storage backend
 // (local disk) under ObjectKey.
 type Attachment struct {

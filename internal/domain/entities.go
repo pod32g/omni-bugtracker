@@ -102,6 +102,7 @@ type Issue struct {
 	Milestone       string      `json:"milestone,omitempty"` // title, resolved via join
 	ReleaseID       *uuid.UUID  `json:"release_id,omitempty"`
 	Release         string      `json:"release,omitempty"` // version, resolved via join
+	OpenBlockers    int         `json:"open_blockers"`     // unresolved issues blocking this one
 	VersionAffected string      `json:"version_affected"`
 	VersionFixed    string      `json:"version_fixed"`
 	GitCommitSHA    string      `json:"git_commit_sha"`

@@ -84,6 +84,9 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/issues/{issueKey}/comments", h.addComment)
 	r.Patch("/comments/{id}", h.updateComment)
 	r.Delete("/comments/{id}", h.deleteComment)
+	r.Get("/issues/{issueKey}/relations", h.listRelations)
+	r.Post("/issues/{issueKey}/relations", h.addRelation)
+	r.Delete("/relations/{id}", h.deleteRelation)
 	r.Get("/issues/{issueKey}/attachments", h.listAttachments)
 	r.Post("/issues/{issueKey}/attachments", h.uploadAttachment)
 	r.Get("/attachments/{id}", h.downloadAttachment)
@@ -1092,6 +1095,104 @@ func (h *httpHandlers) addComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, c)
+}
+
+// ── issue relations ──
+
+var validRelationKinds = map[string]bool{
+	"blocks": true, "blocked_by": true, "duplicates": true, "relates": true, "caused_by": true,
+}
+
+func (h *httpHandlers) listRelations(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.repo.ListRelations(r.Context(), issue.ID)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.IssueRelation{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *httpHandlers) addRelation(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueUpdate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
+		return
+	}
+	var body struct {
+		Kind     string `json:"kind"`
+		IssueKey string `json:"issue_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if !validRelationKinds[body.Kind] {
+		httpapi.WriteValidation(w, map[string]string{"kind": "must be blocks, blocked_by, duplicates, relates, or caused_by"})
+		return
+	}
+	targetKey, targetNumber, ok := splitIssueKey(strings.ToUpper(strings.TrimSpace(body.IssueKey)))
+	if !ok {
+		httpapi.WriteValidation(w, map[string]string{"issue_key": "expected e.g. BUG-421"})
+		return
+	}
+	target, err := h.issues.Get(r.Context(), targetKey, targetNumber)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such issue: "+body.IssueKey)
+		return
+	}
+	if target.ID == issue.ID {
+		httpapi.WriteProblem(w, http.StatusConflict, "invalid relation", "an issue cannot relate to itself")
+		return
+	}
+	actor, _ := uuid.Parse(p.UserID)
+	rel, err := h.repo.CreateRelation(r.Context(), issue.ID, target.ID, body.Kind, actor)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "link failed",
+			"this relation may already exist: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, rel)
+}
+
+func (h *httpHandlers) deleteRelation(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad relation id", "")
+		return
+	}
+	fromKey, toKey, err := h.repo.GetRelationProjectKeys(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such relation")
+		return
+	}
+	if !h.canOnProject(r.Context(), p, fromKey, auth.PermIssueUpdate) &&
+		!h.canOnProject(r.Context(), p, toKey, auth.PermIssueUpdate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
+		return
+	}
+	actor, _ := uuid.Parse(p.UserID)
+	ok, err := h.repo.DeleteRelation(r.Context(), id, actor)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "unlink failed", err.Error())
+		return
+	}
+	if !ok {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such relation")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // updateComment lets the author revise their own comment (stamps edited_at).

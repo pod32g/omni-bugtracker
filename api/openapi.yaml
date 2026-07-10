@@ -477,6 +477,51 @@ paths:
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Comment" } } } }
 
+  /issues/{issueKey}/relations:
+    parameters: [{ $ref: "#/components/parameters/IssueKey" }]
+    get:
+      tags: [issues]
+      operationId: listIssueRelations
+      description: Both directions; direction "in" means this issue is the to-side (render the inverse label).
+      responses:
+        "200":
+          description: relations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/IssueRelation" } }
+    post:
+      tags: [issues]
+      operationId: addIssueRelation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, issue_key]
+              properties:
+                kind: { $ref: "#/components/schemas/RelationKind" }
+                issue_key: { type: string, description: "the other issue, e.g. BUG-421" }
+      responses:
+        "201": { description: linked, content: { application/json: { schema: { $ref: "#/components/schemas/IssueRelation" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /relations/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [issues]
+      operationId: deleteIssueRelation
+      responses:
+        "204": { description: unlinked }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /comments/{id}:
     parameters:
       - name: id
@@ -831,6 +876,16 @@ components:
         expected_md: { type: string }
         actual_md: { type: string }
         environment_md: { type: string }
+    IssueRelation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/RelationKind" }
+        direction: { type: string, enum: [out, in] }
+        issue_key: { type: string }
+        title: { type: string }
+        status: { $ref: "#/components/schemas/IssueStatus" }
+
     ProjectMember:
       type: object
       properties:
