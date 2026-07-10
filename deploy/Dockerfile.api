@@ -5,12 +5,16 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server \
- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
+ && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate \
+ && mkdir -p /out/data/attachments
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/server /app/server
 COPY --from=build /out/migrate /app/migrate
+# Attachment storage: owned by nonroot (65532) so the named volume mounted
+# here inherits writable ownership when it is first initialized.
+COPY --from=build --chown=65532:65532 /out/data /app/data
 COPY config.yaml /app/config.yaml
 COPY db/migrations /app/db/migrations
 EXPOSE 8080
