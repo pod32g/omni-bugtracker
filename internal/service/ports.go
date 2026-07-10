@@ -85,6 +85,17 @@ type Repository interface {
 	// Returns the issue and whether it was newly created.
 	IngestObsAlert(ctx context.Context, in ObsAlertInput, publish ObsPublishFn) (domain.Issue, bool, error)
 
+	// Automation rules (trigger → actions on issue events)
+	ListAutomationRules(ctx context.Context) ([]domain.AutomationRule, error)
+	MatchingAutomationRules(ctx context.Context, projectKey, event string) ([]domain.AutomationRule, error)
+	CreateAutomationRule(ctx context.Context, in CreateAutomationRuleInput) (domain.AutomationRule, error)
+	UpdateAutomationRule(ctx context.Context, in UpdateAutomationRuleInput) (domain.AutomationRule, error)
+	DeleteAutomationRule(ctx context.Context, id uuid.UUID) (bool, error)
+	ListAutomationRuns(ctx context.Context, limit int32) ([]domain.AutomationRun, error)
+	RecordAutomationRun(ctx context.Context, ruleID, issueID uuid.UUID, status string, log []byte) error
+	// EnsureBotUser upserts a system user (e.g. the automation actor) and returns its id.
+	EnsureBotUser(ctx context.Context, identitySub, displayName, email string) (uuid.UUID, error)
+
 	// Webhooks (outbound event subscriptions)
 	ListWebhooks(ctx context.Context) ([]domain.Webhook, error)
 	CreateWebhook(ctx context.Context, in CreateWebhookInput) (domain.Webhook, error)
@@ -266,6 +277,25 @@ type ObsAlertInput struct {
 	DetailsMD   string
 	StackTrace  string
 	Severity    *domain.Severity
+}
+
+type CreateAutomationRuleInput struct {
+	ProjectKey string // empty = all projects
+	Name       string
+	Priority   int
+	Trigger    json.RawMessage
+	Actions    json.RawMessage
+	CreatedBy  uuid.UUID
+}
+
+// UpdateAutomationRuleInput is a partial edit; nil = unchanged.
+type UpdateAutomationRuleInput struct {
+	ID       uuid.UUID
+	Name     *string
+	Priority *int
+	IsActive *bool
+	Trigger  json.RawMessage // nil = unchanged
+	Actions  json.RawMessage // nil = unchanged
 }
 
 type CreateWebhookInput struct {

@@ -44,10 +44,12 @@ type IndexJobArgs struct {
 func (IndexJobArgs) Kind() string                 { return "search_index" }
 func (IndexJobArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "integrations"} }
 
-// AutomationJobArgs → evaluate automation rules against an event.
+// AutomationJobArgs → evaluate automation rules against an event. ActorID lets
+// the worker skip events caused by the automation bot itself (loop guard).
 type AutomationJobArgs struct {
 	EventType string `json:"event_type"`
 	IssueID   string `json:"issue_id"`
+	ActorID   string `json:"actor_id,omitempty"`
 }
 
 func (AutomationJobArgs) Kind() string                 { return "automation" }

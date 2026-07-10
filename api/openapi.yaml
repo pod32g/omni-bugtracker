@@ -722,15 +722,82 @@ paths:
       tags: [automation]
       operationId: listAutomationRules
       responses:
-        "200": { description: rules, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AutomationRule" } } } } }
+        "200":
+          description: rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AutomationRule" } }
     post:
       tags: [automation]
       operationId: createAutomationRule
+      description: >
+        Trigger: {"event": "issue.created"|"*", "conditions": {type?, severity?, priority?,
+        label?, component?, source?}} — all set conditions must match. Actions: ordered
+        [{"kind": set_priority|set_severity|set_assignee|add_label|set_status|add_comment,
+        "value": "..."}], executed by the Automation bot (whose own events never re-trigger
+        rules).
       requestBody:
         required: true
-        content: { application/json: { schema: { $ref: "#/components/schemas/AutomationRule" } } }
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, trigger, actions]
+              properties:
+                name: { type: string }
+                project_key: { type: string, description: "empty = all projects" }
+                priority: { type: integer, default: 100, description: "lower runs first" }
+                trigger: { type: object, additionalProperties: true }
+                actions: { type: array, items: { type: object, additionalProperties: true } }
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/AutomationRule" } } } }
+
+  /automation/rules/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [automation]
+      operationId: updateAutomationRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                priority: { type: integer }
+                is_active: { type: boolean }
+                trigger: { type: object, additionalProperties: true }
+                actions: { type: array, items: { type: object, additionalProperties: true } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/AutomationRule" } } } }
+    delete:
+      tags: [automation]
+      operationId: deleteAutomationRule
+      responses:
+        "204": { description: deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /automation/runs:
+    get:
+      tags: [automation]
+      operationId: listAutomationRuns
+      responses:
+        "200":
+          description: recent rule evaluations, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AutomationRun" } }
 
   /webhooks:
     get:
@@ -1207,12 +1274,24 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
-        project_key: { type: string, nullable: true }
+        project_key: { type: string, description: "empty = all projects" }
         name: { type: string }
         is_active: { type: boolean }
         priority: { type: integer }
         trigger: { type: object, additionalProperties: true }
         actions: { type: array, items: { type: object, additionalProperties: true } }
+        created_at: { type: string, format: date-time }
+
+    AutomationRun:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        rule_id: { type: string, format: uuid }
+        rule_name: { type: string }
+        issue_key: { type: string }
+        status: { type: string, enum: [matched, error] }
+        log: { type: object, additionalProperties: true }
+        ran_at: { type: string, format: date-time }
 
     Webhook:
       type: object

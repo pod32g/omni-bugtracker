@@ -140,7 +140,12 @@ export function Settings() {
           </div>
         </section>
 
-        {["owner", "admin", "maintainer"].includes(me.data?.role ?? "") && <WebhooksSection />}
+        {["owner", "admin", "maintainer"].includes(me.data?.role ?? "") && (
+          <>
+            <AutomationSection />
+            <WebhooksSection />
+          </>
+        )}
 
         {canManageRoles && (
           <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
@@ -356,5 +361,161 @@ function DeliveryLog({ webhookId }: { webhookId: string }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// Automation rules admin: when <event> [+ conditions] then <action>.
+const RULE_EVENTS = ["issue.created", "comment.created", "issue.status_changed", "issue.resolved", "issue.reopened", "*"];
+const ACTION_KINDS = [
+  { kind: "set_priority", label: "set priority to", values: ["p0", "p1", "p2", "p3"] },
+  { kind: "set_severity", label: "set severity to", values: ["critical", "high", "medium", "low"] },
+  { kind: "add_label", label: "add label", values: null },
+  { kind: "set_status", label: "transition to", values: ["in_progress", "blocked", "ready_for_review", "resolved", "closed", "reopened"] },
+  { kind: "add_comment", label: "comment", values: null },
+];
+
+export function AutomationSection() {
+  const qc = useQueryClient();
+  const rules = useQuery({ queryKey: ["automation-rules"], queryFn: () => api.listAutomationRules() });
+  const runs = useQuery({ queryKey: ["automation-runs"], queryFn: () => api.listAutomationRuns(), refetchInterval: 10000 });
+
+  const [name, setName] = useState("");
+  const [event, setEvent] = useState("issue.created");
+  const [condSeverity, setCondSeverity] = useState("");
+  const [actionKind, setActionKind] = useState("set_priority");
+  const [actionValue, setActionValue] = useState("p1");
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["automation-rules"] });
+  const create = useMutation({
+    mutationFn: () =>
+      api.createAutomationRule({
+        name: name.trim(),
+        trigger: { event, conditions: condSeverity ? { severity: condSeverity } : undefined },
+        actions: [{ kind: actionKind, value: actionValue.trim() }],
+      }),
+    onSuccess: () => {
+      setName("");
+      invalidate();
+    },
+  });
+  const toggle = useMutation({
+    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) => api.updateAutomationRule(id, { is_active }),
+    onSuccess: invalidate,
+  });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteAutomationRule(id), onSuccess: invalidate });
+
+  const items = rules.data?.items ?? [];
+  const kindMeta = ACTION_KINDS.find((k) => k.kind === actionKind)!;
+  const inputClass =
+    "rounded-md border border-hairline bg-paper px-2.5 py-2 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint";
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold text-ink">Automation</h2>
+        <p className="text-sm leading-relaxed text-graphite">
+          When an event fires (optionally filtered), the Automation bot applies actions — e.g. new critical bugs get
+          P0, or reopened issues get a triage label. Bot actions never re-trigger rules.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Rule name" className={`${inputClass} w-40`} />
+        <span className="pb-2 text-sm text-graphite-soft">when</span>
+        <select value={event} onChange={(e) => setEvent(e.target.value)} className={inputClass}>
+          {RULE_EVENTS.map((ev) => (
+            <option key={ev} value={ev}>{ev === "*" ? "any event" : ev}</option>
+          ))}
+        </select>
+        <select value={condSeverity} onChange={(e) => setCondSeverity(e.target.value)} className={inputClass} title="Optional severity condition">
+          <option value="">any severity</option>
+          {["critical", "high", "medium", "low"].map((s) => (
+            <option key={s} value={s}>severity {s}</option>
+          ))}
+        </select>
+        <span className="pb-2 text-sm text-graphite-soft">then</span>
+        <select
+          value={actionKind}
+          onChange={(e) => {
+            const meta = ACTION_KINDS.find((k) => k.kind === e.target.value)!;
+            setActionKind(e.target.value);
+            setActionValue(meta.values ? meta.values[0] : "");
+          }}
+          className={inputClass}
+        >
+          {ACTION_KINDS.map((k) => (
+            <option key={k.kind} value={k.kind}>{k.label}</option>
+          ))}
+        </select>
+        {kindMeta.values ? (
+          <select value={actionValue} onChange={(e) => setActionValue(e.target.value)} className={inputClass}>
+            {kindMeta.values.map((v) => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+        ) : (
+          <input value={actionValue} onChange={(e) => setActionValue(e.target.value)} placeholder="value…" className={`${inputClass} w-36`} />
+        )}
+        <button
+          disabled={!name.trim() || !actionValue.trim() || create.isPending}
+          onClick={() => create.mutate()}
+          className="h-[38px] rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+        >
+          Add rule
+        </button>
+      </div>
+      {create.isError && <p className="text-sm text-critical">{(create.error as Error).message}</p>}
+
+      <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
+        {rules.isSuccess && items.length === 0 && <div className="p-4 text-sm text-graphite-soft">No rules yet.</div>}
+        {items.map((r) => (
+          <div key={r.id} className="flex items-center gap-3 p-3.5">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${r.is_active ? "bg-resolved" : "bg-hairline"}`} />
+            <div className="min-w-0 grow">
+              <div className="text-sm font-medium text-ink">{r.name}</div>
+              <div className="truncate font-mono text-xs text-graphite-soft">
+                when {r.trigger.event}
+                {r.trigger.conditions && Object.entries(r.trigger.conditions).map(([k, v]) => ` · ${k}=${v}`)}
+                {" → "}
+                {r.actions.map((a) => `${a.kind}:${a.value}`).join(", ")}
+                {r.project_key ? ` · ${r.project_key}` : " · all projects"}
+              </div>
+            </div>
+            <button
+              onClick={() => toggle.mutate({ id: r.id, is_active: !r.is_active })}
+              className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink"
+            >
+              {r.is_active ? "Disable" : "Enable"}
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm(`Delete rule “${r.name}”?`)) del.mutate(r.id);
+              }}
+              className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-critical transition hover:border-critical"
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {(runs.data?.items.length ?? 0) > 0 && (
+        <div className="flex flex-col gap-1">
+          <span className="font-mono text-[10px] font-medium uppercase tracking-caps text-graphite-soft">
+            Recent runs
+          </span>
+          {runs.data!.items.slice(0, 8).map((run) => (
+            <div key={run.id} className="flex items-center gap-3 font-mono text-xs">
+              <span className={`w-14 font-semibold uppercase ${run.status === "matched" ? "text-resolved" : "text-critical"}`}>
+                {run.status}
+              </span>
+              <span className="w-44 truncate text-graphite">{run.rule_name}</span>
+              <span className="text-blueprint">{run.issue_key}</span>
+              <span className="text-graphite-soft">{timeAgo(run.ran_at)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

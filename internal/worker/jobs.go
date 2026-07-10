@@ -45,7 +45,9 @@ func (w *eventWorker) Work(ctx context.Context, job *river.Job[events.DomainEven
 		if _, err := client.Insert(ctx, events.IndexJobArgs{DocType: "issue", DocID: ev.IssueID}, nil); err != nil {
 			return err
 		}
-		if _, err := client.Insert(ctx, events.AutomationJobArgs{EventType: ev.EventType, IssueID: ev.IssueID}, nil); err != nil {
+		if _, err := client.Insert(ctx, events.AutomationJobArgs{
+			EventType: ev.EventType, IssueID: ev.IssueID, ActorID: ev.ActorID,
+		}, nil); err != nil {
 			return err
 		}
 	}
@@ -301,13 +303,154 @@ type automationWorker struct {
 	d Deps
 }
 
+const automationBotSub = "automation|system"
+
+type ruleTrigger struct {
+	Event      string `json:"event"`
+	Conditions struct {
+		Type      string `json:"type,omitempty"`
+		Severity  string `json:"severity,omitempty"`
+		Priority  string `json:"priority,omitempty"`
+		Label     string `json:"label,omitempty"`
+		Component string `json:"component,omitempty"`
+		Source    string `json:"source,omitempty"`
+	} `json:"conditions"`
+}
+
+type ruleAction struct {
+	Kind  string `json:"kind"` // set_priority|set_severity|set_assignee|add_label|set_status|add_comment
+	Value string `json:"value"`
+}
+
 func (w *automationWorker) Work(ctx context.Context, job *river.Job[events.AutomationJobArgs]) error {
-	// TODO: load active rules (project + global), evaluate trigger AST, run matched actions.
-	// A per-issue/per-rule cooldown + source=automation guard prevents feedback loops.
-	w.d.Metrics.JobsProcessed.WithLabelValues("automation", "noop").Inc()
-	_ = ctx
-	_ = job
+	botID, err := w.d.Store.EnsureBotUser(ctx, automationBotSub, "Automation", "automation@system.local")
+	if err != nil {
+		return err
+	}
+	// Loop guard: never evaluate events the automation bot itself caused.
+	if job.Args.ActorID == botID.String() {
+		w.d.Metrics.JobsProcessed.WithLabelValues("automation", "self_skip").Inc()
+		return nil
+	}
+	issueID, err := uuid.Parse(job.Args.IssueID)
+	if err != nil {
+		return nil //nolint:nilerr
+	}
+	issue, err := w.d.Store.GetIssueByID(ctx, issueID)
+	if err != nil {
+		return nil //nolint:nilerr // deleted before evaluation
+	}
+	rules, err := w.d.Store.MatchingAutomationRules(ctx, issue.ProjectKey, job.Args.EventType)
+	if err != nil {
+		return err
+	}
+
+	client := river.ClientFromContext[pgx.Tx](ctx)
+	publish := func(tx pgx.Tx) error {
+		_, err := client.InsertTx(ctx, tx, events.DomainEventArgs{
+			EventType: events.IssueUpdated, IssueID: issue.ID.String(), ActorID: botID.String(),
+		}, nil)
+		return err
+	}
+
+	for _, rule := range rules {
+		var trig ruleTrigger
+		if err := json.Unmarshal(rule.Trigger, &trig); err != nil || !conditionsMatch(trig, issue) {
+			continue
+		}
+		var actions []ruleAction
+		if err := json.Unmarshal(rule.Actions, &actions); err != nil {
+			_ = w.d.Store.RecordAutomationRun(ctx, rule.ID, issue.ID, "error",
+				[]byte(`{"error":"bad actions json"}`))
+			continue
+		}
+		applied, actErr := w.applyActions(ctx, issue, actions, botID, publish)
+		status, logLine := "matched", `{"actions_applied":`+strconv.Itoa(applied)+`}`
+		if actErr != nil {
+			status = "error"
+			logJSON, _ := json.Marshal(map[string]any{"actions_applied": applied, "error": actErr.Error()})
+			logLine = string(logJSON)
+		}
+		_ = w.d.Store.RecordAutomationRun(ctx, rule.ID, issue.ID, status, []byte(logLine))
+		w.d.Metrics.JobsProcessed.WithLabelValues("automation", status).Inc()
+		// Refresh the issue so subsequent rules see prior rules' effects.
+		if updated, err := w.d.Store.GetIssueByID(ctx, issue.ID); err == nil {
+			issue = updated
+		}
+	}
 	return nil
+}
+
+func conditionsMatch(t ruleTrigger, issue domain.Issue) bool {
+	c := t.Conditions
+	if c.Type != "" && string(issue.Type) != c.Type {
+		return false
+	}
+	if c.Severity != "" && (issue.Severity == nil || string(*issue.Severity) != c.Severity) {
+		return false
+	}
+	if c.Priority != "" && string(issue.Priority) != c.Priority {
+		return false
+	}
+	if c.Source != "" && string(issue.Source) != c.Source {
+		return false
+	}
+	if c.Label != "" && !containsFold(issue.Labels, c.Label) {
+		return false
+	}
+	if c.Component != "" && !containsFold(issue.Components, c.Component) {
+		return false
+	}
+	return true
+}
+
+func containsFold(list []string, want string) bool {
+	for _, v := range list {
+		if strings.EqualFold(v, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *automationWorker) applyActions(ctx context.Context, issue domain.Issue, actions []ruleAction,
+	botID uuid.UUID, publish service.PublishFn) (int, error) {
+	applied := 0
+	for _, a := range actions {
+		var err error
+		switch a.Kind {
+		case "set_priority":
+			p := domain.Priority(a.Value)
+			_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{Priority: &p}, publish)
+		case "set_severity":
+			s := domain.Severity(a.Value)
+			_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{Severity: &s}, publish)
+		case "set_assignee":
+			var uid uuid.UUID
+			if uid, err = uuid.Parse(a.Value); err == nil {
+				_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{AssigneeID: &uid}, publish)
+			}
+		case "add_label":
+			merged := append(append([]string{}, issue.Labels...), a.Value)
+			_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{Labels: &merged}, publish)
+		case "set_status":
+			to := domain.IssueStatus(a.Value)
+			if !domain.CanTransition(issue.Status, to) {
+				err = errors.New("invalid transition " + string(issue.Status) + " -> " + a.Value)
+			} else {
+				_, err = w.d.Store.TransitionIssue(ctx, issue.ID, to, botID, publish)
+			}
+		case "add_comment":
+			_, err = w.d.Store.AddComment(ctx, issue.ID, botID, a.Value, publish)
+		default:
+			err = errors.New("unknown action kind " + a.Kind)
+		}
+		if err != nil {
+			return applied, err
+		}
+		applied++
+	}
+	return applied, nil
 }
 
 // gitIngestWorker parses commit/PR payloads for issue references.

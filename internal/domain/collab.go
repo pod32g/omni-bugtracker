@@ -34,6 +34,32 @@ type LinkedCommit struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// AutomationRule is a trigger→actions rule evaluated against issue events.
+// Trigger: {"event": "issue.created"|"*", "conditions": {type?, severity?,
+// priority?, label?, component?, source?}} — all set conditions must match.
+// Actions: ordered [{"kind": "...", "value": "..."}].
+type AutomationRule struct {
+	ID         uuid.UUID       `json:"id"`
+	ProjectKey string          `json:"project_key,omitempty"` // empty = all projects
+	Name       string          `json:"name"`
+	IsActive   bool            `json:"is_active"`
+	Priority   int             `json:"priority"` // lower runs first
+	Trigger    json.RawMessage `json:"trigger"`
+	Actions    json.RawMessage `json:"actions"`
+	CreatedAt  time.Time       `json:"created_at"`
+}
+
+// AutomationRun is one evaluation record of a rule against an issue.
+type AutomationRun struct {
+	ID       uuid.UUID       `json:"id"`
+	RuleID   uuid.UUID       `json:"rule_id"`
+	RuleName string          `json:"rule_name,omitempty"`
+	IssueKey string          `json:"issue_key,omitempty"`
+	Status   string          `json:"status"` // matched | error
+	Log      json.RawMessage `json:"log"`
+	RanAt    time.Time       `json:"ran_at"`
+}
+
 // Webhook is an outbound HTTP subscription to domain events.
 type Webhook struct {
 	ID         uuid.UUID `json:"id"`

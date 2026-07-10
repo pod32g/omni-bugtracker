@@ -158,6 +158,27 @@ export interface Activity {
   occurred_at: string;
 }
 
+export interface AutomationRule {
+  id: string;
+  project_key?: string;
+  name: string;
+  is_active: boolean;
+  priority: number;
+  trigger: { event: string; conditions?: Record<string, string> };
+  actions: { kind: string; value: string }[];
+  created_at: string;
+}
+
+export interface AutomationRun {
+  id: string;
+  rule_id: string;
+  rule_name?: string;
+  issue_key?: string;
+  status: "matched" | "error";
+  log: Record<string, unknown>;
+  ran_at: string;
+}
+
 export interface Webhook {
   id: string;
   project_key?: string;
@@ -376,6 +397,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ body_md }),
     }),
+  listAutomationRules: () => request<{ items: AutomationRule[] }>("/automation/rules"),
+  createAutomationRule: (body: {
+    name: string;
+    project_key?: string;
+    priority?: number;
+    trigger: { event: string; conditions?: Record<string, string> };
+    actions: { kind: string; value: string }[];
+  }) => request<AutomationRule>("/automation/rules", { method: "POST", body: JSON.stringify(body) }),
+  updateAutomationRule: (id: string, patch: { name?: string; is_active?: boolean; priority?: number }) =>
+    request<AutomationRule>(`/automation/rules/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteAutomationRule: (id: string) => request<void>(`/automation/rules/${id}`, { method: "DELETE" }),
+  listAutomationRuns: () => request<{ items: AutomationRun[] }>("/automation/runs"),
   listWebhooks: () => request<{ items: Webhook[] }>("/webhooks"),
   createWebhook: (body: { url: string; secret?: string; events?: string[]; project_key?: string }) =>
     request<Webhook>("/webhooks", { method: "POST", body: JSON.stringify(body) }),

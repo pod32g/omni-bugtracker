@@ -56,6 +56,11 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Patch("/users/{id}/role", h.updateUserRole)
 	r.Get("/dashboards/overview", h.dashboard)
 	r.Get("/search", h.search)
+	r.Get("/automation/rules", h.listAutomationRules)
+	r.Post("/automation/rules", h.createAutomationRule)
+	r.Patch("/automation/rules/{id}", h.updateAutomationRule)
+	r.Delete("/automation/rules/{id}", h.deleteAutomationRule)
+	r.Get("/automation/runs", h.listAutomationRuns)
 	r.Get("/webhooks", h.listWebhooks)
 	r.Post("/webhooks", h.createWebhook)
 	r.Patch("/webhooks/{id}", h.updateWebhook)
@@ -337,6 +342,188 @@ func (h *httpHandlers) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// ── automation rules ──
+
+var validActionKinds = map[string]bool{
+	"set_priority": true, "set_severity": true, "set_assignee": true,
+	"add_label": true, "set_status": true, "add_comment": true,
+}
+
+func (h *httpHandlers) requireAutomationEdit(w http.ResponseWriter, r *http.Request) bool {
+	if !auth.FromContext(r.Context()).Can(auth.PermAutomationEdit) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing automation:edit")
+		return false
+	}
+	return true
+}
+
+// validateRulePayload checks trigger/actions shape shared by create and update.
+func validateRulePayload(trigger, actions json.RawMessage) map[string]string {
+	fields := map[string]string{}
+	if trigger != nil {
+		var t struct {
+			Event string `json:"event"`
+		}
+		if err := json.Unmarshal(trigger, &t); err != nil || strings.TrimSpace(t.Event) == "" {
+			fields["trigger"] = `must be {"event": "...", "conditions": {...}} (event required, "*" = any)`
+		}
+	}
+	if actions != nil {
+		var acts []struct {
+			Kind  string `json:"kind"`
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal(actions, &acts); err != nil || len(acts) == 0 {
+			fields["actions"] = "must be a non-empty array of {kind, value}"
+		} else {
+			for _, a := range acts {
+				if !validActionKinds[a.Kind] {
+					fields["actions"] = "unknown kind " + a.Kind
+				} else if strings.TrimSpace(a.Value) == "" {
+					fields["actions"] = a.Kind + " needs a value"
+				}
+			}
+		}
+	}
+	return fields
+}
+
+func (h *httpHandlers) listAutomationRules(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAutomationEdit(w, r) {
+		return
+	}
+	items, err := h.repo.ListAutomationRules(r.Context())
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.AutomationRule{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *httpHandlers) createAutomationRule(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAutomationEdit(w, r) {
+		return
+	}
+	var body struct {
+		Name       string          `json:"name"`
+		ProjectKey string          `json:"project_key"`
+		Priority   int             `json:"priority"`
+		Trigger    json.RawMessage `json:"trigger"`
+		Actions    json.RawMessage `json:"actions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	fields := validateRulePayload(body.Trigger, body.Actions)
+	if strings.TrimSpace(body.Name) == "" {
+		fields["name"] = "required"
+	}
+	if body.Trigger == nil {
+		fields["trigger"] = "required"
+	}
+	if body.Actions == nil {
+		fields["actions"] = "required"
+	}
+	if len(fields) > 0 {
+		httpapi.WriteValidation(w, fields)
+		return
+	}
+	if body.ProjectKey != "" {
+		if _, err := h.repo.GetProjectByKey(r.Context(), body.ProjectKey); err != nil {
+			httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+			return
+		}
+	}
+	if body.Priority == 0 {
+		body.Priority = 100
+	}
+	creator, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
+	rule, err := h.repo.CreateAutomationRule(r.Context(), CreateAutomationRuleInput{
+		ProjectKey: body.ProjectKey, Name: body.Name, Priority: body.Priority,
+		Trigger: body.Trigger, Actions: body.Actions, CreatedBy: creator,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, rule)
+}
+
+func (h *httpHandlers) updateAutomationRule(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAutomationEdit(w, r) {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad rule id", "")
+		return
+	}
+	var body struct {
+		Name     *string         `json:"name"`
+		Priority *int            `json:"priority"`
+		IsActive *bool           `json:"is_active"`
+		Trigger  json.RawMessage `json:"trigger"`
+		Actions  json.RawMessage `json:"actions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if fields := validateRulePayload(body.Trigger, body.Actions); len(fields) > 0 {
+		httpapi.WriteValidation(w, fields)
+		return
+	}
+	rule, err := h.repo.UpdateAutomationRule(r.Context(), UpdateAutomationRuleInput{
+		ID: id, Name: body.Name, Priority: body.Priority, IsActive: body.IsActive,
+		Trigger: body.Trigger, Actions: body.Actions,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such rule")
+		return
+	}
+	writeJSON(w, http.StatusOK, rule)
+}
+
+func (h *httpHandlers) deleteAutomationRule(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAutomationEdit(w, r) {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad rule id", "")
+		return
+	}
+	ok, err := h.repo.DeleteAutomationRule(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	if !ok {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such rule")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *httpHandlers) listAutomationRuns(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAutomationEdit(w, r) {
+		return
+	}
+	items, err := h.repo.ListAutomationRuns(r.Context(), 25)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.AutomationRun{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // ── webhooks (outbound event subscriptions) ──
