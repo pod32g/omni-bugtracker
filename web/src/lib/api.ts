@@ -61,6 +61,19 @@ export interface Milestone {
   created_at: string;
 }
 
+export interface Release {
+  id: string;
+  version: string;
+  name: string;
+  notes_md: string;
+  state: "draft" | "published";
+  git_tag: string;
+  released_at?: string | null;
+  open_issues: number;
+  done_issues: number;
+  created_at: string;
+}
+
 export interface NewIssue {
   type: IssueType;
   title: string;
@@ -71,6 +84,7 @@ export interface NewIssue {
   labels?: string[];
   components?: string[];
   milestone_id?: string; // PATCH only; zero UUID clears
+  release_id?: string; // PATCH only; zero UUID clears
   repro_steps_md?: string;
   expected_md?: string;
   actual_md?: string;
@@ -97,6 +111,8 @@ export interface Issue {
   components: string[];
   milestone_id?: string | null;
   milestone?: string;
+  release_id?: string | null;
+  release?: string;
   version_affected?: string;
   version_fixed?: string;
   repro_steps_md?: string;
@@ -241,6 +257,14 @@ export const api = {
     patch: { title?: string; description_md?: string; due_on?: string; state?: "open" | "closed" },
   ) => request<Milestone>(`/milestones/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteMilestone: (id: string) => request<void>(`/milestones/${id}`, { method: "DELETE" }),
+  listReleases: (projectKey: string) => request<{ items: Release[] }>(`/projects/${projectKey}/releases`),
+  createRelease: (projectKey: string, body: { version: string; name?: string; notes_md?: string; git_tag?: string }) =>
+    request<Release>(`/projects/${projectKey}/releases`, { method: "POST", body: JSON.stringify(body) }),
+  updateRelease: (
+    id: string,
+    patch: { version?: string; name?: string; notes_md?: string; git_tag?: string; state?: "draft" | "published" },
+  ) => request<Release>(`/releases/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteRelease: (id: string) => request<void>(`/releases/${id}`, { method: "DELETE" }),
   listIssues: (projectKey: string, filter = "", sort = "") =>
     request<{ items: Issue[]; total: number }>(
       `/projects/${projectKey}/issues?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}`,

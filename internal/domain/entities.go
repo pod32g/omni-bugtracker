@@ -48,6 +48,20 @@ type Milestone struct {
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
+// Release is a project-scoped shippable version issues can be targeted at.
+type Release struct {
+	ID         uuid.UUID  `json:"id"`
+	Version    string     `json:"version"` // e.g. "2.1.0"
+	Name       string     `json:"name"`
+	NotesMD    string     `json:"notes_md"`
+	State      string     `json:"state"` // draft | published
+	GitTag     string     `json:"git_tag"`
+	ReleasedAt *time.Time `json:"released_at,omitempty"`
+	OpenIssues int        `json:"open_issues"`
+	DoneIssues int        `json:"done_issues"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
 // Component is a project-scoped area of ownership (e.g. "api", "web", "infra").
 type Component struct {
 	ID            uuid.UUID  `json:"id"`
@@ -75,6 +89,8 @@ type Issue struct {
 	Components      []string    `json:"components"`
 	MilestoneID     *uuid.UUID  `json:"milestone_id,omitempty"`
 	Milestone       string      `json:"milestone,omitempty"` // title, resolved via join
+	ReleaseID       *uuid.UUID  `json:"release_id,omitempty"`
+	Release         string      `json:"release,omitempty"` // version, resolved via join
 	VersionAffected string      `json:"version_affected"`
 	VersionFixed    string      `json:"version_fixed"`
 	GitCommitSHA    string      `json:"git_commit_sha"`

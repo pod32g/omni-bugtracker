@@ -11,6 +11,7 @@ import {
   type NewIssue,
   type Priority,
   type Project,
+  type Release,
   type User,
 } from "../../lib/api";
 import { humanizeVerb, timeAgo } from "../../lib/activity";
@@ -42,6 +43,11 @@ export function IssueDetail() {
   const milestones = useQuery({
     queryKey: ["milestones", projectKeyOfIssue],
     queryFn: () => api.listMilestones(projectKeyOfIssue),
+    enabled: !!projectKeyOfIssue,
+  });
+  const releases = useQuery({
+    queryKey: ["releases", projectKeyOfIssue],
+    queryFn: () => api.listReleases(projectKeyOfIssue),
     enabled: !!projectKeyOfIssue,
   });
 
@@ -287,6 +293,15 @@ export function IssueDetail() {
               milestoneTitle={i.milestone}
               milestones={milestones.data?.items ?? []}
               onChange={(milestone_id) => patch.mutate({ milestone_id })}
+            />
+          </MetaRow>
+
+          <MetaRow label="Release">
+            <ReleaseControl
+              releaseId={i.release_id ?? null}
+              releaseVersion={i.release}
+              releases={releases.data?.items ?? []}
+              onChange={(release_id) => patch.mutate({ release_id })}
             />
           </MetaRow>
 
@@ -540,6 +555,44 @@ function MilestoneControl({
           <option key={m.id} value={m.id}>
             {m.title}
             {m.state === "closed" ? " (closed)" : ""}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function ReleaseControl({
+  releaseId,
+  releaseVersion,
+  releases,
+  onChange,
+}: {
+  releaseId: string | null;
+  releaseVersion?: string;
+  releases: Release[];
+  onChange: (releaseId: string) => void;
+}) {
+  const options = releases.filter((r) => r.state === "draft" || r.id === releaseId);
+  return (
+    <div className="relative">
+      <div className="-mx-1.5 flex items-center gap-2 rounded-md px-1.5 py-1 transition hover:bg-panel">
+        <span className={`font-mono text-sm font-medium ${releaseId ? "text-ink" : "text-graphite-soft"}`}>
+          {releaseId ? releaseVersion || "Release" : "No release"}
+        </span>
+        <IconChevronDown size={12} className="text-graphite-soft" />
+      </div>
+      <select
+        value={releaseId ?? UNASSIGNED}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Change release"
+        className="absolute inset-0 cursor-pointer opacity-0"
+      >
+        <option value={UNASSIGNED}>No release</option>
+        {options.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.version}
+            {r.state === "published" ? " (published)" : ""}
           </option>
         ))}
       </select>

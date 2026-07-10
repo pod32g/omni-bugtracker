@@ -47,6 +47,10 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/projects/{key}/milestones", h.createMilestone)
 	r.Patch("/milestones/{id}", h.updateMilestone)
 	r.Delete("/milestones/{id}", h.deleteMilestone)
+	r.Get("/projects/{key}/releases", h.listReleases)
+	r.Post("/projects/{key}/releases", h.createRelease)
+	r.Patch("/releases/{id}", h.updateRelease)
+	r.Delete("/releases/{id}", h.deleteRelease)
 	r.Get("/projects/{key}/issues", h.listIssues)
 	r.Post("/projects/{key}/issues", h.createIssue)
 	r.Get("/issues/{issueKey}", h.getIssue)
@@ -566,6 +570,122 @@ func (h *httpHandlers) deleteMilestone(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ── releases ──
+
+func (h *httpHandlers) listReleases(w http.ResponseWriter, r *http.Request) {
+	releases, err := h.repo.ListReleases(r.Context(), chi.URLParam(r, "key"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if releases == nil {
+		releases = []domain.Release{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": releases})
+}
+
+func (h *httpHandlers) createRelease(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	key := chi.URLParam(r, "key")
+	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+		return
+	}
+	var body struct {
+		Version string `json:"version"`
+		Name    string `json:"name"`
+		NotesMD string `json:"notes_md"`
+		GitTag  string `json:"git_tag"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Version) == "" {
+		httpapi.WriteValidation(w, map[string]string{"version": "required"})
+		return
+	}
+	creator, _ := uuid.Parse(p.UserID)
+	rel, err := h.repo.CreateRelease(r.Context(), CreateReleaseInput{
+		ProjectKey: key, Version: body.Version, Name: body.Name, NotesMD: body.NotesMD,
+		GitTag: body.GitTag, CreatedBy: creator,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "create failed",
+			"a release with that version may already exist: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, rel)
+}
+
+func (h *httpHandlers) updateRelease(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad release id", "")
+		return
+	}
+	var body struct {
+		Version *string `json:"version"`
+		Name    *string `json:"name"`
+		NotesMD *string `json:"notes_md"`
+		GitTag  *string `json:"git_tag"`
+		State   *string `json:"state"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.State != nil && *body.State != "draft" && *body.State != "published" {
+		httpapi.WriteValidation(w, map[string]string{"state": "must be draft or published"})
+		return
+	}
+	if body.Version != nil && strings.TrimSpace(*body.Version) == "" {
+		httpapi.WriteValidation(w, map[string]string{"version": "cannot be empty"})
+		return
+	}
+	rel, err := h.repo.UpdateRelease(r.Context(), UpdateReleaseInput{
+		ID: id, Version: body.Version, Name: body.Name, NotesMD: body.NotesMD,
+		GitTag: body.GitTag, State: body.State,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "update failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rel)
+}
+
+func (h *httpHandlers) deleteRelease(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad release id", "")
+		return
+	}
+	ok, err := h.repo.DeleteRelease(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	if !ok {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such release")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	key := chi.URLParam(r, "key")
@@ -667,6 +787,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		Labels          *[]string         `json:"labels"`
 		Components      *[]string         `json:"components"`
 		MilestoneID     *uuid.UUID        `json:"milestone_id"`
+		ReleaseID       *uuid.UUID        `json:"release_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -683,7 +804,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		VersionAffected: body.VersionAffected, VersionFixed: body.VersionFixed,
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
 		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD, Labels: body.Labels,
-		Components: body.Components, MilestoneID: body.MilestoneID,
+		Components: body.Components, MilestoneID: body.MilestoneID, ReleaseID: body.ReleaseID,
 	})
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())

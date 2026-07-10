@@ -47,6 +47,10 @@ func ParseFilter(projectKey, raw, meUserID string) IssueFilter {
 			if id, err := uuid.Parse(val); err == nil {
 				f.MilestoneID = &id
 			}
+		case "release":
+			if id, err := uuid.Parse(val); err == nil {
+				f.ReleaseID = &id
+			}
 		default:
 			freeText = append(freeText, tok)
 		}

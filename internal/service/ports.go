@@ -51,6 +51,12 @@ type Repository interface {
 	UpdateMilestone(ctx context.Context, in UpdateMilestoneInput) (domain.Milestone, error)
 	DeleteMilestone(ctx context.Context, id uuid.UUID) (bool, error)
 
+	// Releases
+	ListReleases(ctx context.Context, projectKey string) ([]domain.Release, error)
+	CreateRelease(ctx context.Context, in CreateReleaseInput) (domain.Release, error)
+	UpdateRelease(ctx context.Context, in UpdateReleaseInput) (domain.Release, error)
+	DeleteRelease(ctx context.Context, id uuid.UUID) (bool, error)
+
 	// Issues (transactional writes take a PublishFn for the outbox)
 	CreateIssue(ctx context.Context, in CreateIssueInput, publish PublishIssueFn) (domain.Issue, error)
 	GetIssueByKey(ctx context.Context, projectKey string, number int32) (domain.Issue, error)
@@ -154,6 +160,26 @@ type UpdateMilestoneInput struct {
 	State         *string // open | closed
 }
 
+type CreateReleaseInput struct {
+	ProjectKey string
+	Version    string
+	Name       string
+	NotesMD    string
+	GitTag     string
+	CreatedBy  uuid.UUID
+}
+
+// UpdateReleaseInput is a partial edit; nil = unchanged. Setting State to
+// "published" stamps released_at on first publish.
+type UpdateReleaseInput struct {
+	ID      uuid.UUID
+	Version *string
+	Name    *string
+	NotesMD *string
+	GitTag  *string
+	State   *string // draft | published
+}
+
 // UpdateProjectInput is a partial edit; nil fields are left unchanged (COALESCE).
 // DefaultAssigneeID follows the issue-assignee convention: nil = unchanged,
 // zero UUID = clear, otherwise set.
@@ -211,6 +237,7 @@ type UpdateIssueInput struct {
 	Labels          *[]string  // nil = unchanged; non-nil replaces the label set
 	Components      *[]string  // nil = unchanged; non-nil replaces (names must exist in the project)
 	MilestoneID     *uuid.UUID // nil = unchanged; zero UUID clears; must belong to the issue's project
+	ReleaseID       *uuid.UUID // nil = unchanged; zero UUID clears; must belong to the issue's project
 }
 
 type IssueFilter struct {
@@ -222,6 +249,7 @@ type IssueFilter struct {
 	Label       string
 	Component   string
 	MilestoneID *uuid.UUID
+	ReleaseID   *uuid.UUID
 	Query       string // full-text
 	Sort       string
 	Limit      int32

@@ -86,7 +86,7 @@ function Sidebar({ me }: { me?: User }) {
         />
         <NavItem to="/board" icon={<IconBoard size={17} />} label="Board" />
         <NavItem to="/milestones" icon={<IconFlag size={17} />} label="Milestones" />
-        <NavItemSoon icon={<IconTag size={17} />} label="Releases" />
+        <NavItem to="/releases" icon={<IconTag size={17} />} label="Releases" />
         <NavItem to="/settings" icon={<IconGear size={17} />} label="Settings" />
       </nav>
 
@@ -150,18 +150,6 @@ function NavItem({
       <span className="grow text-sm">{label}</span>
       {trailing != null && <span className="font-mono text-xs font-medium">{trailing}</span>}
     </NavLink>
-  );
-}
-
-function NavItemSoon({ icon, label }: { icon: ReactNode; label: string }) {
-  return (
-    <div
-      title="Coming soon"
-      className="flex cursor-default items-center gap-2.5 rounded-md px-2.5 py-2 font-medium text-graphite/70"
-    >
-      <span className="grid h-[18px] w-[18px] place-items-center">{icon}</span>
-      <span className="grow text-sm">{label}</span>
-    </div>
   );
 }
 

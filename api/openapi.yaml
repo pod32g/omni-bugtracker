@@ -270,6 +270,71 @@ paths:
         "204": { description: deleted }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /projects/{key}/releases:
+    parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
+    get:
+      tags: [projects]
+      operationId: listReleases
+      responses:
+        "200":
+          description: releases with open/done issue counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Release" } }
+    post:
+      tags: [projects]
+      operationId: createRelease
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { type: string }
+                name: { type: string }
+                notes_md: { type: string }
+                git_tag: { type: string }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Release" } } } }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /releases/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [projects]
+      operationId: updateRelease
+      description: Setting state=published stamps released_at on first publish.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version: { type: string }
+                name: { type: string }
+                notes_md: { type: string }
+                git_tag: { type: string }
+                state: { type: string, enum: [draft, published] }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Release" } } } }
+    delete:
+      tags: [projects]
+      operationId: deleteRelease
+      description: Issues keep existing; their release_id becomes null.
+      responses:
+        "204": { description: deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /issues/{issueKey}:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
     get:
@@ -623,6 +688,8 @@ components:
         components: { type: array, items: { type: string } }
         milestone_id: { type: string, format: uuid, nullable: true }
         milestone: { type: string, description: "milestone title" }
+        release_id: { type: string, format: uuid, nullable: true }
+        release: { type: string, description: "release version" }
         version_affected: { type: string }
         version_fixed: { type: string }
         git_commit_sha: { type: string }
@@ -677,6 +744,20 @@ components:
         description_md: { type: string }
         lead_id: { type: string, format: uuid, nullable: true }
         open_issues: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    Release:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: string }
+        name: { type: string }
+        notes_md: { type: string }
+        state: { type: string, enum: [draft, published] }
+        git_tag: { type: string }
+        released_at: { type: string, format: date-time, nullable: true }
+        open_issues: { type: integer }
+        done_issues: { type: integer }
         created_at: { type: string, format: date-time }
 
     UpdateIssue:

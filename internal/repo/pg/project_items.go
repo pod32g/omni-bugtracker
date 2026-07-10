@@ -154,6 +154,85 @@ func (s *Store) DeleteMilestone(ctx context.Context, id uuid.UUID) (bool, error)
 	return tag.RowsAffected() > 0, nil
 }
 
+// ── releases ──
+
+const selectRelease = `
+	SELECT r.id, r.version, r.name, r.notes_md, r.state, r.git_tag, r.released_at, r.created_at,
+	       (SELECT count(*) FROM issues i WHERE i.release_id = r.id AND i.deleted_at IS NULL
+	          AND i.status NOT IN ('resolved','closed')) AS open_issues,
+	       (SELECT count(*) FROM issues i WHERE i.release_id = r.id AND i.deleted_at IS NULL
+	          AND i.status IN ('resolved','closed')) AS done_issues
+	FROM releases r`
+
+func scanRelease(row scanner) (domain.Release, error) {
+	var r domain.Release
+	err := row.Scan(&r.ID, &r.Version, &r.Name, &r.NotesMD, &r.State, &r.GitTag, &r.ReleasedAt, &r.CreatedAt,
+		&r.OpenIssues, &r.DoneIssues)
+	return r, err
+}
+
+func (s *Store) ListReleases(ctx context.Context, projectKey string) ([]domain.Release, error) {
+	q := selectRelease + `
+		JOIN projects p ON p.id = r.project_id
+		WHERE p.key = $1
+		ORDER BY (r.state = 'published'), r.created_at DESC`
+	rows, err := s.pool.Query(ctx, q, projectKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Release
+	for rows.Next() {
+		r, err := scanRelease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateRelease(ctx context.Context, in service.CreateReleaseInput) (domain.Release, error) {
+	const q = `
+		INSERT INTO releases (project_id, version, name, notes_md, git_tag, created_by)
+		SELECT p.id, $2, $3, $4, $5, $6 FROM projects p WHERE p.key = $1
+		RETURNING id`
+	var id uuid.UUID
+	if err := s.pool.QueryRow(ctx, q, in.ProjectKey, strings.TrimSpace(in.Version), in.Name, in.NotesMD,
+		in.GitTag, in.CreatedBy).Scan(&id); err != nil {
+		return domain.Release{}, err
+	}
+	return scanRelease(s.pool.QueryRow(ctx, selectRelease+` WHERE r.id = $1`, id))
+}
+
+func (s *Store) UpdateRelease(ctx context.Context, in service.UpdateReleaseInput) (domain.Release, error) {
+	const q = `
+		UPDATE releases SET
+		  version     = COALESCE($2, version),
+		  name        = COALESCE($3, name),
+		  notes_md    = COALESCE($4, notes_md),
+		  git_tag     = COALESCE($5, git_tag),
+		  state       = COALESCE($6::release_state, state),
+		  released_at = CASE WHEN $6::text = 'published' AND released_at IS NULL THEN now() ELSE released_at END
+		WHERE id = $1
+		RETURNING id`
+	var id uuid.UUID
+	if err := s.pool.QueryRow(ctx, q, in.ID, in.Version, in.Name, in.NotesMD, in.GitTag, in.State).
+		Scan(&id); err != nil {
+		return domain.Release{}, err
+	}
+	return scanRelease(s.pool.QueryRow(ctx, selectRelease+` WHERE r.id = $1`, id))
+}
+
+func (s *Store) DeleteRelease(ctx context.Context, id uuid.UUID) (bool, error) {
+	// issues.release_id is ON DELETE SET NULL, so issues survive the delete.
+	tag, err := s.pool.Exec(ctx, `DELETE FROM releases WHERE id = $1`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // setIssueComponents replaces (or appends to) an issue's component set. Unlike labels,
 // components are managed structure — names that don't exist in the project are ignored
 // rather than auto-created.
