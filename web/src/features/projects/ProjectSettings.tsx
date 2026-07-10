@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, UNASSIGNED, type Component } from "../../lib/api";
+import { api, UNASSIGNED, type Component, type User } from "../../lib/api";
 import { AssigneeSelect } from "../issues/formFields";
+import { Avatar } from "../../components/Badges";
 import { IconPlus } from "../../components/icons";
+
+const ROLES = ["owner", "admin", "maintainer", "member", "reporter", "bot"];
 
 const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
 
@@ -13,8 +16,9 @@ export function ProjectSettings() {
   const navigate = useNavigate();
 
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
-  const canManage = CAN_MANAGE.has(me.data?.role ?? "");
   const project = useQuery({ queryKey: ["project", key], queryFn: () => api.getProject(key), enabled: !!key });
+  // my_role is the effective role: global role, elevated by project membership.
+  const canManage = CAN_MANAGE.has(project.data?.my_role ?? me.data?.role ?? "");
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -137,6 +141,8 @@ export function ProjectSettings() {
 
         <ComponentsSection projectKey={key} canManage={canManage} />
 
+        <MembersSection projectKey={key} canManage={canManage} />
+
         {canManage && (
           <section className="flex flex-col gap-3 rounded-lg border border-critical/40 bg-paper p-6">
             <div className="flex flex-col gap-1">
@@ -249,6 +255,136 @@ function ComponentsSection({ projectKey, canManage }: { projectKey: string; canM
               if (window.confirm(`Delete component “${c.name}”? It is removed from all issues.`)) del.mutate(c.id);
             }}
           />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MembersSection({ projectKey, canManage }: { projectKey: string; canManage: boolean }) {
+  const qc = useQueryClient();
+  const members = useQuery({
+    queryKey: ["members", projectKey],
+    queryFn: () => api.listProjectMembers(projectKey),
+  });
+  const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
+  const [newUser, setNewUser] = useState("");
+  const [newRole, setNewRole] = useState("member");
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["members", projectKey] });
+  const put = useMutation({
+    mutationFn: ({ userId, role }: { userId: string; role: string }) =>
+      api.putProjectMember(projectKey, userId, role),
+    onSuccess: () => {
+      setNewUser("");
+      invalidate();
+    },
+  });
+  const remove = useMutation({
+    mutationFn: (userId: string) => api.removeProjectMember(projectKey, userId),
+    onSuccess: invalidate,
+  });
+
+  const items = members.data?.items ?? [];
+  const memberIds = new Set(items.map((m) => m.user.id));
+  const candidates = (users.data?.items ?? []).filter((u) => !memberIds.has(u.id));
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold text-ink">Members</h2>
+        <p className="text-sm leading-relaxed text-graphite">
+          A project role <span className="text-ink">elevates</span> what a user can do here beyond their global role
+          — e.g. a global reporter with project role maintainer can manage this project's components, milestones and
+          releases. Global owners/admins always have full access.
+        </p>
+      </div>
+
+      {canManage && (
+        <div className="flex items-end gap-3">
+          <label className="grow text-sm">
+            <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+              Add member
+            </span>
+            <select
+              value={newUser}
+              onChange={(e) => setNewUser(e.target.value)}
+              className="w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-blueprint"
+            >
+              <option value="">Select a user…</option>
+              {candidates.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.display_name || u.email}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">Role</span>
+            <select
+              value={newRole}
+              onChange={(e) => setNewRole(e.target.value)}
+              className="rounded-md border border-hairline bg-paper px-2.5 py-2 text-sm capitalize text-ink outline-none focus:border-blueprint"
+            >
+              {ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            disabled={!newUser || put.isPending}
+            onClick={() => put.mutate({ userId: newUser, role: newRole })}
+            className="flex h-10 items-center gap-1.5 rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+          >
+            <IconPlus size={15} />
+            Add
+          </button>
+        </div>
+      )}
+      {put.isError && <p className="text-sm text-critical">{(put.error as Error).message}</p>}
+
+      <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
+        {members.isLoading && <div className="p-4 text-sm text-graphite">Loading…</div>}
+        {members.isSuccess && items.length === 0 && (
+          <div className="p-4 text-sm text-graphite-soft">
+            No project members yet — everyone works with their global role.
+          </div>
+        )}
+        {items.map((m) => (
+          <div key={m.user.id} className="flex items-center gap-3 p-3.5">
+            <Avatar user={m.user as User} size={28} />
+            <div className="min-w-0 grow">
+              <div className="truncate text-sm font-medium text-ink">{m.user.display_name || m.user.email}</div>
+              <div className="truncate text-xs text-graphite-soft">{m.user.email}</div>
+            </div>
+            <select
+              value={m.role}
+              disabled={!canManage || put.isPending}
+              onChange={(e) => put.mutate({ userId: m.user.id, role: e.target.value })}
+              aria-label="Project role"
+              className="shrink-0 rounded-md border border-hairline bg-paper px-2.5 py-1.5 text-sm capitalize text-ink outline-none focus:border-blueprint disabled:opacity-60"
+            >
+              {ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+            {canManage && (
+              <button
+                disabled={remove.isPending}
+                onClick={() => {
+                  if (window.confirm(`Remove ${m.user.display_name || m.user.email} from ${projectKey}?`))
+                    remove.mutate(m.user.id);
+                }}
+                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-critical transition hover:border-critical disabled:opacity-50"
+              >
+                Remove
+              </button>
+            )}
+          </div>
         ))}
       </div>
     </section>

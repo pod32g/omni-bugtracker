@@ -24,6 +24,13 @@ export interface Project {
   default_assignee_id?: string | null;
   is_archived: boolean;
   created_at: string;
+  my_role?: string; // caller's effective role (global, elevated by membership)
+}
+
+export interface ProjectMember {
+  user: User;
+  role: string;
+  created_at: string;
 }
 
 export interface ApiToken {
@@ -280,6 +287,15 @@ export const api = {
     patch: { version?: string; name?: string; notes_md?: string; git_tag?: string; state?: "draft" | "published" },
   ) => request<Release>(`/releases/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteRelease: (id: string) => request<void>(`/releases/${id}`, { method: "DELETE" }),
+  listProjectMembers: (projectKey: string) =>
+    request<{ items: ProjectMember[] }>(`/projects/${projectKey}/members`),
+  putProjectMember: (projectKey: string, userId: string, role: string) =>
+    request<ProjectMember>(`/projects/${projectKey}/members/${userId}`, {
+      method: "PUT",
+      body: JSON.stringify({ role }),
+    }),
+  removeProjectMember: (projectKey: string, userId: string) =>
+    request<void>(`/projects/${projectKey}/members/${userId}`, { method: "DELETE" }),
   listIssues: (projectKey: string, filter = "", sort = "") =>
     request<{ items: Issue[]; total: number }>(
       `/projects/${projectKey}/issues?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}`,

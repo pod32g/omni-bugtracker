@@ -23,6 +23,10 @@ type Project struct {
 	DefaultAssigneeID *uuid.UUID `json:"default_assignee_id,omitempty"`
 	IsArchived        bool       `json:"is_archived"`
 	CreatedAt         time.Time  `json:"created_at"`
+	// MyRole is the requesting principal's effective role for this project
+	// (global role, elevated by project membership). Set by the HTTP layer,
+	// not a database column.
+	MyRole Role `json:"my_role,omitempty"`
 }
 
 // APIToken is metadata about a personal API token. The secret itself is never
@@ -34,6 +38,13 @@ type APIToken struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
+}
+
+// ProjectMember is a user's membership (and role) within one project.
+type ProjectMember struct {
+	User      User      `json:"user"`
+	Role      Role      `json:"role"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Milestone is a project-scoped goalpost issues can be grouped under.

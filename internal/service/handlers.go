@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -52,6 +53,9 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/projects/{key}/releases", h.createRelease)
 	r.Patch("/releases/{id}", h.updateRelease)
 	r.Delete("/releases/{id}", h.deleteRelease)
+	r.Get("/projects/{key}/members", h.listProjectMembers)
+	r.Put("/projects/{key}/members/{id}", h.putProjectMember)
+	r.Delete("/projects/{key}/members/{id}", h.deleteProjectMember)
 	r.Get("/projects/{key}/issues", h.listIssues)
 	r.Post("/projects/{key}/issues", h.createIssue)
 	r.Get("/issues/{issueKey}", h.getIssue)
@@ -69,6 +73,24 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 type httpHandlers struct {
 	issues *Issues
 	repo   Repository
+}
+
+// canOnProject is the elevation-aware permission check: the principal passes
+// if their global role grants the permission OR their project_members role in
+// this project does. Global owner/admin therefore always pass.
+func (h *httpHandlers) canOnProject(ctx context.Context, p *auth.Principal, projectKey string, perm auth.Permission) bool {
+	if p.Can(perm) {
+		return true
+	}
+	uid, err := uuid.Parse(p.UserID)
+	if err != nil {
+		return false
+	}
+	role, ok, err := h.repo.GetProjectRole(ctx, projectKey, uid)
+	if err != nil || !ok {
+		return false
+	}
+	return auth.RoleCan(role, perm)
 }
 
 var projectKeyRe = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,9}$`)
@@ -280,21 +302,106 @@ func (h *httpHandlers) createProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandlers) getProject(w http.ResponseWriter, r *http.Request) {
-	project, err := h.repo.GetProjectByKey(r.Context(), chi.URLParam(r, "key"))
+	key := chi.URLParam(r, "key")
+	project, err := h.repo.GetProjectByKey(r.Context(), key)
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
 		return
 	}
+	// Surface the caller's effective role so the UI can gate management
+	// affordances: project membership elevates non-admin global roles.
+	p := auth.FromContext(r.Context())
+	project.MyRole = p.Role
+	if !p.Can(auth.PermAdmin) {
+		if uid, err := uuid.Parse(p.UserID); err == nil {
+			if role, ok, _ := h.repo.GetProjectRole(r.Context(), key, uid); ok {
+				project.MyRole = role
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, project)
+}
+
+// ── project members ──
+
+func (h *httpHandlers) listProjectMembers(w http.ResponseWriter, r *http.Request) {
+	members, err := h.repo.ListProjectMembers(r.Context(), chi.URLParam(r, "key"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if members == nil {
+		members = []domain.ProjectMember{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": members})
+}
+
+func (h *httpHandlers) putProjectMember(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	key := chi.URLParam(r, "key")
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+		return
+	}
+	uid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad user id", "")
+		return
+	}
+	var body struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if !validRole(body.Role) {
+		httpapi.WriteValidation(w, map[string]string{"role": "must be owner, admin, maintainer, member, reporter, or bot"})
+		return
+	}
+	m, err := h.repo.UpsertProjectMember(r.Context(), key, uid, domain.Role(body.Role))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "add member failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+func (h *httpHandlers) deleteProjectMember(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	key := chi.URLParam(r, "key")
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	uid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad user id", "")
+		return
+	}
+	ok, err := h.repo.RemoveProjectMember(r.Context(), key, uid)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "remove failed", err.Error())
+		return
+	}
+	if !ok {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "not a member")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *httpHandlers) updateProject(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
+	key := chi.URLParam(r, "key")
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
 		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
 		return
 	}
-	key := chi.URLParam(r, "key")
 	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
 		return
@@ -326,11 +433,11 @@ func (h *httpHandlers) updateProject(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandlers) archiveProject(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
+	key := chi.URLParam(r, "key")
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
 		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
 		return
 	}
-	key := chi.URLParam(r, "key")
 	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
 		return
@@ -352,6 +459,28 @@ func (h *httpHandlers) listLabels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": labels})
 }
 
+// authorizeEntityManage parses {id}, resolves the owning project of an
+// id-addressed component/milestone/release, and checks project:manage with
+// membership elevation. Writes the error response itself on failure.
+func (h *httpHandlers) authorizeEntityManage(w http.ResponseWriter, r *http.Request, entity string) (uuid.UUID, bool) {
+	p := auth.FromContext(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad "+entity+" id", "")
+		return uuid.Nil, false
+	}
+	key, err := h.repo.ProjectKeyForEntity(r.Context(), entity, id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such "+entity)
+		return uuid.Nil, false
+	}
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
 // ── components ──
 
 func (h *httpHandlers) listComponents(w http.ResponseWriter, r *http.Request) {
@@ -368,11 +497,11 @@ func (h *httpHandlers) listComponents(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandlers) createComponent(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
+	key := chi.URLParam(r, "key")
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
 		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
 		return
 	}
-	key := chi.URLParam(r, "key")
 	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
 		return
@@ -402,14 +531,8 @@ func (h *httpHandlers) createComponent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandlers) updateComponent(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
-		return
-	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpapi.WriteProblem(w, http.StatusBadRequest, "bad component id", "")
+	id, ok := h.authorizeEntityManage(w, r, "component")
+	if !ok {
 		return
 	}
 	var body struct {
@@ -436,22 +559,16 @@ func (h *httpHandlers) updateComponent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandlers) deleteComponent(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+	id, ok := h.authorizeEntityManage(w, r, "component")
+	if !ok {
 		return
 	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpapi.WriteProblem(w, http.StatusBadRequest, "bad component id", "")
-		return
-	}
-	ok, err := h.repo.DeleteComponent(r.Context(), id)
+	deleted, err := h.repo.DeleteComponent(r.Context(), id)
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
 		return
 	}
-	if !ok {
+	if !deleted {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such component")
 		return
 	}
@@ -486,11 +603,11 @@ func (h *httpHandlers) listMilestones(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandlers) createMilestone(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
+	key := chi.URLParam(r, "key")
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
 		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
 		return
 	}
-	key := chi.URLParam(r, "key")
 	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
 		return
@@ -525,14 +642,8 @@ func (h *httpHandlers) createMilestone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandlers) updateMilestone(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
-		return
-	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpapi.WriteProblem(w, http.StatusBadRequest, "bad milestone id", "")
+	id, ok := h.authorizeEntityManage(w, r, "milestone")
+	if !ok {
 		return
 	}
 	var body struct {
@@ -571,22 +682,16 @@ func (h *httpHandlers) updateMilestone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandlers) deleteMilestone(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+	id, ok := h.authorizeEntityManage(w, r, "milestone")
+	if !ok {
 		return
 	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpapi.WriteProblem(w, http.StatusBadRequest, "bad milestone id", "")
-		return
-	}
-	ok, err := h.repo.DeleteMilestone(r.Context(), id)
+	deleted, err := h.repo.DeleteMilestone(r.Context(), id)
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
 		return
 	}
-	if !ok {
+	if !deleted {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such milestone")
 		return
 	}
@@ -609,11 +714,11 @@ func (h *httpHandlers) listReleases(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandlers) createRelease(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
+	key := chi.URLParam(r, "key")
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
 		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
 		return
 	}
-	key := chi.URLParam(r, "key")
 	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
 		return
@@ -646,14 +751,8 @@ func (h *httpHandlers) createRelease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandlers) updateRelease(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
-		return
-	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpapi.WriteProblem(w, http.StatusBadRequest, "bad release id", "")
+	id, ok := h.authorizeEntityManage(w, r, "release")
+	if !ok {
 		return
 	}
 	var body struct {
@@ -687,22 +786,16 @@ func (h *httpHandlers) updateRelease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandlers) deleteRelease(w http.ResponseWriter, r *http.Request) {
-	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermProjectManage) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+	id, ok := h.authorizeEntityManage(w, r, "release")
+	if !ok {
 		return
 	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpapi.WriteProblem(w, http.StatusBadRequest, "bad release id", "")
-		return
-	}
-	ok, err := h.repo.DeleteRelease(r.Context(), id)
+	deleted, err := h.repo.DeleteRelease(r.Context(), id)
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
 		return
 	}
-	if !ok {
+	if !deleted {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such release")
 		return
 	}
@@ -726,7 +819,7 @@ func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermIssueCreate) {
+	if !h.canOnProject(r.Context(), p, chi.URLParam(r, "key"), auth.PermIssueCreate) {
 		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:create")
 		return
 	}
@@ -786,12 +879,12 @@ func (h *httpHandlers) getIssue(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermIssueUpdate) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
-		return
-	}
 	issue, ok := h.resolveIssue(w, r)
 	if !ok {
+		return
+	}
+	if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueUpdate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
 		return
 	}
 	var body struct {
@@ -841,12 +934,12 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 // reconciled — see Store.MoveIssue. Returns the moved issue with its new key.
 func (h *httpHandlers) moveIssue(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermIssueUpdate) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
-		return
-	}
 	issue, ok := h.resolveIssue(w, r)
 	if !ok {
+		return
+	}
+	if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueUpdate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
 		return
 	}
 	var body struct {
@@ -865,6 +958,10 @@ func (h *httpHandlers) moveIssue(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusConflict, "already there", "issue is already in "+target)
 		return
 	}
+	if !h.canOnProject(r.Context(), p, target, auth.PermIssueCreate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:create on "+target)
+		return
+	}
 	if _, err := h.repo.GetProjectByKey(r.Context(), target); err != nil {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project: "+target)
 		return
@@ -880,12 +977,12 @@ func (h *httpHandlers) moveIssue(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandlers) deleteIssue(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermIssueDelete) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:delete")
-		return
-	}
 	issue, ok := h.resolveIssue(w, r)
 	if !ok {
+		return
+	}
+	if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueDelete) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:delete")
 		return
 	}
 	actor, _ := uuid.Parse(p.UserID)
@@ -898,13 +995,13 @@ func (h *httpHandlers) deleteIssue(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandlers) transition(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermIssueTransition) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:transition")
-		return
-	}
 	projectKey, number, ok := splitIssueKey(chi.URLParam(r, "issueKey"))
 	if !ok {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad issue key", "")
+		return
+	}
+	if !h.canOnProject(r.Context(), p, projectKey, auth.PermIssueTransition) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:transition")
 		return
 	}
 	var body struct {
@@ -948,12 +1045,12 @@ func (h *httpHandlers) listComments(w http.ResponseWriter, r *http.Request) {
 
 func (h *httpHandlers) addComment(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
-	if !p.Can(auth.PermCommentCreate) {
-		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing comment:create")
-		return
-	}
 	issue, ok := h.resolveIssue(w, r)
 	if !ok {
+		return
+	}
+	if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermCommentCreate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing comment:create")
 		return
 	}
 	var body struct {

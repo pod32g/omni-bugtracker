@@ -335,6 +335,52 @@ paths:
         "204": { description: deleted }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /projects/{key}/members:
+    parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
+    get:
+      tags: [projects]
+      operationId: listProjectMembers
+      responses:
+        "200":
+          description: project members
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/ProjectMember" } }
+
+  /projects/{key}/members/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectKey"
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      tags: [projects]
+      operationId: putProjectMember
+      description: >
+        Add or update a member. Membership elevates the user's capabilities inside this
+        project (effective permission = global role OR project role).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [owner, admin, maintainer, member, reporter, bot] }
+      responses:
+        "200": { description: member upserted, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectMember" } } } }
+    delete:
+      tags: [projects]
+      operationId: deleteProjectMember
+      responses:
+        "204": { description: removed }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /issues/{issueKey}:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
     get:
@@ -622,6 +668,9 @@ components:
         default_assignee_id: { type: string, format: uuid, nullable: true }
         is_archived: { type: boolean }
         created_at: { type: string, format: date-time }
+        my_role:
+          type: string
+          description: "caller's effective role for this project (global, elevated by membership)"
     ProjectList:
       type: object
       properties:
@@ -722,6 +771,13 @@ components:
         expected_md: { type: string }
         actual_md: { type: string }
         environment_md: { type: string }
+    ProjectMember:
+      type: object
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        role: { type: string }
+        created_at: { type: string, format: date-time }
+
     Milestone:
       type: object
       properties:

@@ -66,6 +66,16 @@ type Repository interface {
 	MoveIssue(ctx context.Context, id, actor uuid.UUID, targetProjectKey string, publish PublishFn) (domain.Issue, error)
 	SoftDeleteIssue(ctx context.Context, id, actor uuid.UUID, publish PublishFn) error
 
+	// ProjectKeyForEntity resolves which project a component/milestone/release
+	// belongs to (for permission checks on id-addressed endpoints).
+	ProjectKeyForEntity(ctx context.Context, entity string, id uuid.UUID) (string, error)
+
+	// Project membership (per-project role elevation)
+	ListProjectMembers(ctx context.Context, projectKey string) ([]domain.ProjectMember, error)
+	GetProjectRole(ctx context.Context, projectKey string, userID uuid.UUID) (domain.Role, bool, error)
+	UpsertProjectMember(ctx context.Context, projectKey string, userID uuid.UUID, role domain.Role) (domain.ProjectMember, error)
+	RemoveProjectMember(ctx context.Context, projectKey string, userID uuid.UUID) (bool, error)
+
 	// Global search (Postgres FTS over issues + comments)
 	Search(ctx context.Context, query string, limit int32) ([]domain.SearchHit, error)
 
@@ -244,17 +254,17 @@ type UpdateIssueInput struct {
 }
 
 type IssueFilter struct {
-	ProjectKey string
-	Status     *domain.IssueStatus
-	AssigneeID *uuid.UUID
-	Type       *domain.IssueType
+	ProjectKey  string
+	Status      *domain.IssueStatus
+	AssigneeID  *uuid.UUID
+	Type        *domain.IssueType
 	Severity    *domain.Severity
 	Label       string
 	Component   string
 	MilestoneID *uuid.UUID
 	ReleaseID   *uuid.UUID
 	Query       string // full-text
-	Sort       string
-	Limit      int32
-	Offset     int32
+	Sort        string
+	Limit       int32
+	Offset      int32
 }

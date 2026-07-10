@@ -41,14 +41,20 @@ var rolePermissions = map[domain.Role]map[Permission]bool{
 	},
 }
 
-// Can reports whether the principal may perform the permission.
-func (p *Principal) Can(perm Permission) bool {
-	if p == nil {
-		return false
-	}
-	perms := rolePermissions[p.Role]
+// RoleCan reports whether a role carries the permission. Exported so per-project
+// role checks (project_members) can reuse the same matrix.
+func RoleCan(role domain.Role, perm Permission) bool {
+	perms := rolePermissions[role]
 	if perms[PermAdmin] {
 		return true
 	}
 	return perms[perm]
+}
+
+// Can reports whether the principal may perform the permission (global role).
+func (p *Principal) Can(perm Permission) bool {
+	if p == nil {
+		return false
+	}
+	return RoleCan(p.Role, perm)
 }

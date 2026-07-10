@@ -2,6 +2,7 @@ package pg
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -10,6 +11,28 @@ import (
 	"github.com/omni/bugtracker/internal/domain"
 	"github.com/omni/bugtracker/internal/service"
 )
+
+// ProjectKeyForEntity resolves the owning project's key for an id-addressed
+// project-scoped entity. The entity name is whitelisted — never interpolate
+// caller input into SQL.
+func (s *Store) ProjectKeyForEntity(ctx context.Context, entity string, id uuid.UUID) (string, error) {
+	var table string
+	switch entity {
+	case "component":
+		table = "components"
+	case "milestone":
+		table = "milestones"
+	case "release":
+		table = "releases"
+	default:
+		return "", fmt.Errorf("unknown entity %q", entity)
+	}
+	var key string
+	err := s.pool.QueryRow(ctx,
+		`SELECT p.key FROM `+table+` t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, id).
+		Scan(&key)
+	return key, err
+}
 
 // ── components ──
 
