@@ -737,15 +737,97 @@ paths:
       tags: [webhooks]
       operationId: listWebhooks
       responses:
-        "200": { description: webhooks, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Webhook" } } } } }
+        "200":
+          description: webhooks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Webhook" } }
     post:
       tags: [webhooks]
       operationId: createWebhook
       requestBody:
         required: true
-        content: { application/json: { schema: { $ref: "#/components/schemas/Webhook" } } }
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string }
+                secret: { type: string, description: "HMAC-SHA256 signing secret (X-OBT-Signature)" }
+                events: { type: array, items: { type: string }, description: "empty = all events" }
+                project_key: { type: string, description: "empty = all projects" }
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Webhook" } } } }
+
+  /webhooks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [webhooks]
+      operationId: updateWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string }
+                secret: { type: string }
+                events: { type: array, items: { type: string } }
+                is_active: { type: boolean }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Webhook" } } } }
+    delete:
+      tags: [webhooks]
+      operationId: deleteWebhook
+      responses:
+        "204": { description: deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /webhooks/{id}/deliveries:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [webhooks]
+      operationId: listWebhookDeliveries
+      responses:
+        "200":
+          description: recent deliveries, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/WebhookDelivery" } }
+
+  /webhooks/{id}/deliveries/{deliveryId}/redeliver:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: deliveryId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [webhooks]
+      operationId: redeliverWebhook
+      description: Re-enqueues the delivery with its original payload.
+      responses:
+        "202": { description: redelivery enqueued }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /integrations/git/events:
     post:
@@ -1136,10 +1218,22 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
-        project_key: { type: string, nullable: true }
+        project_key: { type: string, description: "empty = all projects" }
         url: { type: string }
+        has_secret: { type: boolean }
         events: { type: array, items: { type: string } }
         is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    WebhookDelivery:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        event_type: { type: string }
+        status: { type: string, enum: [pending, success, failed, dead] }
+        response_code: { type: integer, nullable: true }
+        attempt: { type: integer }
+        created_at: { type: string, format: date-time }
 
     ObservabilityAlert:
       type: object

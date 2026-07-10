@@ -21,6 +21,8 @@ var (
 // Publisher is the subset of events.Publisher the service needs.
 type Publisher interface {
 	PublishTx(ctx context.Context, tx pgx.Tx, ev events.DomainEventArgs) error
+	// EnqueueWebhook schedules an outbound delivery (webhook redelivery).
+	EnqueueWebhook(ctx context.Context, args events.WebhookJobArgs) error
 }
 
 // Issues is the issue/bug application service.

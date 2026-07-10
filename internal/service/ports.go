@@ -77,6 +77,15 @@ type Repository interface {
 	UpsertProjectMember(ctx context.Context, projectKey string, userID uuid.UUID, role domain.Role) (domain.ProjectMember, error)
 	RemoveProjectMember(ctx context.Context, projectKey string, userID uuid.UUID) (bool, error)
 
+	// Webhooks (outbound event subscriptions)
+	ListWebhooks(ctx context.Context) ([]domain.Webhook, error)
+	CreateWebhook(ctx context.Context, in CreateWebhookInput) (domain.Webhook, error)
+	UpdateWebhook(ctx context.Context, in UpdateWebhookInput) (domain.Webhook, error)
+	DeleteWebhook(ctx context.Context, id uuid.UUID) (bool, error)
+	ListWebhookDeliveries(ctx context.Context, webhookID uuid.UUID, limit int32) ([]domain.WebhookDelivery, error)
+	GetWebhookDelivery(ctx context.Context, id uuid.UUID) (domain.WebhookDelivery, error)
+	ResetWebhookDelivery(ctx context.Context, id uuid.UUID) error
+
 	// Saved searches (personal named filters)
 	ListSavedSearches(ctx context.Context, userID uuid.UUID) ([]domain.SavedSearch, error)
 	UpsertSavedSearch(ctx context.Context, userID uuid.UUID, name, query string) (domain.SavedSearch, error)
@@ -237,6 +246,23 @@ type CreateTokenInput struct {
 	Name      string
 	Scopes    []string
 	TokenHash []byte
+}
+
+type CreateWebhookInput struct {
+	ProjectKey string // empty = all projects
+	URL        string
+	Secret     string
+	Events     []string
+	CreatedBy  uuid.UUID
+}
+
+// UpdateWebhookInput is a partial edit; nil = unchanged. An empty *Secret clears it.
+type UpdateWebhookInput struct {
+	ID       uuid.UUID
+	URL      *string
+	Secret   *string
+	Events   *[]string
+	IsActive *bool
 }
 
 type CreateAttachmentInput struct {

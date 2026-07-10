@@ -1,9 +1,14 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -43,7 +48,73 @@ func (w *eventWorker) Work(ctx context.Context, job *river.Job[events.DomainEven
 			return err
 		}
 	}
-	// TODO: query webhook subscribers for ev.EventType and enqueue one WebhookJobArgs each.
+	// Fan out to subscribed webhooks: active hooks whose event filter matches
+	// (empty filter = everything) and whose project scope covers the issue.
+	if ev.IssueID != "" {
+		if err := w.fanOutWebhooks(ctx, client, ev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *eventWorker) fanOutWebhooks(ctx context.Context, client *river.Client[pgx.Tx], ev events.DomainEventArgs) error {
+	issueID, err := uuid.Parse(ev.IssueID)
+	if err != nil {
+		return nil //nolint:nilerr // non-issue events don't fan out
+	}
+	rows, err := w.d.DB.Query(ctx, `
+		SELECT w.id FROM webhooks w
+		WHERE w.is_active
+		  AND (cardinality(w.events) = 0 OR $2 = ANY(w.events))
+		  AND (w.project_id IS NULL OR w.project_id = (SELECT project_id FROM issues WHERE id = $1))`,
+		issueID, ev.EventType)
+	if err != nil {
+		return err
+	}
+	var hookIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		hookIDs = append(hookIDs, id)
+	}
+	rows.Close()
+	if len(hookIDs) == 0 {
+		return nil
+	}
+
+	issue, err := w.d.Store.GetIssueByID(ctx, issueID)
+	if err != nil {
+		return softFail(w.d, "webhook_payload", err)
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"event":       ev.EventType,
+		"actor_id":    ev.ActorID,
+		"occurred_at": time.Now().UTC().Format(time.RFC3339),
+		"issue": map[string]any{
+			"id": issue.ID, "key": issue.Key, "project_key": issue.ProjectKey,
+			"title": issue.Title, "type": issue.Type, "status": issue.Status,
+			"priority": issue.Priority, "severity": issue.Severity,
+		},
+	})
+
+	for _, hookID := range hookIDs {
+		var deliveryID uuid.UUID
+		if err := w.d.DB.QueryRow(ctx, `
+			INSERT INTO webhook_deliveries (webhook_id, event_type, payload)
+			VALUES ($1, $2, $3) RETURNING id`, hookID, ev.EventType, payload).Scan(&deliveryID); err != nil {
+			return err
+		}
+		if _, err := client.Insert(ctx, events.WebhookJobArgs{
+			WebhookID: hookID.String(), DeliveryID: deliveryID.String(),
+			EventType: ev.EventType, Payload: payload,
+		}, nil); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -68,12 +139,65 @@ type webhookWorker struct {
 }
 
 func (w *webhookWorker) Work(ctx context.Context, job *river.Job[events.WebhookJobArgs]) error {
-	// TODO: load webhook (url/secret) by ID, POST HMAC-signed payload, persist delivery row.
-	// Returning an error reschedules with exponential backoff up to MaxAttempts, then dead-letters.
-	w.d.Metrics.WebhookAttempts.WithLabelValues("skipped").Inc()
-	_ = ctx
-	_ = job
-	return nil
+	var url, secret string
+	err := w.d.DB.QueryRow(ctx,
+		`SELECT url, secret FROM webhooks WHERE id = $1 AND is_active`, job.Args.WebhookID).
+		Scan(&url, &secret)
+	if err != nil {
+		// Hook deleted or deactivated since enqueue — mark dead, don't retry.
+		w.markDelivery(ctx, job.Args.DeliveryID, "dead", nil)
+		return nil //nolint:nilerr
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(job.Args.Payload))
+	if err != nil {
+		w.markDelivery(ctx, job.Args.DeliveryID, "dead", nil)
+		return nil //nolint:nilerr // malformed URL never succeeds
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-OBT-Event", job.Args.EventType)
+	req.Header.Set("X-OBT-Delivery", job.Args.DeliveryID)
+	if secret != "" {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(job.Args.Payload)
+		req.Header.Set("X-OBT-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	var code *int
+	success := false
+	if err == nil {
+		c := resp.StatusCode
+		code = &c
+		success = c >= 200 && c < 300
+		_ = resp.Body.Close()
+	}
+
+	if success {
+		w.d.Metrics.WebhookAttempts.WithLabelValues("success").Inc()
+		w.markDelivery(ctx, job.Args.DeliveryID, "success", code)
+		return nil
+	}
+	w.d.Metrics.WebhookAttempts.WithLabelValues("failed").Inc()
+	status := "failed"
+	if job.Attempt >= 8 { // MaxAttempts — no more retries coming
+		status = "dead"
+	}
+	w.markDelivery(ctx, job.Args.DeliveryID, status, code)
+	if err != nil {
+		return err
+	}
+	return errors.New("webhook delivery got HTTP " + strconv.Itoa(*code))
+}
+
+func (w *webhookWorker) markDelivery(ctx context.Context, deliveryID, status string, code *int) {
+	if _, err := w.d.DB.Exec(ctx,
+		`UPDATE webhook_deliveries SET status = $2::delivery_status, response_code = $3,
+		        attempt = attempt + 1, updated_at = now()
+		 WHERE id = $1`, deliveryID, status, code); err != nil {
+		w.d.Logger.Error("webhook delivery bookkeeping", "err", err)
+	}
 }
 
 // indexWorker projects a document into Omni-Search.

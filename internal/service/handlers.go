@@ -22,6 +22,7 @@ import (
 	"github.com/omni/bugtracker/internal/auth"
 	"github.com/omni/bugtracker/internal/config"
 	"github.com/omni/bugtracker/internal/domain"
+	"github.com/omni/bugtracker/internal/events"
 	"github.com/omni/bugtracker/internal/httpapi"
 )
 
@@ -41,7 +42,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 			maxUploadMB = cfg.Storage.MaxUploadMB
 		}
 	}
-	h := &httpHandlers{issues: issues, repo: repo, attachDir: attachDir, maxUpload: maxUploadMB << 20}
+	h := &httpHandlers{issues: issues, repo: repo, pub: pub, attachDir: attachDir, maxUpload: maxUploadMB << 20}
 
 	r := chi.NewRouter()
 	r.Get("/me", h.me)
@@ -55,6 +56,12 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Patch("/users/{id}/role", h.updateUserRole)
 	r.Get("/dashboards/overview", h.dashboard)
 	r.Get("/search", h.search)
+	r.Get("/webhooks", h.listWebhooks)
+	r.Post("/webhooks", h.createWebhook)
+	r.Patch("/webhooks/{id}", h.updateWebhook)
+	r.Delete("/webhooks/{id}", h.deleteWebhook)
+	r.Get("/webhooks/{id}/deliveries", h.listWebhookDeliveries)
+	r.Post("/webhooks/{id}/deliveries/{deliveryId}/redeliver", h.redeliverWebhook)
 	r.Get("/projects", h.listProjects)
 	r.Post("/projects", h.createProject)
 	r.Get("/projects/{key}", h.getProject)
@@ -106,6 +113,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 type httpHandlers struct {
 	issues    *Issues
 	repo      Repository
+	pub       Publisher
 	attachDir string // local-disk attachment storage root
 	maxUpload int64  // bytes
 }
@@ -329,6 +337,171 @@ func (h *httpHandlers) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// ── webhooks (outbound event subscriptions) ──
+
+func (h *httpHandlers) requireWebhookEdit(w http.ResponseWriter, r *http.Request) bool {
+	if !auth.FromContext(r.Context()).Can(auth.PermWebhookEdit) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing webhook:edit")
+		return false
+	}
+	return true
+}
+
+func (h *httpHandlers) listWebhooks(w http.ResponseWriter, r *http.Request) {
+	if !h.requireWebhookEdit(w, r) {
+		return
+	}
+	items, err := h.repo.ListWebhooks(r.Context())
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.Webhook{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *httpHandlers) createWebhook(w http.ResponseWriter, r *http.Request) {
+	if !h.requireWebhookEdit(w, r) {
+		return
+	}
+	var body struct {
+		URL        string   `json:"url"`
+		Secret     string   `json:"secret"`
+		Events     []string `json:"events"`
+		ProjectKey string   `json:"project_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if !strings.HasPrefix(body.URL, "http://") && !strings.HasPrefix(body.URL, "https://") {
+		httpapi.WriteValidation(w, map[string]string{"url": "must be an http(s) URL"})
+		return
+	}
+	if body.ProjectKey != "" {
+		if _, err := h.repo.GetProjectByKey(r.Context(), body.ProjectKey); err != nil {
+			httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+			return
+		}
+	}
+	creator, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
+	wh, err := h.repo.CreateWebhook(r.Context(), CreateWebhookInput{
+		ProjectKey: body.ProjectKey, URL: body.URL, Secret: body.Secret,
+		Events: body.Events, CreatedBy: creator,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, wh)
+}
+
+func (h *httpHandlers) updateWebhook(w http.ResponseWriter, r *http.Request) {
+	if !h.requireWebhookEdit(w, r) {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad webhook id", "")
+		return
+	}
+	var body struct {
+		URL      *string   `json:"url"`
+		Secret   *string   `json:"secret"`
+		Events   *[]string `json:"events"`
+		IsActive *bool     `json:"is_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.URL != nil && !strings.HasPrefix(*body.URL, "http://") && !strings.HasPrefix(*body.URL, "https://") {
+		httpapi.WriteValidation(w, map[string]string{"url": "must be an http(s) URL"})
+		return
+	}
+	wh, err := h.repo.UpdateWebhook(r.Context(), UpdateWebhookInput{
+		ID: id, URL: body.URL, Secret: body.Secret, Events: body.Events, IsActive: body.IsActive,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such webhook")
+		return
+	}
+	writeJSON(w, http.StatusOK, wh)
+}
+
+func (h *httpHandlers) deleteWebhook(w http.ResponseWriter, r *http.Request) {
+	if !h.requireWebhookEdit(w, r) {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad webhook id", "")
+		return
+	}
+	ok, err := h.repo.DeleteWebhook(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	if !ok {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such webhook")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *httpHandlers) listWebhookDeliveries(w http.ResponseWriter, r *http.Request) {
+	if !h.requireWebhookEdit(w, r) {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad webhook id", "")
+		return
+	}
+	items, err := h.repo.ListWebhookDeliveries(r.Context(), id, 25)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.WebhookDelivery{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// redeliverWebhook re-enqueues a past delivery with its original payload.
+func (h *httpHandlers) redeliverWebhook(w http.ResponseWriter, r *http.Request) {
+	if !h.requireWebhookEdit(w, r) {
+		return
+	}
+	hookID, err1 := uuid.Parse(chi.URLParam(r, "id"))
+	deliveryID, err2 := uuid.Parse(chi.URLParam(r, "deliveryId"))
+	if err1 != nil || err2 != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad id", "")
+		return
+	}
+	d, err := h.repo.GetWebhookDelivery(r.Context(), deliveryID)
+	if err != nil || d.WebhookID != hookID {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such delivery")
+		return
+	}
+	if err := h.repo.ResetWebhookDelivery(r.Context(), deliveryID); err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "redeliver failed", err.Error())
+		return
+	}
+	if err := h.pub.EnqueueWebhook(r.Context(), events.WebhookJobArgs{
+		WebhookID: hookID.String(), DeliveryID: deliveryID.String(),
+		EventType: d.EventType, Payload: d.Payload,
+	}); err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "redeliver failed", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // search is global full-text search across projects (issues + comments).

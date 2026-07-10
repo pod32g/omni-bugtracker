@@ -21,11 +21,13 @@ type NotifyJobArgs struct {
 func (NotifyJobArgs) Kind() string                 { return "notify" }
 func (NotifyJobArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "integrations"} }
 
-// WebhookJobArgs → one outbound HTTP delivery (retried by River).
+// WebhookJobArgs → one outbound HTTP delivery (retried by River). DeliveryID
+// references the webhook_deliveries row that tracks attempt/status.
 type WebhookJobArgs struct {
-	WebhookID string          `json:"webhook_id"`
-	EventType string          `json:"event_type"`
-	Payload   json.RawMessage `json:"payload"`
+	WebhookID  string          `json:"webhook_id"`
+	DeliveryID string          `json:"delivery_id"`
+	EventType  string          `json:"event_type"`
+	Payload    json.RawMessage `json:"payload"`
 }
 
 func (WebhookJobArgs) Kind() string { return "webhook_delivery" }

@@ -140,6 +140,8 @@ export function Settings() {
           </div>
         </section>
 
+        {["owner", "admin", "maintainer"].includes(me.data?.role ?? "") && <WebhooksSection />}
+
         {canManageRoles && (
           <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
             <div className="flex flex-col gap-1">
@@ -206,5 +208,153 @@ function RoleSelect({
         </option>
       ))}
     </select>
+  );
+}
+
+// Outbound webhooks admin: create, toggle, delete, and inspect deliveries.
+export function WebhooksSection() {
+  const qc = useQueryClient();
+  const hooks = useQuery({ queryKey: ["webhooks"], queryFn: () => api.listWebhooks() });
+  const [url, setUrl] = useState("");
+  const [secret, setSecret] = useState("");
+  const [events, setEvents] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["webhooks"] });
+  const create = useMutation({
+    mutationFn: () =>
+      api.createWebhook({
+        url: url.trim(),
+        secret: secret.trim() || undefined,
+        events: events.trim() ? events.split(",").map((e) => e.trim()).filter(Boolean) : undefined,
+      }),
+    onSuccess: () => {
+      setUrl("");
+      setSecret("");
+      setEvents("");
+      invalidate();
+    },
+  });
+  const toggle = useMutation({
+    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) => api.updateWebhook(id, { is_active }),
+    onSuccess: invalidate,
+  });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteWebhook(id), onSuccess: invalidate });
+
+  const items = hooks.data?.items ?? [];
+  const inputClass =
+    "w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint";
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold text-ink">Webhooks</h2>
+        <p className="text-sm leading-relaxed text-graphite">
+          POST issue events to external services. Payloads are JSON; when a secret is set, requests carry an{" "}
+          <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-ink">X-OBT-Signature</code>{" "}
+          HMAC-SHA256 header. Failed deliveries retry with backoff (8 attempts).
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[2fr_1fr_1fr_auto]">
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/hook" className={inputClass} />
+        <input value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Secret (optional)" className={inputClass} />
+        <input value={events} onChange={(e) => setEvents(e.target.value)} placeholder="events (empty = all)" className={inputClass} title="Comma-separated, e.g. issue.created,comment.created" />
+        <button
+          disabled={!/^https?:\/\//.test(url.trim()) || create.isPending}
+          onClick={() => create.mutate()}
+          className="h-[38px] rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+        >
+          Add
+        </button>
+      </div>
+      {create.isError && <p className="text-sm text-critical">{(create.error as Error).message}</p>}
+
+      <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
+        {hooks.isSuccess && items.length === 0 && (
+          <div className="p-4 text-sm text-graphite-soft">No webhooks yet.</div>
+        )}
+        {items.map((w) => (
+          <div key={w.id} className="flex flex-col">
+            <div className="flex items-center gap-3 p-3.5">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${w.is_active ? "bg-resolved" : "bg-hairline"}`} />
+              <div className="min-w-0 grow">
+                <div className="truncate font-mono text-sm text-ink">{w.url}</div>
+                <div className="font-mono text-xs text-graphite-soft">
+                  {w.events.length ? w.events.join(", ") : "all events"}
+                  {w.project_key ? ` · ${w.project_key}` : " · all projects"}
+                  {w.has_secret ? " · signed" : ""}
+                </div>
+              </div>
+              <button
+                onClick={() => setExpanded(expanded === w.id ? null : w.id)}
+                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink"
+              >
+                Deliveries
+              </button>
+              <button
+                onClick={() => toggle.mutate({ id: w.id, is_active: !w.is_active })}
+                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink"
+              >
+                {w.is_active ? "Disable" : "Enable"}
+              </button>
+              <button
+                onClick={() => {
+                  if (window.confirm("Delete this webhook? Delivery history goes with it.")) del.mutate(w.id);
+                }}
+                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-critical transition hover:border-critical"
+              >
+                Delete
+              </button>
+            </div>
+            {expanded === w.id && <DeliveryLog webhookId={w.id} />}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DeliveryLog({ webhookId }: { webhookId: string }) {
+  const qc = useQueryClient();
+  const deliveries = useQuery({
+    queryKey: ["webhook-deliveries", webhookId],
+    queryFn: () => api.listWebhookDeliveries(webhookId),
+    refetchInterval: 5000,
+  });
+  const redeliver = useMutation({
+    mutationFn: (deliveryId: string) => api.redeliverWebhook(webhookId, deliveryId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["webhook-deliveries", webhookId] }),
+  });
+  const items = deliveries.data?.items ?? [];
+  const tone: Record<string, string> = {
+    success: "text-resolved",
+    failed: "text-critical",
+    dead: "text-critical",
+    pending: "text-graphite-soft",
+  };
+  return (
+    <div className="flex flex-col gap-1 border-t border-hairline bg-panel/50 px-4 py-3">
+      {items.length === 0 && <span className="text-xs text-graphite-soft">No deliveries yet.</span>}
+      {items.map((d) => (
+        <div key={d.id} className="flex items-center gap-3 font-mono text-xs">
+          <span className={`w-16 font-semibold uppercase ${tone[d.status]}`}>{d.status}</span>
+          <span className="w-40 truncate text-graphite">{d.event_type}</span>
+          <span className="text-graphite-soft">
+            {d.response_code ? `HTTP ${d.response_code}` : "—"} · try {d.attempt} · {timeAgo(d.created_at)}
+          </span>
+          <span className="grow" />
+          {(d.status === "failed" || d.status === "dead") && (
+            <button
+              disabled={redeliver.isPending}
+              onClick={() => redeliver.mutate(d.id)}
+              className="text-blueprint hover:underline disabled:opacity-50"
+            >
+              Redeliver
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }

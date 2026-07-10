@@ -77,5 +77,12 @@ func (p *Publisher) Enqueue(ctx context.Context, args river.JobArgs) error {
 	return err
 }
 
+// EnqueueWebhook schedules one outbound webhook delivery (used for redelivery
+// from the API; normal deliveries are fanned out by the worker dispatcher).
+func (p *Publisher) EnqueueWebhook(ctx context.Context, args WebhookJobArgs) error {
+	_, err := p.client.Insert(ctx, args, nil)
+	return err
+}
+
 // Noop keeps the events import referenced where the worker wires River directly.
 func Noop() error { return nil }

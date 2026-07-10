@@ -34,6 +34,29 @@ type LinkedCommit struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// Webhook is an outbound HTTP subscription to domain events.
+type Webhook struct {
+	ID         uuid.UUID `json:"id"`
+	ProjectKey string    `json:"project_key,omitempty"` // empty = all projects
+	URL        string    `json:"url"`
+	HasSecret  bool      `json:"has_secret"`
+	Events     []string  `json:"events"` // empty = all events
+	IsActive   bool      `json:"is_active"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// WebhookDelivery is one delivery attempt record for a webhook.
+type WebhookDelivery struct {
+	ID           uuid.UUID       `json:"id"`
+	EventType    string          `json:"event_type"`
+	Status       string          `json:"status"` // pending | success | failed | dead
+	ResponseCode *int            `json:"response_code,omitempty"`
+	Attempt      int             `json:"attempt"`
+	Payload      json.RawMessage `json:"-"` // used for redelivery, not serialized
+	WebhookID    uuid.UUID       `json:"-"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
 // SavedSearch is a personal, named filter-grammar string.
 type SavedSearch struct {
 	ID        uuid.UUID `json:"id"`

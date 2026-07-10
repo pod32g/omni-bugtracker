@@ -158,6 +158,25 @@ export interface Activity {
   occurred_at: string;
 }
 
+export interface Webhook {
+  id: string;
+  project_key?: string;
+  url: string;
+  has_secret: boolean;
+  events: string[];
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  event_type: string;
+  status: "pending" | "success" | "failed" | "dead";
+  response_code?: number | null;
+  attempt: number;
+  created_at: string;
+}
+
 export interface SavedSearch {
   id: string;
   name: string;
@@ -357,6 +376,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ body_md }),
     }),
+  listWebhooks: () => request<{ items: Webhook[] }>("/webhooks"),
+  createWebhook: (body: { url: string; secret?: string; events?: string[]; project_key?: string }) =>
+    request<Webhook>("/webhooks", { method: "POST", body: JSON.stringify(body) }),
+  updateWebhook: (id: string, patch: { url?: string; secret?: string; events?: string[]; is_active?: boolean }) =>
+    request<Webhook>(`/webhooks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteWebhook: (id: string) => request<void>(`/webhooks/${id}`, { method: "DELETE" }),
+  listWebhookDeliveries: (id: string) =>
+    request<{ items: WebhookDelivery[] }>(`/webhooks/${id}/deliveries`),
+  redeliverWebhook: (id: string, deliveryId: string) =>
+    request<void>(`/webhooks/${id}/deliveries/${deliveryId}/redeliver`, { method: "POST" }),
   bulkUpdateIssues: (body: {
     ids: string[];
     patch?: {
