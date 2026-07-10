@@ -394,11 +394,47 @@ type obsIngestWorker struct {
 }
 
 func (w *obsIngestWorker) Work(ctx context.Context, job *river.Job[events.ObsIngestArgs]) error {
-	// TODO: upsert by (project, fingerprint) — repeated alerts increment an occurrence
-	// counter on one issue rather than spawning duplicates.
-	w.d.Metrics.JobsProcessed.WithLabelValues("obs_ingest", "noop").Inc()
-	_ = ctx
-	_ = job
+	var alert struct {
+		Rule       string  `json:"rule"`
+		Title      string  `json:"title"`
+		Severity   *string `json:"severity"`
+		DetailsMD  string  `json:"details_md"`
+		StackTrace string  `json:"stack_trace"`
+	}
+	if err := json.Unmarshal(job.Args.Payload, &alert); err != nil {
+		w.d.Logger.Error("obs ingest: bad payload", "err", err)
+		return nil //nolint:nilerr // malformed payloads never get better on retry
+	}
+	var sev *domain.Severity
+	if alert.Severity != nil {
+		switch domain.Severity(*alert.Severity) {
+		case domain.SeverityCritical, domain.SeverityHigh, domain.SeverityMedium, domain.SeverityLow:
+			s := domain.Severity(*alert.Severity)
+			sev = &s
+		}
+	}
+
+	client := river.ClientFromContext[pgx.Tx](ctx)
+	issue, created, err := w.d.Store.IngestObsAlert(ctx, service.ObsAlertInput{
+		Source: job.Args.Source, ProjectKey: job.Args.ProjectKey, Fingerprint: job.Args.Fingerprint,
+		Title: alert.Title, Rule: alert.Rule, DetailsMD: alert.DetailsMD, StackTrace: alert.StackTrace,
+		Severity: sev,
+	}, func(tx pgx.Tx, iss domain.Issue, eventType string) error {
+		_, err := client.InsertTx(ctx, tx, events.DomainEventArgs{
+			EventType: eventType, IssueID: iss.ID.String(),
+		}, nil)
+		return err
+	})
+	if err != nil {
+		w.d.Metrics.JobsProcessed.WithLabelValues("obs_ingest", "error").Inc()
+		return err
+	}
+	outcome := "bumped"
+	if created {
+		outcome = "created"
+	}
+	w.d.Metrics.JobsProcessed.WithLabelValues("obs_ingest", outcome).Inc()
+	w.d.Logger.Info("obs ingest", "issue", issue.Key, "outcome", outcome, "source", job.Args.Source)
 	return nil
 }
 

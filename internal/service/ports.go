@@ -21,6 +21,10 @@ type PublishFn func(tx pgx.Tx) error
 // so the event payload can carry the generated ID/key.
 type PublishIssueFn func(tx pgx.Tx, created domain.Issue) error
 
+// ObsPublishFn lets the obs-ingest transaction enqueue the resulting domain
+// event (issue.created / issue.updated / issue.reopened) atomically.
+type ObsPublishFn func(tx pgx.Tx, issue domain.Issue, eventType string) error
+
 // Repository is the persistence port. The pg adapter runs the multi-statement writes
 // (allocate number → insert → record activity → publish) inside a single transaction.
 type Repository interface {
@@ -76,6 +80,10 @@ type Repository interface {
 	GetProjectRole(ctx context.Context, projectKey string, userID uuid.UUID) (domain.Role, bool, error)
 	UpsertProjectMember(ctx context.Context, projectKey string, userID uuid.UUID, role domain.Role) (domain.ProjectMember, error)
 	RemoveProjectMember(ctx context.Context, projectKey string, userID uuid.UUID) (bool, error)
+
+	// Observability ingest: create or bump an issue for an alert fingerprint.
+	// Returns the issue and whether it was newly created.
+	IngestObsAlert(ctx context.Context, in ObsAlertInput, publish ObsPublishFn) (domain.Issue, bool, error)
 
 	// Webhooks (outbound event subscriptions)
 	ListWebhooks(ctx context.Context) ([]domain.Webhook, error)
@@ -246,6 +254,18 @@ type CreateTokenInput struct {
 	Name      string
 	Scopes    []string
 	TokenHash []byte
+}
+
+// ObsAlertInput is a normalized observability alert (from omnilog / omni-metrics).
+type ObsAlertInput struct {
+	Source      string // logging | metrics
+	ProjectKey  string
+	Fingerprint string
+	Title       string
+	Rule        string
+	DetailsMD   string
+	StackTrace  string
+	Severity    *domain.Severity
 }
 
 type CreateWebhookInput struct {

@@ -32,6 +32,9 @@ type Deps struct {
 	AuthFlow http.Handler
 	// InboundGit handles HMAC-verified git provider webhooks.
 	InboundGit http.HandlerFunc
+	// InboundLogging / InboundMetrics ingest observability alerts into issues.
+	InboundLogging http.HandlerFunc
+	InboundMetrics http.HandlerFunc
 }
 
 // NewRouter builds the fully-wired chi router.
@@ -107,13 +110,19 @@ func mountGenerated(r chi.Router, d Deps) {
 // mountInboundIntegrations wires HMAC-verified inbound endpoints (git / logging / metrics).
 // Concrete handlers land in internal/httpapi/handlers once the service layer is generated.
 func mountInboundIntegrations(r chi.Router, d Deps) {
-	git := notImplemented
+	git, logging, metrics := notImplemented, notImplemented, notImplemented
 	if d.InboundGit != nil {
 		git = d.InboundGit
 	}
+	if d.InboundLogging != nil {
+		logging = d.InboundLogging
+	}
+	if d.InboundMetrics != nil {
+		metrics = d.InboundMetrics
+	}
 	r.Post("/integrations/git/events", git)
-	r.Post("/integrations/logging/alerts", notImplemented)
-	r.Post("/integrations/metrics/alerts", notImplemented)
+	r.Post("/integrations/logging/alerts", logging)
+	r.Post("/integrations/metrics/alerts", metrics)
 }
 
 func notImplemented(w http.ResponseWriter, _ *http.Request) {
