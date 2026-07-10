@@ -56,6 +56,11 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Patch("/users/{id}/role", h.updateUserRole)
 	r.Get("/dashboards/overview", h.dashboard)
 	r.Get("/search", h.search)
+	r.Get("/projects/{key}/board", h.getProjectBoard)
+	r.Patch("/boards/{id}", h.updateBoard)
+	r.Post("/boards/{id}/columns", h.createBoardColumn)
+	r.Patch("/board-columns/{id}", h.updateBoardColumn)
+	r.Delete("/board-columns/{id}", h.deleteBoardColumn)
 	r.Get("/automation/rules", h.listAutomationRules)
 	r.Post("/automation/rules", h.createAutomationRule)
 	r.Patch("/automation/rules/{id}", h.updateAutomationRule)
@@ -342,6 +347,173 @@ func (h *httpHandlers) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// ── boards (configurable Kanban) ──
+
+var validBoardStatuses = map[string]bool{
+	"open": true, "in_progress": true, "blocked": true, "ready_for_review": true,
+	"resolved": true, "closed": true, "reopened": true,
+}
+var validSwimlanes = map[string]bool{"none": true, "assignee": true, "priority": true}
+
+func validStatusList(statuses []string) bool {
+	if len(statuses) == 0 {
+		return false
+	}
+	for _, s := range statuses {
+		if !validBoardStatuses[s] {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *httpHandlers) getProjectBoard(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+		return
+	}
+	board, err := h.repo.GetOrCreateBoard(r.Context(), key)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "board failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, board)
+}
+
+// authorizeBoardManage resolves the owning project of a board/board_column and
+// checks project:manage with membership elevation.
+func (h *httpHandlers) authorizeBoardManage(w http.ResponseWriter, r *http.Request, entity string) (uuid.UUID, bool) {
+	p := auth.FromContext(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad id", "")
+		return uuid.Nil, false
+	}
+	key, err := h.repo.ProjectKeyForEntity(r.Context(), entity, id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such "+entity)
+		return uuid.Nil, false
+	}
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func (h *httpHandlers) updateBoard(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeBoardManage(w, r, "board")
+	if !ok {
+		return
+	}
+	var body struct {
+		Name     *string `json:"name"`
+		Swimlane *string `json:"swimlane"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.Swimlane != nil && !validSwimlanes[*body.Swimlane] {
+		httpapi.WriteValidation(w, map[string]string{"swimlane": "must be none, assignee, or priority"})
+		return
+	}
+	board, err := h.repo.UpdateBoard(r.Context(), id, body.Name, body.Swimlane)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, board)
+}
+
+func (h *httpHandlers) createBoardColumn(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeBoardManage(w, r, "board")
+	if !ok {
+		return
+	}
+	var body struct {
+		Name     string   `json:"name"`
+		Statuses []string `json:"statuses"`
+		WipLimit *int     `json:"wip_limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	fields := map[string]string{}
+	if strings.TrimSpace(body.Name) == "" {
+		fields["name"] = "required"
+	}
+	if !validStatusList(body.Statuses) {
+		fields["statuses"] = "non-empty list of workflow statuses"
+	}
+	if len(fields) > 0 {
+		httpapi.WriteValidation(w, fields)
+		return
+	}
+	board, err := h.repo.CreateBoardColumn(r.Context(), id, BoardColumnInput{
+		Name: body.Name, Statuses: body.Statuses, WipLimit: body.WipLimit,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, board)
+}
+
+func (h *httpHandlers) updateBoardColumn(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeBoardManage(w, r, "board_column")
+	if !ok {
+		return
+	}
+	var body struct {
+		Name     *string   `json:"name"`
+		Statuses *[]string `json:"statuses"`
+		WipLimit *int      `json:"wip_limit"` // -1 clears the limit
+		Position *int      `json:"position"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.Statuses != nil && !validStatusList(*body.Statuses) {
+		httpapi.WriteValidation(w, map[string]string{"statuses": "non-empty list of workflow statuses"})
+		return
+	}
+	in := UpdateBoardColumnInput{Name: body.Name, Statuses: body.Statuses, Position: body.Position}
+	if body.WipLimit != nil {
+		if *body.WipLimit < 0 {
+			in.ClearWip = true
+		} else {
+			in.WipLimit = body.WipLimit
+		}
+	}
+	board, err := h.repo.UpdateBoardColumn(r.Context(), id, in)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such column")
+		return
+	}
+	writeJSON(w, http.StatusOK, board)
+}
+
+func (h *httpHandlers) deleteBoardColumn(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeBoardManage(w, r, "board_column")
+	if !ok {
+		return
+	}
+	board, found, err := h.repo.DeleteBoardColumn(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	if !found {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such column")
+		return
+	}
+	writeJSON(w, http.StatusOK, board)
 }
 
 // ── automation rules ──

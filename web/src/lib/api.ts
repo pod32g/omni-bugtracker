@@ -158,6 +158,23 @@ export interface Activity {
   occurred_at: string;
 }
 
+export interface BoardColumn {
+  id: string;
+  name: string;
+  statuses: IssueStatus[];
+  wip_limit?: number | null;
+  position: number;
+}
+
+export interface Board {
+  id: string;
+  project_key: string;
+  name: string;
+  swimlane: "none" | "assignee" | "priority";
+  columns: BoardColumn[];
+  created_at: string;
+}
+
 export interface AutomationRule {
   id: string;
   project_key?: string;
@@ -397,6 +414,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ body_md }),
     }),
+  getBoard: (projectKey: string) => request<Board>(`/projects/${projectKey}/board`),
+  updateBoard: (id: string, patch: { name?: string; swimlane?: Board["swimlane"] }) =>
+    request<Board>(`/boards/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  createBoardColumn: (boardId: string, body: { name: string; statuses: IssueStatus[]; wip_limit?: number }) =>
+    request<Board>(`/boards/${boardId}/columns`, { method: "POST", body: JSON.stringify(body) }),
+  updateBoardColumn: (
+    columnId: string,
+    patch: { name?: string; statuses?: IssueStatus[]; wip_limit?: number; position?: number },
+  ) => request<Board>(`/board-columns/${columnId}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteBoardColumn: (columnId: string) =>
+    request<Board>(`/board-columns/${columnId}`, { method: "DELETE" }),
   listAutomationRules: () => request<{ items: AutomationRule[] }>("/automation/rules"),
   createAutomationRule: (body: {
     name: string;

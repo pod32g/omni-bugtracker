@@ -34,6 +34,26 @@ type LinkedCommit struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// BoardColumn maps a Kanban column to one or more workflow statuses; dropping
+// a card transitions to Statuses[0].
+type BoardColumn struct {
+	ID       uuid.UUID `json:"id"`
+	Name     string    `json:"name"`
+	Statuses []string  `json:"statuses"`
+	WipLimit *int      `json:"wip_limit,omitempty"`
+	Position int       `json:"position"`
+}
+
+// Board is a project's configurable Kanban view.
+type Board struct {
+	ID         uuid.UUID     `json:"id"`
+	ProjectKey string        `json:"project_key"`
+	Name       string        `json:"name"`
+	Swimlane   string        `json:"swimlane"` // none | assignee | priority
+	Columns    []BoardColumn `json:"columns"`
+	CreatedAt  time.Time     `json:"created_at"`
+}
+
 // AutomationRule is a trigger→actions rule evaluated against issue events.
 // Trigger: {"event": "issue.created"|"*", "conditions": {type?, severity?,
 // priority?, label?, component?, source?}} — all set conditions must match.

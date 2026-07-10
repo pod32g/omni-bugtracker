@@ -85,6 +85,13 @@ type Repository interface {
 	// Returns the issue and whether it was newly created.
 	IngestObsAlert(ctx context.Context, in ObsAlertInput, publish ObsPublishFn) (domain.Issue, bool, error)
 
+	// Boards (configurable Kanban)
+	GetOrCreateBoard(ctx context.Context, projectKey string) (domain.Board, error)
+	UpdateBoard(ctx context.Context, id uuid.UUID, name, swimlane *string) (domain.Board, error)
+	CreateBoardColumn(ctx context.Context, boardID uuid.UUID, in BoardColumnInput) (domain.Board, error)
+	UpdateBoardColumn(ctx context.Context, columnID uuid.UUID, in UpdateBoardColumnInput) (domain.Board, error)
+	DeleteBoardColumn(ctx context.Context, columnID uuid.UUID) (domain.Board, bool, error)
+
 	// Automation rules (trigger → actions on issue events)
 	ListAutomationRules(ctx context.Context) ([]domain.AutomationRule, error)
 	MatchingAutomationRules(ctx context.Context, projectKey, event string) ([]domain.AutomationRule, error)
@@ -277,6 +284,22 @@ type ObsAlertInput struct {
 	DetailsMD   string
 	StackTrace  string
 	Severity    *domain.Severity
+}
+
+type BoardColumnInput struct {
+	Name     string
+	Statuses []string
+	WipLimit *int
+}
+
+// UpdateBoardColumnInput is a partial edit; nil = unchanged. ClearWip removes
+// the limit; Position swaps ordering with the neighbor at the target slot.
+type UpdateBoardColumnInput struct {
+	Name     *string
+	Statuses *[]string
+	WipLimit *int
+	ClearWip bool
+	Position *int
 }
 
 type CreateAutomationRuleInput struct {

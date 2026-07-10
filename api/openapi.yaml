@@ -378,6 +378,89 @@ paths:
         "204": { description: deleted }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /projects/{key}/board:
+    parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
+    get:
+      tags: [boards]
+      operationId: getProjectBoard
+      description: Returns the project's Kanban board, seeding default workflow columns on first access.
+      responses:
+        "200": { description: board, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } }
+
+  /boards/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [boards]
+      operationId: updateBoard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                swimlane: { type: string, enum: [none, assignee, priority] }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } }
+
+  /boards/{id}/columns:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [boards]
+      operationId: createBoardColumn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, statuses]
+              properties:
+                name: { type: string }
+                statuses: { type: array, items: { $ref: "#/components/schemas/IssueStatus" } }
+                wip_limit: { type: integer, nullable: true }
+      responses:
+        "201": { description: board with the new column, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } }
+
+  /board-columns/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [boards]
+      operationId: updateBoardColumn
+      description: Partial edit; wip_limit -1 clears the limit; position swaps with the occupant of that slot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                statuses: { type: array, items: { $ref: "#/components/schemas/IssueStatus" } }
+                wip_limit: { type: integer }
+                position: { type: integer }
+      responses:
+        "200": { description: updated board, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } }
+    delete:
+      tags: [boards]
+      operationId: deleteBoardColumn
+      responses:
+        "200": { description: updated board, content: { application/json: { schema: { $ref: "#/components/schemas/Board" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /projects/{key}/members:
     parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
     get:
@@ -1131,6 +1214,24 @@ components:
       properties:
         user: { $ref: "#/components/schemas/User" }
         role: { type: string }
+        created_at: { type: string, format: date-time }
+
+    BoardColumn:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        statuses: { type: array, items: { $ref: "#/components/schemas/IssueStatus" } }
+        wip_limit: { type: integer, nullable: true }
+        position: { type: integer }
+    Board:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        project_key: { type: string }
+        name: { type: string }
+        swimlane: { type: string, enum: [none, assignee, priority] }
+        columns: { type: array, items: { $ref: "#/components/schemas/BoardColumn" } }
         created_at: { type: string, format: date-time }
 
     Milestone:

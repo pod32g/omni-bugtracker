@@ -16,21 +16,24 @@ import (
 // project-scoped entity. The entity name is whitelisted — never interpolate
 // caller input into SQL.
 func (s *Store) ProjectKeyForEntity(ctx context.Context, entity string, id uuid.UUID) (string, error) {
-	var table string
+	var q string
 	switch entity {
 	case "component":
-		table = "components"
+		q = `SELECT p.key FROM components t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`
 	case "milestone":
-		table = "milestones"
+		q = `SELECT p.key FROM milestones t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`
 	case "release":
-		table = "releases"
+		q = `SELECT p.key FROM releases t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`
+	case "board":
+		q = `SELECT p.key FROM boards t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`
+	case "board_column":
+		q = `SELECT p.key FROM board_columns c JOIN boards b ON b.id = c.board_id
+		     JOIN projects p ON p.id = b.project_id WHERE c.id = $1`
 	default:
 		return "", fmt.Errorf("unknown entity %q", entity)
 	}
 	var key string
-	err := s.pool.QueryRow(ctx,
-		`SELECT p.key FROM `+table+` t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`, id).
-		Scan(&key)
+	err := s.pool.QueryRow(ctx, q, id).Scan(&key)
 	return key, err
 }
 
