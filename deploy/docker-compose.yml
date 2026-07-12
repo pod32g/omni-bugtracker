@@ -5,6 +5,9 @@ name: omni-bugtracker
 services:
   postgres:
     image: postgres:16-alpine
+    # Survive host reboots / dockerd restarts (matches the other self-hosted omni
+    # services). Without a policy the stack stays Exited after a reboot.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: omni
       POSTGRES_PASSWORD: omni
@@ -21,6 +24,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports: ["127.0.0.1:${OMNI_BT_REDIS_PORT:-6379}:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -42,6 +46,7 @@ services:
 
   api:
     build: { context: .., dockerfile: deploy/Dockerfile.api }
+    restart: unless-stopped
     environment:
       OMNI_BT_DATABASE__DSN: postgres://omni:omni@postgres:5432/omni_bugtracker?sslmode=disable
       OMNI_BT_REDIS__ADDR: redis:6379
@@ -60,6 +65,7 @@ services:
 
   worker:
     build: { context: .., dockerfile: deploy/Dockerfile.worker }
+    restart: unless-stopped
     environment:
       OMNI_BT_DATABASE__DSN: postgres://omni:omni@postgres:5432/omni_bugtracker?sslmode=disable
       OMNI_BT_REDIS__ADDR: redis:6379
@@ -71,6 +77,7 @@ services:
 
   web:
     build: { context: .., dockerfile: deploy/Dockerfile.web }
+    restart: unless-stopped
     ports: ["${OMNI_BT_WEB_PORT:-3000}:80"]
     depends_on: [api]
 
