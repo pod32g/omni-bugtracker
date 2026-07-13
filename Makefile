@@ -28,11 +28,16 @@ generate:
 migrate:
 	OMNI_BT_DATABASE__DSN="$(DATABASE_URL)" go run ./cmd/migrate up
 
-## build: compile server + worker binaries
+## build: compile server + worker + migrate + mcp binaries
 build:
 	go build -o $(BIN)/server ./cmd/server
 	go build -o $(BIN)/worker ./cmd/worker
 	go build -o $(BIN)/migrate ./cmd/migrate
+	go build -o $(BIN)/omni-bt-mcp ./cmd/mcp
+
+## mcp: build the MCP server binary for AI clients (see docs/MCP.md)
+mcp:
+	go build -o $(BIN)/omni-bt-mcp ./cmd/mcp
 
 ## dev: run API with live config (requires postgres + redis up)
 dev:
@@ -58,4 +63,4 @@ web:
 up:
 	docker compose -f deploy/docker-compose.yml up --build
 
-.PHONY: help tools generate migrate build dev worker test lint web up
+.PHONY: help tools generate migrate build mcp dev worker test lint web up

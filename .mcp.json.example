@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "omni-bugtracker": {
+      "command": "./bin/omni-bt-mcp",
+      "env": {
+        "OMNI_BT_API_URL": "http://localhost:8080/api/v1",
+        "OMNI_BT_API_TOKEN": "obt_replace_with_your_token"
+      }
+    }
+  }
+}

@@ -45,6 +45,13 @@ deploy/         docker-compose · Dockerfiles · Helm chart
 docs/           ARCHITECTURE.md
 ```
 
+## MCP server (AI clients)
+
+`cmd/mcp` exposes the tracker to AI assistants (Claude Code, Claude Desktop) over the
+Model Context Protocol as 67 typed tools — issues, comments, boards, webhooks,
+automation, and more — all subject to your API token's RBAC. Build with `make mcp` and
+point it at your API with a personal `obt_` token. See [`docs/MCP.md`](docs/MCP.md).
+
 ## Design choices
 
 Single-tenant · River for durable jobs (Postgres-only; Redis is cache/rate-limit only) ·
