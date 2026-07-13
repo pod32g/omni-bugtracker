@@ -58,7 +58,7 @@ export function Layout() {
     <ProjectProvider>
       {/* App shell: fixed viewport, sidebar stays put, only <main> scrolls (its content
           grows internally instead of growing the whole page). */}
-      <div className="flex h-screen overflow-hidden bg-paper">
+      <div className="flex h-screen overflow-hidden bg-mist">
         <Sidebar me={me.data} onSearch={() => setSearchOpen(true)} />
         <main className="min-w-0 flex-1 overflow-auto">
           <Outlet />
@@ -78,7 +78,7 @@ function Sidebar({ me, onSearch }: { me?: User; onSearch: () => void }) {
   const openCount = overview.data?.open_issues;
 
   return (
-    <aside className="flex w-[248px] shrink-0 flex-col border-r border-hairline bg-panel px-4 py-6">
+    <aside className="flex w-[248px] shrink-0 flex-col border-r border-hairline bg-mist px-4 py-6">
       <div className="flex items-center gap-2.5 px-2 pt-1">
         <span className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-lg bg-blueprint text-paper">
           <IconMark size={20} />
