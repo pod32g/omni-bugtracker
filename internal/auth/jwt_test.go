@@ -47,6 +47,7 @@ func TestVerifyEd25519(t *testing.T) {
 			"iss": iss, "aud": aud, "sub": sub,
 			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
 			"token_use": "access", "scope": "openid email profile",
+			"role": "member",
 		})
 		tok.Header["kid"] = kid
 		s, err := tok.SignedString(priv)
@@ -64,8 +65,11 @@ func TestVerifyEd25519(t *testing.T) {
 		if claims.Subject != "user-123" {
 			t.Fatalf("sub = %q", claims.Subject)
 		}
+		// The verifier parses the token's role claim faithfully. (Note: SyncUser
+		// deliberately ignores it for RBAC — the DB is authoritative — but the
+		// claim must still decode onto Claims.Role.)
 		if claims.Role != "member" {
-			t.Fatalf("role default = %q, want member", claims.Role)
+			t.Fatalf("role claim = %q, want member", claims.Role)
 		}
 	})
 
