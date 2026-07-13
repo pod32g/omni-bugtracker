@@ -33,31 +33,36 @@
   color-scheme: light;
 }
 
+/* Dark mode — a true neutral dark theme built on the Atlassian Design System's
+   refreshed DarkNeutral ramp (near-achromatic greys — no navy/purple tint) with
+   ADS semantic accents. Accents follow ADS's own light→dark symmetry: bold text
+   uses the 400 shade, subtle surfaces the 1000 shade, borders the 900 shade.
+   Values scraped from atlassian.design/foundations/color/color-palette. */
 .dark {
-  --color-paper: 14 18 25;
-  --color-panel: 21 27 38;
-  --color-mist: 16 21 30;
-  --color-hairline: 39 47 62;
-  --color-ink: 233 237 244;
-  --color-graphite: 155 167 187;
-  --color-graphite-soft: 124 137 160;
-  --color-blueprint: 94 124 255;
-  --color-blueprint-soft: 27 37 71;
-  --color-blueprint-border: 49 63 108;
-  --color-critical: 255 107 102;
-  --color-critical-soft: 42 22 25;
-  --color-critical-border: 73 38 43;
-  --color-high: 231 152 47;
-  --color-high-soft: 40 31 17;
-  --color-high-border: 71 53 27;
-  --color-resolved: 64 191 125;
-  --color-resolved-soft: 17 37 27;
-  --color-resolved-border: 35 74 51;
-  --color-medium: 138 151 180;
-  --color-terminal: 7 10 16;
-  --color-terminal-ink: 199 210 228;
-  --color-chip: 42 53 71;
-  --color-chip-empty: 42 53 71;
+  --color-paper: 31 31 33;            /* #1F1F21  DarkNeutral100 · surface */
+  --color-panel: 43 44 47;            /* #2B2C2F  DarkNeutral250 · raised / hover / inline code */
+  --color-mist: 24 25 26;             /* #18191A  DarkNeutral0 · sunken subtle bg */
+  --color-hairline: 61 63 67;         /* #3D3F43  DarkNeutral350 · border */
+  --color-ink: 206 207 210;           /* #CECFD2  DarkNeutral1000 · primary text */
+  --color-graphite: 169 171 175;      /* #A9ABAF  DarkNeutral800 · text.subtle */
+  --color-graphite-soft: 126 129 136; /* #7E8188  DarkNeutral600 · text.subtlest */
+  --color-blueprint: 102 157 241;     /* #669DF1  Blue400 · link / primary / focus */
+  --color-blueprint-soft: 28 43 66;   /* #1C2B42  Blue1000 · selected / brand-subtle surface */
+  --color-blueprint-border: 18 50 99; /* #123263  Blue900 · accent border */
+  --color-critical: 248 113 104;      /* #F87168  Red400 · danger text/icon */
+  --color-critical-soft: 66 34 31;    /* #42221F  Red1000 · danger surface */
+  --color-critical-border: 93 31 26;  /* #5D1F1A  Red900 */
+  --color-high: 252 167 0;            /* #FCA700  Orange400 · high severity */
+  --color-high-soft: 58 44 31;        /* #3A2C1F  Orange1000 · warning surface */
+  --color-high-border: 105 50 0;      /* #693200  Orange900 */
+  --color-resolved: 75 206 151;       /* #4BCE97  Green400 · success text/icon */
+  --color-resolved-soft: 28 51 41;    /* #1C3329  Green1000 · success surface */
+  --color-resolved-border: 22 75 53;  /* #164B35  Green900 */
+  --color-medium: 150 153 158;        /* #96999E  DarkNeutral700 · muted */
+  --color-terminal: 17 18 19;         /* #111213  DarkNeutral-100 · code block */
+  --color-terminal-ink: 206 207 210;  /* #CECFD2 */
+  --color-chip: 61 63 67;             /* #3D3F43  DarkNeutral350 · filled chip surface */
+  --color-chip-empty: 43 44 47;       /* #2B2C2F  DarkNeutral250 */
   color-scheme: dark;
 }
 
