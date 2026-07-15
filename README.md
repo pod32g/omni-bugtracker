@@ -46,6 +46,13 @@ deploy/         docker-compose · Dockerfiles · Helm chart
 docs/           ARCHITECTURE.md
 ```
 
+## API docs
+
+Interactive **Swagger UI** is served by the API at [`/docs`](http://localhost:8080/docs)
+(the raw OpenAPI 3.1 spec is at `/openapi.yaml`). Click **Authorize**, paste a personal
+`obt_` token, and "Try it out" issues live calls against `/api/v1`. The spec is embedded
+in the server binary, so it's always in sync with the deployed build.
+
 ## MCP server (AI clients)
 
 `cmd/mcp` exposes the tracker to AI assistants (Claude Code, Claude Desktop) over the

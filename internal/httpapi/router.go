@@ -14,6 +14,7 @@ import (
 	"github.com/omni/bugtracker/internal/auth"
 	"github.com/omni/bugtracker/internal/config"
 	mw "github.com/omni/bugtracker/internal/httpapi/middleware"
+	"github.com/omni/bugtracker/internal/httpapi/swaggerui"
 	"github.com/omni/bugtracker/internal/platform"
 )
 
@@ -58,6 +59,12 @@ func NewRouter(d Deps) http.Handler {
 	r.Get("/healthz", health)
 	r.Get("/readyz", readyz(d.DB))
 	r.Handle("/metrics", promhttp.HandlerFor(d.Metrics.Registry, promhttp.HandlerOpts{}))
+
+	// Interactive API docs (Swagger UI) + the raw OpenAPI spec. The UI assets are
+	// vendored and served locally (no CDN).
+	r.Get("/docs", serveDocs)
+	r.Get("/openapi.yaml", serveOpenAPISpec)
+	r.Handle("/swagger-ui/*", http.StripPrefix("/swagger-ui/", http.FileServer(http.FS(swaggerui.Assets))))
 
 	// Unauthenticated browser login flow (OIDC BFF).
 	if d.AuthFlow != nil {
