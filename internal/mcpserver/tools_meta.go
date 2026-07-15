@@ -54,6 +54,12 @@ func (s *Server) registerMeta() {
 	}, s.updateProject)
 
 	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "rename_project_key",
+		Title:       "Rename project key",
+		Description: "Change a project's key (e.g. BUG → TRACK). Every issue re-labels automatically (BUG-42 → TRACK-42) since issue keys are derived; no issues are rewritten. External references to the old key (git commits, bookmarks) won't resolve afterwards. Requires project:manage.",
+	}, s.renameProjectKey)
+
+	mcp.AddTool(s.srv, &mcp.Tool{
 		Name:        "archive_project",
 		Title:       "Archive project",
 		Description: "Soft-archive a project (sets is_archived=true). Requires project:manage.",
@@ -113,6 +119,15 @@ func (s *Server) updateProject(ctx context.Context, _ *mcp.CallToolRequest, a up
 	putPtr(body, "is_archived", a.IsArchived)
 	putPtr(body, "default_assignee_id", a.DefaultAssigneeID)
 	return result(s.c.patch(ctx, "/projects/"+seg(a.Key), body))
+}
+
+type renameKeyArgs struct {
+	Key    string `json:"key" jsonschema:"current project key, e.g. BUG"`
+	NewKey string `json:"new_key" jsonschema:"new project key: 2–10 uppercase letters/digits starting with a letter, e.g. TRACK"`
+}
+
+func (s *Server) renameProjectKey(ctx context.Context, _ *mcp.CallToolRequest, a renameKeyArgs) (*mcp.CallToolResult, any, error) {
+	return result(s.c.post(ctx, "/projects/"+seg(a.Key)+"/rename-key", map[string]any{"new_key": a.NewKey}))
 }
 
 func (s *Server) archiveProject(ctx context.Context, _ *mcp.CallToolRequest, a projectKeyArgs) (*mcp.CallToolResult, any, error) {

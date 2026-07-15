@@ -63,7 +63,7 @@ dev API on `:8080`.
 
 ## Tools
 
-67 tools spanning the API. Highlights:
+68 tools spanning the API. Highlights:
 
 - **Discovery**: `whoami`, `list_users`, `get_dashboard`, `list_projects`, `get_project`,
   `search_issues` (full-text), `list_issues` (GitHub-style filter grammar).

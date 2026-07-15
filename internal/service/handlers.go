@@ -76,6 +76,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/projects", h.createProject)
 	r.Get("/projects/{key}", h.getProject)
 	r.Patch("/projects/{key}", h.updateProject)
+	r.Post("/projects/{key}/rename-key", h.renameProjectKey)
 	r.Delete("/projects/{key}", h.archiveProject)
 	r.Get("/projects/{key}/labels", h.listLabels)
 	r.Get("/projects/{key}/components", h.listComponents)
@@ -1056,6 +1057,46 @@ func (h *httpHandlers) updateProject(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, project)
+}
+
+// renameProjectKey changes a project's key (e.g. BUG → TRACK). Issue keys are derived
+// from the project key, so every issue re-labels automatically (BUG-42 → TRACK-42) and
+// no issue rows are rewritten. External references to the old key (git commits,
+// bookmarks) won't resolve afterwards — that's inherent to renaming a key.
+func (h *httpHandlers) renameProjectKey(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	key := chi.URLParam(r, "key")
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	var body struct {
+		NewKey string `json:"new_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	newKey := strings.ToUpper(strings.TrimSpace(body.NewKey))
+	if !projectKeyRe.MatchString(newKey) {
+		httpapi.WriteValidation(w, map[string]string{"new_key": "must be 2–10 uppercase letters/digits, starting with a letter"})
+		return
+	}
+	if newKey == key {
+		httpapi.WriteProblem(w, http.StatusConflict, "no change", "project already has key "+key)
+		return
+	}
+	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+		return
+	}
+	project, err := h.repo.RenameProjectKey(r.Context(), key, newKey)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "rename failed",
+			"a project with key "+newKey+" may already exist: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, project)

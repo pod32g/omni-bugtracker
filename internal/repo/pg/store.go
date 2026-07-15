@@ -196,6 +196,19 @@ func (s *Store) UpdateProject(ctx context.Context, in service.UpdateProjectInput
 	return p, err
 }
 
+// RenameProjectKey changes projects.key. Because issue keys are derived from the
+// project key via join, no issue rows are touched. A collision with an existing key
+// fails on the UNIQUE constraint; the format is guarded by the table's CHECK.
+func (s *Store) RenameProjectKey(ctx context.Context, oldKey, newKey string) (domain.Project, error) {
+	const q = `UPDATE projects SET key = $2, updated_at = now()
+	           WHERE key = $1
+	           RETURNING id, key, name, description_md, default_assignee_id, is_archived, created_at`
+	var p domain.Project
+	err := s.pool.QueryRow(ctx, q, oldKey, newKey).
+		Scan(&p.ID, &p.Key, &p.Name, &p.DescriptionMD, &p.DefaultAssigneeID, &p.IsArchived, &p.CreatedAt)
+	return p, err
+}
+
 // ── api tokens (self-service, per user) ──
 
 func (s *Store) CreateAPIToken(ctx context.Context, in service.CreateTokenInput) (domain.APIToken, error) {

@@ -41,6 +41,10 @@ type Repository interface {
 	ListProjects(ctx context.Context, limit, offset int32) ([]domain.Project, error)
 	CreateProject(ctx context.Context, in CreateProjectInput) (domain.Project, error)
 	UpdateProject(ctx context.Context, in UpdateProjectInput) (domain.Project, error)
+	// RenameProjectKey changes a project's key. Issue keys are derived (project.key
+	// || '-' || number), so every issue re-labels automatically; a collision with an
+	// existing key returns an error (enforced by the UNIQUE constraint).
+	RenameProjectKey(ctx context.Context, oldKey, newKey string) (domain.Project, error)
 	ListLabels(ctx context.Context, projectKey string) ([]domain.Label, error)
 
 	// Components (project-scoped areas of ownership)

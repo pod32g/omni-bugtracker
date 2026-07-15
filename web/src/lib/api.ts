@@ -345,6 +345,8 @@ export const api = {
     key: string,
     patch: { name?: string; description_md?: string; is_archived?: boolean; default_assignee_id?: string },
   ) => request<Project>(`/projects/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  renameProjectKey: (key: string, newKey: string) =>
+    request<Project>(`/projects/${key}/rename-key`, { method: "POST", body: JSON.stringify({ new_key: newKey }) }),
   archiveProject: (key: string) => request<void>(`/projects/${key}`, { method: "DELETE" }),
   listTokens: () => request<{ items: ApiToken[] }>("/me/tokens"),
   createToken: (name: string, scopes: string[] = []) =>

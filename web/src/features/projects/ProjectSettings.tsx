@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, UNASSIGNED, type Component, type User } from "../../lib/api";
+import { useProject } from "../../lib/project";
 import { AssigneeSelect } from "../issues/formFields";
 import { Avatar } from "../../components/Badges";
 import { IconPlus } from "../../components/icons";
 
 const ROLES = ["owner", "admin", "maintainer", "member", "reporter", "bot"];
+const KEY_RE = /^[A-Z][A-Z0-9]{1,9}$/;
 
 const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
 
@@ -15,6 +17,7 @@ export function ProjectSettings() {
   const qc = useQueryClient();
   const navigate = useNavigate();
 
+  const { setProjectKey } = useProject();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
   const project = useQuery({ queryKey: ["project", key], queryFn: () => api.getProject(key), enabled: !!key });
   // my_role is the effective role: global role, elevated by project membership.
@@ -24,6 +27,7 @@ export function ProjectSettings() {
   const [description, setDescription] = useState("");
   const [defaultAssignee, setDefaultAssignee] = useState(UNASSIGNED);
   const [saved, setSaved] = useState(false);
+  const [newKey, setNewKey] = useState("");
 
   // Seed the form once the project loads (and re-seed when switching projects).
   useEffect(() => {
@@ -45,6 +49,18 @@ export function ProjectSettings() {
       qc.invalidateQueries({ queryKey: ["projects"] });
       setSaved(true);
       setTimeout(() => setSaved(false), 1800);
+    },
+  });
+
+  const rename = useMutation({
+    mutationFn: () => api.renameProjectKey(key, newKey.trim()),
+    onSuccess: (updated) => {
+      // Persist the new key, then hard-navigate so the project context and every
+      // query cached under the old key re-initialize cleanly. (An in-SPA update
+      // races the context's "is this key still in the list?" fallback, which would
+      // otherwise bounce the selection to the first project.)
+      setProjectKey(updated.key);
+      window.location.assign(`/projects/${updated.key}/settings`);
     },
   });
 
@@ -86,7 +102,7 @@ export function ProjectSettings() {
             <h2 className="text-base font-semibold text-ink">Details</h2>
             <p className="text-sm leading-relaxed text-graphite">
               The project key <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-ink">{key}</code>{" "}
-              is permanent — it prefixes every issue key.
+              prefixes every issue key. It can be changed in the danger zone below.
             </p>
           </div>
 
@@ -144,26 +160,63 @@ export function ProjectSettings() {
         <MembersSection projectKey={key} canManage={canManage} />
 
         {canManage && (
-          <section className="flex flex-col gap-3 rounded-lg border border-critical/40 bg-paper p-6">
-            <div className="flex flex-col gap-1">
-              <h2 className="text-base font-semibold text-critical">Danger zone</h2>
+          <section className="flex flex-col gap-5 rounded-lg border border-critical/40 bg-paper p-6">
+            <h2 className="text-base font-semibold text-critical">Danger zone</h2>
+
+            <div className="flex flex-col gap-2">
+              <h3 className="text-sm font-semibold text-ink">Change project key</h3>
               <p className="text-sm leading-relaxed text-graphite">
-                Archiving hides the project and its issues from pickers and lists. Nothing is deleted — an admin can
-                unarchive via the API.
+                Re-labels every issue —{" "}
+                <span className="font-mono text-ink">{key}-42</span> becomes{" "}
+                <span className="font-mono text-ink">{(newKey.trim() || "NEW") + "-42"}</span>. Nothing is deleted, but
+                links to the old keys elsewhere (git commits, bookmarks) will stop resolving.
               </p>
+              {rename.isError && <p className="text-sm text-critical">{(rename.error as Error).message}</p>}
+              <div className="flex items-end gap-3">
+                <label className="text-sm">
+                  <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+                    New key
+                  </span>
+                  <input
+                    value={newKey}
+                    onChange={(e) => setNewKey(e.target.value.toUpperCase())}
+                    placeholder={key}
+                    maxLength={10}
+                    className="w-44 rounded-md border border-hairline bg-paper px-3 py-2 font-mono text-sm uppercase text-ink outline-none focus:border-blueprint"
+                  />
+                </label>
+                <button
+                  disabled={rename.isPending || !KEY_RE.test(newKey.trim()) || newKey.trim() === key}
+                  onClick={() => {
+                    const nk = newKey.trim();
+                    if (window.confirm(`Rename ${key} → ${nk}? Every issue key becomes ${nk}-<n>.`)) rename.mutate();
+                  }}
+                  className="h-10 rounded-md border border-critical px-4 text-sm font-semibold text-critical transition hover:bg-critical-soft disabled:opacity-50"
+                >
+                  {rename.isPending ? "Renaming…" : "Change key"}
+                </button>
+              </div>
             </div>
-            {archive.isError && <p className="text-sm text-critical">{(archive.error as Error).message}</p>}
-            <div>
-              <button
-                disabled={archive.isPending}
-                onClick={() => {
-                  if (window.confirm(`Archive ${key} — “${project.data?.name}”? It disappears from the project picker.`))
-                    archive.mutate();
-                }}
-                className="rounded-md border border-critical px-4 py-2 text-sm font-semibold text-critical transition hover:bg-critical-soft disabled:opacity-50"
-              >
-                {archive.isPending ? "Archiving…" : "Archive project"}
-              </button>
+
+            <div className="flex flex-col gap-2 border-t border-hairline pt-5">
+              <h3 className="text-sm font-semibold text-ink">Archive project</h3>
+              <p className="text-sm leading-relaxed text-graphite">
+                Hides the project and its issues from pickers and lists. Nothing is deleted — an admin can unarchive via
+                the API.
+              </p>
+              {archive.isError && <p className="text-sm text-critical">{(archive.error as Error).message}</p>}
+              <div>
+                <button
+                  disabled={archive.isPending}
+                  onClick={() => {
+                    if (window.confirm(`Archive ${key} — “${project.data?.name}”? It disappears from the project picker.`))
+                      archive.mutate();
+                  }}
+                  className="rounded-md border border-critical px-4 py-2 text-sm font-semibold text-critical transition hover:bg-critical-soft disabled:opacity-50"
+                >
+                  {archive.isPending ? "Archiving…" : "Archive project"}
+                </button>
+              </div>
             </div>
           </section>
         )}
