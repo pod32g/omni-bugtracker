@@ -163,6 +163,22 @@ paths:
         "204": { description: archived }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /projects/{key}/rename-key:
+    parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
+    post:
+      tags: [projects]
+      operationId: renameProjectKey
+      description: "Change the project's key (e.g. BUG → TRACK). Issue keys are derived, so every issue re-labels automatically (BUG-42 → TRACK-42) and no issues are rewritten; external references to the old key (git commits, bookmarks) won't resolve. Requires project:manage."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RenameProjectKey" } } }
+      responses:
+        "200": { description: renamed, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
   /projects/{key}/issues:
     parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
     get:
@@ -1124,6 +1140,15 @@ components:
           format: uuid
           nullable: true
           description: "Zero UUID clears the default assignee."
+
+    RenameProjectKey:
+      type: object
+      required: [new_key]
+      properties:
+        new_key:
+          type: string
+          pattern: "^[A-Z][A-Z0-9]{1,9}$"
+          description: "New project key; must differ from the current one."
 
     ApiToken:
       type: object
