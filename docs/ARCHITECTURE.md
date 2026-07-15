@@ -50,6 +50,15 @@ Human IDs: `projects.next_issue_number` incremented in-tx → key rendered as `<
 
 See `db/migrations/` for the authoritative schema and `api/openapi.yaml` for the API contract.
 
+## API docs
+
+The API serves its own docs: `api/openapi.yaml` is `go:embed`'d into the binary and exposed
+as interactive **Swagger UI at `/docs`** (raw spec at `/openapi.yaml`) — so the docs can't
+drift from the running build. The Swagger UI assets are vendored
+(`internal/httpapi/swaggerui`) and served under `/swagger-ui/`, so the docs work with no CDN
+or external calls. All three routes are unauthenticated (next to `/healthz`); "Try it out"
+issues live `/api/v1` calls once you **Authorize** with an `obt_` bearer token.
+
 ## Integrations
 
 | Service | Direction | Mechanism |
