@@ -56,7 +56,7 @@ in the server binary, so it's always in sync with the deployed build.
 ## MCP server (AI clients)
 
 `cmd/mcp` exposes the tracker to AI assistants (Claude Code, Claude Desktop) over the
-Model Context Protocol as 70 typed tools — issues, comments, boards, webhooks,
+Model Context Protocol as 72 typed tools — issues, comments, boards, webhooks,
 automation, and more — all subject to your API token's RBAC. Build with `make mcp` and
 point it at your API with a personal `obt_` token. See [`docs/MCP.md`](docs/MCP.md).
 

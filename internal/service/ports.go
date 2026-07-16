@@ -80,6 +80,10 @@ type Repository interface {
 	// ArchiveStaleClosed archives every non-archived issue closed more than `days`
 	// ago (attributed to actor). Returns how many were archived. Used by auto-archive.
 	ArchiveStaleClosed(ctx context.Context, days int, actor uuid.UUID) (int, error)
+	// GetSetting returns a runtime setting's JSONB value, or (nil, nil) if unset.
+	GetSetting(ctx context.Context, key string) ([]byte, error)
+	// SetSetting upserts a runtime setting's JSONB value.
+	SetSetting(ctx context.Context, key string, value []byte) error
 
 	// ProjectKeyForEntity resolves which project a component/milestone/release
 	// belongs to (for permission checks on id-addressed endpoints).

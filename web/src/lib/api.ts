@@ -333,6 +333,12 @@ export const api = {
   listUsers: () => request<{ items: User[] }>("/users"),
   updateUserRole: (id: string, role: string) =>
     request<User>(`/users/${id}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
+  getArchiveSettings: () => request<{ auto_after_days: number }>("/settings/archive"),
+  setArchiveSettings: (autoAfterDays: number) =>
+    request<{ auto_after_days: number }>("/settings/archive", {
+      method: "PUT",
+      body: JSON.stringify({ auto_after_days: autoAfterDays }),
+    }),
   dashboard: () => request<DashboardOverview>("/dashboards/overview"),
   search: (q: string, limit = 20) =>
     request<{ items: SearchHit[]; total: number; source: string }>(

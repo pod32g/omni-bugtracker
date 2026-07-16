@@ -461,7 +461,12 @@ type autoArchiveWorker struct {
 }
 
 func (w *autoArchiveWorker) Work(ctx context.Context, _ *river.Job[events.AutoArchiveArgs]) error {
-	days := w.d.Cfg.Archive.AutoAfterDays
+	// Read live: the Settings value (DB) overrides the bootstrap config default, so an
+	// admin can toggle auto-archive without restarting the worker.
+	days, err := service.EffectiveArchiveDays(ctx, w.d.Store, w.d.Cfg)
+	if err != nil {
+		return err
+	}
 	if days <= 0 {
 		return nil
 	}

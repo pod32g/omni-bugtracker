@@ -23,6 +23,8 @@ type Publisher interface {
 	PublishTx(ctx context.Context, tx pgx.Tx, ev events.DomainEventArgs) error
 	// EnqueueWebhook schedules an outbound delivery (webhook redelivery).
 	EnqueueWebhook(ctx context.Context, args events.WebhookJobArgs) error
+	// EnqueueAutoArchive runs the auto-archive sweep once, immediately.
+	EnqueueAutoArchive(ctx context.Context) error
 }
 
 // Issues is the issue/bug application service.

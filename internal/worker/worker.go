@@ -46,15 +46,15 @@ func New(d Deps) (*river.Client[pgx.Tx], error) {
 		"integrations": {MaxWorkers: queueSize(q, "integrations", 5)},
 	}
 
-	// Auto-archive: register a daily periodic job only when enabled. RunOnStart makes
-	// the effect observable on the next worker boot after enabling it.
-	var periodic []*river.PeriodicJob
-	if d.Cfg.Archive.AutoAfterDays > 0 {
-		periodic = append(periodic, river.NewPeriodicJob(
+	// Auto-archive: always register the daily job. Whether it archives anything is
+	// decided at run time from the Settings value (DB, falling back to config), so an
+	// admin can toggle it without restarting the worker. The job no-ops when disabled.
+	periodic := []*river.PeriodicJob{
+		river.NewPeriodicJob(
 			river.PeriodicInterval(24*time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) { return events.AutoArchiveArgs{}, nil },
 			&river.PeriodicJobOpts{RunOnStart: true},
-		))
+		),
 	}
 
 	return river.NewClient(riverpgxv5.New(d.DB), &river.Config{

@@ -30,6 +30,18 @@ func (s *Server) registerMeta() {
 	}, s.getDashboard)
 
 	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "get_archive_settings",
+		Title:       "Get auto-archive settings",
+		Description: "Get the auto-archive window (auto_after_days): closed issues older than this many days are archived by a daily job; 0 = disabled. Requires admin.",
+	}, s.getArchiveSettings)
+
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "set_archive_settings",
+		Title:       "Set auto-archive settings",
+		Description: "Enable or tune auto-archive: set auto_after_days to the number of days after which closed issues are archived (0 disables it). Takes effect live; enabling runs a sweep immediately. Requires admin.",
+	}, s.setArchiveSettings)
+
+	mcp.AddTool(s.srv, &mcp.Tool{
 		Name:        "list_projects",
 		Title:       "List projects",
 		Description: "List all projects (key, name, description, archived flag). Project keys are the uppercase prefixes used in issue keys (e.g. BUG in BUG-421).",
@@ -76,6 +88,18 @@ func (s *Server) listUsersTool(ctx context.Context, _ *mcp.CallToolRequest, _ no
 
 func (s *Server) getDashboard(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, any, error) {
 	return result(s.c.get(ctx, "/dashboards/overview", nil))
+}
+
+func (s *Server) getArchiveSettings(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, any, error) {
+	return result(s.c.get(ctx, "/settings/archive", nil))
+}
+
+type archiveSettingsArgs struct {
+	AutoAfterDays int `json:"auto_after_days" jsonschema:"days after which closed issues are auto-archived; 0 disables auto-archive"`
+}
+
+func (s *Server) setArchiveSettings(ctx context.Context, _ *mcp.CallToolRequest, a archiveSettingsArgs) (*mcp.CallToolResult, any, error) {
+	return result(s.c.put(ctx, "/settings/archive", map[string]any{"auto_after_days": a.AutoAfterDays}))
 }
 
 func (s *Server) listProjects(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, any, error) {

@@ -42,10 +42,12 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 			maxUploadMB = cfg.Storage.MaxUploadMB
 		}
 	}
-	h := &httpHandlers{issues: issues, repo: repo, pub: pub, attachDir: attachDir, maxUpload: maxUploadMB << 20}
+	h := &httpHandlers{issues: issues, repo: repo, pub: pub, cfg: cfg, attachDir: attachDir, maxUpload: maxUploadMB << 20}
 
 	r := chi.NewRouter()
 	r.Get("/me", h.me)
+	r.Get("/settings/archive", h.getArchiveSettings)
+	r.Put("/settings/archive", h.updateArchiveSettings)
 	r.Get("/me/tokens", h.listTokens)
 	r.Post("/me/tokens", h.createToken)
 	r.Delete("/me/tokens/{id}", h.revokeToken)
@@ -127,8 +129,9 @@ type httpHandlers struct {
 	issues    *Issues
 	repo      Repository
 	pub       Publisher
-	attachDir string // local-disk attachment storage root
-	maxUpload int64  // bytes
+	cfg       *config.Config // bootstrap defaults (e.g. archive fallback)
+	attachDir string         // local-disk attachment storage root
+	maxUpload int64          // bytes
 }
 
 // canOnProject is the elevation-aware permission check: the principal passes
@@ -341,6 +344,48 @@ func validRole(role string) bool {
 	default:
 		return false
 	}
+}
+
+// getArchiveSettings / updateArchiveSettings expose the auto-archive window as a
+// runtime setting (admin only) so it can be toggled from the UI without a redeploy.
+func (h *httpHandlers) getArchiveSettings(w http.ResponseWriter, r *http.Request) {
+	if !auth.FromContext(r.Context()).Can(auth.PermAdmin) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing admin:all")
+		return
+	}
+	days, err := EffectiveArchiveDays(r.Context(), h.repo, h.cfg)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "read failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"auto_after_days": days})
+}
+
+func (h *httpHandlers) updateArchiveSettings(w http.ResponseWriter, r *http.Request) {
+	if !auth.FromContext(r.Context()).Can(auth.PermAdmin) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing admin:all")
+		return
+	}
+	var body struct {
+		AutoAfterDays int `json:"auto_after_days"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.AutoAfterDays < 0 {
+		httpapi.WriteValidation(w, map[string]string{"auto_after_days": "must be 0 (off) or a positive number of days"})
+		return
+	}
+	if err := SetArchiveDays(r.Context(), h.repo, body.AutoAfterDays); err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "save failed", err.Error())
+		return
+	}
+	// Enabling it runs a sweep now so it doesn't wait for the daily tick; best-effort.
+	if body.AutoAfterDays > 0 {
+		_ = h.pub.EnqueueAutoArchive(r.Context())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"auto_after_days": body.AutoAfterDays})
 }
 
 func (h *httpHandlers) dashboard(w http.ResponseWriter, r *http.Request) {

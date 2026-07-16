@@ -79,6 +79,13 @@ func (p *Publisher) Enqueue(ctx context.Context, args river.JobArgs) error {
 	return err
 }
 
+// EnqueueAutoArchive runs the auto-archive sweep once, now (used when an admin enables
+// it from Settings so it doesn't wait for the daily periodic tick).
+func (p *Publisher) EnqueueAutoArchive(ctx context.Context) error {
+	_, err := p.client.Insert(ctx, AutoArchiveArgs{}, nil)
+	return err
+}
+
 // EnqueueWebhook schedules one outbound webhook delivery (used for redelivery
 // from the API; normal deliveries are fanned out by the worker dispatcher).
 func (p *Publisher) EnqueueWebhook(ctx context.Context, args WebhookJobArgs) error {

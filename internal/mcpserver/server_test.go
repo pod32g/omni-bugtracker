@@ -54,6 +54,7 @@ func TestToolCatalog(t *testing.T) {
 	// A representative slice across every group; if any is missing, registration broke.
 	want := []string{
 		"whoami", "list_users", "get_dashboard", "list_projects", "get_project",
+		"get_archive_settings", "set_archive_settings",
 		"create_project", "update_project", "rename_project_key", "archive_project",
 		"search_issues", "list_issues", "get_issue", "create_issue", "update_issue",
 		"transition_issue", "move_issue", "delete_issue", "bulk_update_issues",
