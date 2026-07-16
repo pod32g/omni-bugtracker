@@ -57,6 +57,7 @@ func TestToolCatalog(t *testing.T) {
 		"create_project", "update_project", "rename_project_key", "archive_project",
 		"search_issues", "list_issues", "get_issue", "create_issue", "update_issue",
 		"transition_issue", "move_issue", "delete_issue", "bulk_update_issues",
+		"archive_issue", "unarchive_issue",
 		"list_comments", "add_comment", "update_comment", "delete_comment",
 		"list_relations", "add_relation", "delete_relation",
 		"list_watchers", "watch_issue", "unwatch_issue",

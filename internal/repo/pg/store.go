@@ -352,6 +352,12 @@ func (s *Store) GetIssueByID(ctx context.Context, id uuid.UUID) (domain.Issue, e
 
 func (s *Store) ListIssues(ctx context.Context, f service.IssueFilter) ([]domain.Issue, int, error) {
 	where := []string{"i.deleted_at IS NULL", "p.key = $1"}
+	// Archived issues are hidden from the default list; `is:archived` shows only them.
+	if f.ShowArchived {
+		where = append(where, "i.archived_at IS NOT NULL")
+	} else {
+		where = append(where, "i.archived_at IS NULL")
+	}
 	args := []any{f.ProjectKey}
 	add := func(cond string, val any) {
 		args = append(args, val)
@@ -444,6 +450,70 @@ func (s *Store) TransitionIssue(ctx context.Context, id uuid.UUID, to domain.Iss
 	}
 	row := s.pool.QueryRow(ctx, selectIssue+` WHERE i.id = $1`, id)
 	return scanIssue(row)
+}
+
+// SetIssueArchived stamps or clears archived_at, records an activity entry, and runs
+// publish in the same tx. Archiving hides the issue from default lists/search without
+// changing its status or deleting it.
+func (s *Store) SetIssueArchived(ctx context.Context, id, actor uuid.UUID, archived bool, publish service.PublishFn) (domain.Issue, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	set, verb := "archived_at = NULL", "issue.unarchived"
+	if archived {
+		set, verb = "archived_at = now()", "issue.archived"
+	}
+	if _, err := tx.Exec(ctx, `UPDATE issues SET `+set+`, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, id); err != nil {
+		return domain.Issue{}, err
+	}
+	if err := recordActivity(ctx, tx, id, actor, verb, "issue", id); err != nil {
+		return domain.Issue{}, err
+	}
+	if publish != nil {
+		if err := publish(tx); err != nil {
+			return domain.Issue{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Issue{}, err
+	}
+	return scanIssue(s.pool.QueryRow(ctx, selectIssue+` WHERE i.id = $1`, id))
+}
+
+// ArchiveStaleClosed archives every non-archived, non-deleted issue whose closed_at is
+// older than `days`, in one set-based statement, and writes one activity row per issue.
+// Returns the number archived. Used by the daily auto-archive job.
+func (s *Store) ArchiveStaleClosed(ctx context.Context, days int, actor uuid.UUID) (int, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	const q = `
+		WITH archived AS (
+			UPDATE issues SET archived_at = now(), updated_at = now()
+			 WHERE closed_at IS NOT NULL
+			   AND closed_at < now() - ($1 * interval '1 day')
+			   AND archived_at IS NULL
+			   AND deleted_at IS NULL
+			RETURNING id
+		), logged AS (
+			INSERT INTO activity (issue_id, actor_id, verb, entity_type, entity_id, changes)
+			SELECT id, $2, 'issue.archived', 'issue', id, '{}' FROM archived
+		)
+		SELECT count(*) FROM archived`
+	var n int
+	if err := tx.QueryRow(ctx, q, days, actor).Scan(&n); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // UpdateIssue applies a partial update (COALESCE keeps unchanged fields), records an
@@ -1061,7 +1131,7 @@ const selectIssue = `
 	SELECT i.id, p.key, i.number, i.type, i.title, i.description_md, i.status, i.severity, i.priority,
 	       i.version_affected, i.version_fixed, i.git_commit_sha, i.pull_request_url,
 	       i.repro_steps_md, i.expected_md, i.actual_md, i.environment_md, i.source,
-	       i.created_at, i.updated_at,
+	       i.created_at, i.updated_at, i.archived_at,
 	       ru.id, ru.display_name, ru.email,
 	       au.id, au.display_name, au.email,
 	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
@@ -1091,7 +1161,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 		&i.ID, &i.ProjectKey, &i.Number, &i.Type, &i.Title, &i.DescriptionMD, &i.Status, &sev, &i.Priority,
 		&i.VersionAffected, &i.VersionFixed, &i.GitCommitSHA, &i.PullRequestURL,
 		&i.ReproStepsMD, &i.ExpectedMD, &i.ActualMD, &i.EnvironmentMD, &i.Source,
-		&i.CreatedAt, &i.UpdatedAt,
+		&i.CreatedAt, &i.UpdatedAt, &i.ArchivedAt,
 		&reporterID, &reporterName, &reporterEmail,
 		&assigneeID, &assigneeName, &assigneeEmail,
 		&i.Labels, &i.Components,

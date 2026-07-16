@@ -19,7 +19,7 @@ func (s *Store) Search(ctx context.Context, query string, limit int32) ([]domain
 		                    'MaxFragments=2, MaxWords=16, MinWords=4, StartSel=«, StopSel=»') AS snippet,
 		        ts_rank(i.fts, tsq.query) AS rank, 'issue' AS matched_in
 		   FROM issues i JOIN projects p ON p.id = i.project_id, tsq
-		  WHERE i.fts @@ tsq.query AND i.deleted_at IS NULL)
+		  WHERE i.fts @@ tsq.query AND i.deleted_at IS NULL AND i.archived_at IS NULL)
 		UNION ALL
 		(SELECT p.key || '-' || i.number, p.key, i.title, i.status::text, i.type::text,
 		        ts_headline('english', left(c.body_md, 600), tsq.query,
@@ -28,7 +28,7 @@ func (s *Store) Search(ctx context.Context, query string, limit int32) ([]domain
 		   FROM comments c
 		   JOIN issues i ON i.id = c.issue_id
 		   JOIN projects p ON p.id = i.project_id, tsq
-		  WHERE c.fts @@ tsq.query AND c.deleted_at IS NULL AND i.deleted_at IS NULL)
+		  WHERE c.fts @@ tsq.query AND c.deleted_at IS NULL AND i.deleted_at IS NULL AND i.archived_at IS NULL)
 		ORDER BY rank DESC
 		LIMIT $2`
 	rows, err := s.pool.Query(ctx, q, query, clampLimit(limit))

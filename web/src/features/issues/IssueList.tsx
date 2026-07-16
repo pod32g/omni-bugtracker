@@ -15,6 +15,7 @@ const QUICK_FILTERS = [
   { label: "Assigned to me", filter: "assignee:@me" },
   { label: "Critical", filter: "severity:critical" },
   { label: "All", filter: "" },
+  { label: "Archived", filter: "is:archived" },
 ];
 
 const SORTS = [

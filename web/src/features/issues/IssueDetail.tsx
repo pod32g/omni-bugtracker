@@ -89,6 +89,14 @@ export function IssueDetail() {
       navigate("/issues");
     },
   });
+  const archive = useMutation({
+    mutationFn: (archived: boolean) => (archived ? api.archiveIssue(issueKey) : api.unarchiveIssue(issueKey)),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["issue", issueKey] });
+      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: ["activity", issueKey] });
+    },
+  });
   const addComment = useMutation({
     mutationFn: () => api.addComment(issueKey, comment),
     onSuccess: () => {
@@ -139,6 +147,16 @@ export function IssueDetail() {
                 <button
                   onClick={() => {
                     setMenuOpen(false);
+                    archive.mutate(!i.archived_at);
+                  }}
+                  disabled={archive.isPending}
+                  className="block w-full px-3 py-2 text-left text-sm text-ink transition hover:bg-panel disabled:opacity-50"
+                >
+                  {i.archived_at ? "Unarchive issue" : "Archive issue"}
+                </button>
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
                     if (window.confirm(`Delete ${i.key}? This removes it from lists (soft delete).`)) del.mutate();
                   }}
                   disabled={del.isPending}
@@ -162,6 +180,11 @@ export function IssueDetail() {
               <span className="rounded-sm border border-hairline bg-panel px-2.5 py-1 font-mono text-xs font-semibold text-ink">
                 {i.priority.toUpperCase()}
               </span>
+              {i.archived_at && (
+                <span className="rounded-sm border border-hairline bg-panel px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-caps text-graphite">
+                  Archived
+                </span>
+              )}
             </div>
             <h1 className="text-[28px] font-bold leading-[1.15] tracking-[-0.02em] text-ink">{i.title}</h1>
             <div className="flex items-center gap-2">

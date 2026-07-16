@@ -23,6 +23,11 @@ func ParseFilter(projectKey, raw, meUserID string) IssueFilter {
 		}
 		switch strings.ToLower(key) {
 		case "is", "status":
+			// `is:archived` is orthogonal to status — it shows the archived set.
+			if strings.EqualFold(val, "archived") {
+				f.ShowArchived = true
+				continue
+			}
 			s := domain.IssueStatus(val)
 			f.Status = &s
 		case "assignee":

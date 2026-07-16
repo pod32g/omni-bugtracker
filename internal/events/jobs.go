@@ -65,6 +65,13 @@ type GitIngestArgs struct {
 func (GitIngestArgs) Kind() string                 { return "git_ingest" }
 func (GitIngestArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "default"} }
 
+// AutoArchiveArgs is the daily job that archives stale closed issues. It carries no
+// payload — the cutoff comes from config (archive.auto_after_days).
+type AutoArchiveArgs struct{}
+
+func (AutoArchiveArgs) Kind() string                 { return "auto_archive" }
+func (AutoArchiveArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "default"} }
+
 // ObsIngestArgs → create/dedupe an issue from a logging/metrics alert.
 type ObsIngestArgs struct {
 	Source      string          `json:"source"` // logging|metrics

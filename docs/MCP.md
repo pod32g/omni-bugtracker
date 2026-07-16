@@ -63,12 +63,13 @@ dev API on `:8080`.
 
 ## Tools
 
-68 tools spanning the API. Highlights:
+70 tools spanning the API. Highlights:
 
 - **Discovery**: `whoami`, `list_users`, `get_dashboard`, `list_projects`, `get_project`,
   `search_issues` (full-text), `list_issues` (GitHub-style filter grammar).
 - **Issues**: `get_issue`, `create_issue`, `update_issue`, `transition_issue`
-  (workflow-validated), `move_issue`, `delete_issue`, `bulk_update_issues`.
+  (workflow-validated), `move_issue`, `archive_issue` / `unarchive_issue`,
+  `delete_issue`, `bulk_update_issues`.
 - **Collaboration**: comments (`list`/`add`/`update`/`delete`), relations, watchers,
   `get_issue_activity`, `list_issue_commits`.
 - **Project config**: labels, components, milestones, releases, members
@@ -86,6 +87,7 @@ Notes for AI usage:
   resolve it to a user id via `list_users`, or take a raw `assignee_id` UUID.
 - `list_issues` `filter` grammar: `is:open assignee:@me severity:critical type:bug
   label:regression component:api milestone:<uuid> release:<uuid>` plus free text.
+  `is:archived` shows the archived set (archived issues are hidden from lists/search by default).
 - Errors carry the HTTP status and problem detail (e.g. `403 (forbidden): missing
   issue:create`, `409 (invalid transition): open → resolved`) so the model can self-correct.
 

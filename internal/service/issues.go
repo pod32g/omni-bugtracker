@@ -100,6 +100,23 @@ func (s *Issues) Transition(ctx context.Context, id uuid.UUID, from, to domain.I
 	})
 }
 
+// SetArchived archives (archived=true) or restores an issue — hidden from default
+// lists and search but recoverable, and its status is untouched. Emits
+// issue.archived / issue.unarchived.
+func (s *Issues) SetArchived(ctx context.Context, id, actor uuid.UUID, archived bool) (domain.Issue, error) {
+	eventType := events.IssueUnarchived
+	if archived {
+		eventType = events.IssueArchived
+	}
+	return s.repo.SetIssueArchived(ctx, id, actor, archived, func(tx pgx.Tx) error {
+		return s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
+			EventType: eventType,
+			IssueID:   id.String(),
+			ActorID:   actor.String(),
+		})
+	})
+}
+
 // Update applies a partial edit and emits issue.updated.
 func (s *Issues) Update(ctx context.Context, id, actor uuid.UUID, in UpdateIssueInput) (domain.Issue, error) {
 	return s.repo.UpdateIssue(ctx, id, actor, in, func(tx pgx.Tx) error {

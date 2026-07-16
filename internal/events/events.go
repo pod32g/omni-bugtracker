@@ -23,6 +23,8 @@ const (
 	IssueResolved      = "issue.resolved"
 	IssueClosed        = "issue.closed"
 	IssueReopened      = "issue.reopened"
+	IssueArchived      = "issue.archived"
+	IssueUnarchived    = "issue.unarchived"
 	IssueCommented     = "comment.created"
 	IssueLinked        = "issue.linked"
 	UserMentioned      = "user.mentioned"

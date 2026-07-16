@@ -74,6 +74,12 @@ type Repository interface {
 	UpdateIssue(ctx context.Context, id, actor uuid.UUID, in UpdateIssueInput, publish PublishFn) (domain.Issue, error)
 	MoveIssue(ctx context.Context, id, actor uuid.UUID, targetProjectKey string, publish PublishFn) (domain.Issue, error)
 	SoftDeleteIssue(ctx context.Context, id, actor uuid.UUID, publish PublishFn) error
+	// SetIssueArchived archives (archived=true) or restores an issue, records an
+	// activity entry, and runs publish in the same tx.
+	SetIssueArchived(ctx context.Context, id, actor uuid.UUID, archived bool, publish PublishFn) (domain.Issue, error)
+	// ArchiveStaleClosed archives every non-archived issue closed more than `days`
+	// ago (attributed to actor). Returns how many were archived. Used by auto-archive.
+	ArchiveStaleClosed(ctx context.Context, days int, actor uuid.UUID) (int, error)
 
 	// ProjectKeyForEntity resolves which project a component/milestone/release
 	// belongs to (for permission checks on id-addressed endpoints).
@@ -403,7 +409,10 @@ type IssueFilter struct {
 	MilestoneID *uuid.UUID
 	ReleaseID   *uuid.UUID
 	Query       string // full-text
-	Sort        string
-	Limit       int32
-	Offset      int32
+	// ShowArchived flips the list to archived-only. Default (false) excludes archived
+	// issues; set via the `is:archived` filter term.
+	ShowArchived bool
+	Sort         string
+	Limit        int32
+	Offset       int32
 }

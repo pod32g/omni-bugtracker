@@ -4,6 +4,7 @@ package worker
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,6 +12,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
 	"github.com/omni/bugtracker/internal/config"
+	"github.com/omni/bugtracker/internal/events"
 	"github.com/omni/bugtracker/internal/integrations"
 	"github.com/omni/bugtracker/internal/platform"
 	"github.com/omni/bugtracker/internal/service"
@@ -35,6 +37,7 @@ func New(d Deps) (*river.Client[pgx.Tx], error) {
 	river.AddWorker(workers, &automationWorker{d: d})
 	river.AddWorker(workers, &gitIngestWorker{d: d})
 	river.AddWorker(workers, &obsIngestWorker{d: d})
+	river.AddWorker(workers, &autoArchiveWorker{d: d})
 
 	q := d.Cfg.Worker.Queues
 	queues := map[string]river.QueueConfig{
@@ -43,9 +46,21 @@ func New(d Deps) (*river.Client[pgx.Tx], error) {
 		"integrations": {MaxWorkers: queueSize(q, "integrations", 5)},
 	}
 
+	// Auto-archive: register a daily periodic job only when enabled. RunOnStart makes
+	// the effect observable on the next worker boot after enabling it.
+	var periodic []*river.PeriodicJob
+	if d.Cfg.Archive.AutoAfterDays > 0 {
+		periodic = append(periodic, river.NewPeriodicJob(
+			river.PeriodicInterval(24*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) { return events.AutoArchiveArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: true},
+		))
+	}
+
 	return river.NewClient(riverpgxv5.New(d.DB), &river.Config{
-		Queues:  queues,
-		Workers: workers,
+		Queues:       queues,
+		Workers:      workers,
+		PeriodicJobs: periodic,
 	})
 }
 

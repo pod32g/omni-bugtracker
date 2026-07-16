@@ -453,6 +453,32 @@ func (w *automationWorker) applyActions(ctx context.Context, issue domain.Issue,
 	return applied, nil
 }
 
+// autoArchiveWorker archives issues closed more than archive.auto_after_days ago. It
+// runs daily (a River periodic job) and is a no-op when the setting is 0.
+type autoArchiveWorker struct {
+	river.WorkerDefaults[events.AutoArchiveArgs]
+	d Deps
+}
+
+func (w *autoArchiveWorker) Work(ctx context.Context, _ *river.Job[events.AutoArchiveArgs]) error {
+	days := w.d.Cfg.Archive.AutoAfterDays
+	if days <= 0 {
+		return nil
+	}
+	botID, err := w.d.Store.EnsureBotUser(ctx, "system:auto-archive", "System", "system@system.local")
+	if err != nil {
+		return err
+	}
+	n, err := w.d.Store.ArchiveStaleClosed(ctx, days, botID)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		w.d.Logger.Info("auto-archive", "archived", n, "closed_older_than_days", days)
+	}
+	return nil
+}
+
 // gitIngestWorker parses commit/PR payloads for issue references.
 type gitIngestWorker struct {
 	river.WorkerDefaults[events.GitIngestArgs]

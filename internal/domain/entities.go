@@ -114,6 +114,9 @@ type Issue struct {
 	Source          IssueSource `json:"source"`
 	CreatedAt       time.Time   `json:"created_at"`
 	UpdatedAt       time.Time   `json:"updated_at"`
+	// ArchivedAt is set when the issue is archived — hidden from default lists and
+	// search but recoverable. nil = active. Distinct from status and soft-delete.
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 }
 
 // Key builds the human-readable issue key from a project key and number.

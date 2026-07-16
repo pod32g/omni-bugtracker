@@ -102,6 +102,8 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Delete("/issues/{issueKey}", h.deleteIssue)
 	r.Post("/issues/{issueKey}/transition", h.transition)
 	r.Post("/issues/{issueKey}/move", h.moveIssue)
+	r.Post("/issues/{issueKey}/archive", h.archiveIssue)
+	r.Post("/issues/{issueKey}/unarchive", h.unarchiveIssue)
 	r.Get("/issues/{issueKey}/comments", h.listComments)
 	r.Post("/issues/{issueKey}/comments", h.addComment)
 	r.Patch("/comments/{id}", h.updateComment)
@@ -1553,6 +1555,7 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 		} `json:"patch"`
 		Status           *domain.IssueStatus `json:"status"`
 		TargetProjectKey *string             `json:"target_project_key"`
+		Archived         *bool               `json:"archived"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -1562,7 +1565,7 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 		httpapi.WriteValidation(w, map[string]string{"ids": "between 1 and 100 issue ids"})
 		return
 	}
-	if body.Patch == nil && body.Status == nil && body.TargetProjectKey == nil {
+	if body.Patch == nil && body.Status == nil && body.TargetProjectKey == nil && body.Archived == nil {
 		httpapi.WriteValidation(w, map[string]string{"patch": "nothing to apply"})
 		return
 	}
@@ -1629,6 +1632,16 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 			}
 			if _, err := h.issues.Move(r.Context(), issue.ID, actor, target); err != nil {
 				fail(issue.Key, "move: "+err.Error())
+				continue
+			}
+		}
+		if body.Archived != nil {
+			if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueUpdate) {
+				fail(issue.Key, "forbidden (archive)")
+				continue
+			}
+			if _, err := h.issues.SetArchived(r.Context(), issue.ID, actor, *body.Archived); err != nil {
+				fail(issue.Key, "archive: "+err.Error())
 				continue
 			}
 		}
@@ -1747,6 +1760,30 @@ func (h *httpHandlers) moveIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, moved)
+}
+
+// archiveIssue / unarchiveIssue hide or restore an issue. Archived issues drop out of
+// default lists and search but keep their status and stay reachable by key.
+func (h *httpHandlers) archiveIssue(w http.ResponseWriter, r *http.Request)   { h.setArchived(w, r, true) }
+func (h *httpHandlers) unarchiveIssue(w http.ResponseWriter, r *http.Request) { h.setArchived(w, r, false) }
+
+func (h *httpHandlers) setArchived(w http.ResponseWriter, r *http.Request, archived bool) {
+	p := auth.FromContext(r.Context())
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueUpdate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
+		return
+	}
+	actor, _ := uuid.Parse(p.UserID)
+	updated, err := h.issues.SetArchived(r.Context(), issue.ID, actor, archived)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "archive failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (h *httpHandlers) deleteIssue(w http.ResponseWriter, r *http.Request) {

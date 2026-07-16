@@ -24,8 +24,16 @@ type Config struct {
 	Identity      Identity      `koanf:"identity"`
 	Integrations  Integrations  `koanf:"integrations"`
 	Storage       Storage       `koanf:"storage"`
+	Archive       Archive       `koanf:"archive"`
 	Log           Log           `koanf:"log"`
 	Observability Observability `koanf:"observability"`
+}
+
+// Archive configures automatic issue archival.
+type Archive struct {
+	// AutoAfterDays archives issues closed more than this many days ago, via a daily
+	// job. 0 (default) disables auto-archive; manual archival is always available.
+	AutoAfterDays int `koanf:"auto_after_days"`
 }
 
 // Storage configures native file storage for attachments (local disk).

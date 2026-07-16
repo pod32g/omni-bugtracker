@@ -69,6 +69,11 @@ integrations:
     link_verbs: ["refs", "ref", "see", "related"]
     close_on_merge: true
 
+archive:
+  # Auto-archive issues closed more than this many days ago (a daily job).
+  # 0 disables it; manual archive/unarchive is always available.
+  auto_after_days: 0
+
 log:
   level: "info"
   format: "json"

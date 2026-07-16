@@ -56,6 +56,18 @@ func (s *Server) registerIssues() {
 	}, s.deleteIssue)
 
 	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "archive_issue",
+		Title:       "Archive issue",
+		Description: "Archive an issue by key — hidden from default lists and search but recoverable and still reachable by key. Its status is unchanged. Use list_issues with filter 'is:archived' to see archived issues. Requires issue:update.",
+	}, s.archiveIssue)
+
+	mcp.AddTool(s.srv, &mcp.Tool{
+		Name:        "unarchive_issue",
+		Title:       "Unarchive issue",
+		Description: "Restore a previously archived issue back into default lists and search. Requires issue:update.",
+	}, s.unarchiveIssue)
+
+	mcp.AddTool(s.srv, &mcp.Tool{
 		Name:        "bulk_update_issues",
 		Title:       "Bulk update issues",
 		Description: "Apply a patch, a status transition, and/or a project move to up to 100 issues addressed by UUID (the id field from get_issue/list_issues, NOT the key). Each issue is processed independently; the result reports how many were updated and which failed.",
@@ -204,6 +216,14 @@ func (s *Server) deleteIssue(ctx context.Context, _ *mcp.CallToolRequest, a issu
 	return result(s.c.delete(ctx, "/issues/"+seg(a.Key)))
 }
 
+func (s *Server) archiveIssue(ctx context.Context, _ *mcp.CallToolRequest, a issueKeyArgs) (*mcp.CallToolResult, any, error) {
+	return result(s.c.post(ctx, "/issues/"+seg(a.Key)+"/archive", nil))
+}
+
+func (s *Server) unarchiveIssue(ctx context.Context, _ *mcp.CallToolRequest, a issueKeyArgs) (*mcp.CallToolResult, any, error) {
+	return result(s.c.post(ctx, "/issues/"+seg(a.Key)+"/unarchive", nil))
+}
+
 type bulkArgs struct {
 	IDs              []string `json:"ids" jsonschema:"issue UUIDs (the id field, not the key), 1–100 of them"`
 	Priority         string   `json:"priority,omitempty" jsonschema:"set priority: p0, p1, p2, or p3"`
@@ -216,6 +236,7 @@ type bulkArgs struct {
 	ReleaseID        string   `json:"release_id,omitempty" jsonschema:"set release uuid"`
 	Status           string   `json:"status,omitempty" jsonschema:"transition all issues to this status"`
 	TargetProjectKey string   `json:"target_project_key,omitempty" jsonschema:"move all issues to this project key"`
+	Archived         *bool    `json:"archived,omitempty" jsonschema:"true to archive all issues, false to unarchive"`
 }
 
 func (s *Server) bulkUpdateIssues(ctx context.Context, _ *mcp.CallToolRequest, a bulkArgs) (*mcp.CallToolResult, any, error) {
@@ -238,5 +259,6 @@ func (s *Server) bulkUpdateIssues(ctx context.Context, _ *mcp.CallToolRequest, a
 	}
 	putStr(body, "status", a.Status)
 	putStr(body, "target_project_key", a.TargetProjectKey)
+	putPtr(body, "archived", a.Archived)
 	return result(s.c.post(ctx, "/issues/bulk", body))
 }

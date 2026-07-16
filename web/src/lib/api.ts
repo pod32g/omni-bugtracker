@@ -129,6 +129,7 @@ export interface Issue {
   environment_md?: string;
   created_at: string;
   updated_at: string;
+  archived_at?: string | null;
 }
 
 export interface Comment {
@@ -403,6 +404,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ to }),
     }),
+  archiveIssue: (issueKey: string) => request<Issue>(`/issues/${issueKey}/archive`, { method: "POST" }),
+  unarchiveIssue: (issueKey: string) => request<Issue>(`/issues/${issueKey}/unarchive`, { method: "POST" }),
   // Re-homes the issue into another project. The response carries the issue's NEW key
   // (it's reallocated a number in the target project), so callers should navigate to it.
   moveIssue: (issueKey: string, targetProjectKey: string) =>
