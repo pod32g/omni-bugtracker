@@ -70,9 +70,9 @@ func (s *Issues) Get(ctx context.Context, projectKey string, number int32) (doma
 
 // List returns issues matching the parsed filter.
 func (s *Issues) List(ctx context.Context, f IssueFilter) ([]domain.Issue, int, error) {
-	if f.Limit <= 0 || f.Limit > 200 {
-		f.Limit = 50
-	}
+	// Page bounds are enforced in one place — the repository (clampLimit/clampOffset).
+	// A second copy here silently re-capped an over-max limit to the default, which is
+	// how `?limit=500` came back as 50 even after the repo learned to clamp down.
 	return s.repo.ListIssues(ctx, f)
 }
 
