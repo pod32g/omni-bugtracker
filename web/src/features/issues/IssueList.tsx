@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type Issue, type IssueStatus, type Priority } from "../../lib/api";
 import { useProject } from "../../lib/project";
@@ -9,6 +9,7 @@ import { IconArrowDown, IconLabelLines, IconPlus, IconSearch } from "../../compo
 import { NewIssueForm } from "./NewIssueForm";
 
 const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
+const PAGE_SIZE = 50;
 
 const QUICK_FILTERS = [
   { label: "Open", filter: "is:open" },
@@ -41,9 +42,16 @@ export function IssueList() {
 
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me(), retry: false });
   const overview = useQuery({ queryKey: ["dashboard"], queryFn: () => api.dashboard(), retry: false });
-  const issues = useQuery({
+  // Paged: a project can have far more issues than one page (the API caps at 200 per
+  // request), so "Load more" fetches the next offset and appends.
+  const issues = useInfiniteQuery({
     queryKey: ["issues", projectKey, filter, sort],
-    queryFn: () => api.listIssues(projectKey, filter, sort),
+    queryFn: ({ pageParam }) => api.listIssues(projectKey, filter, sort, PAGE_SIZE, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
     enabled: !!projectKey,
   });
 
@@ -62,8 +70,8 @@ export function IssueList() {
 
   const canManage = CAN_MANAGE.has(me.data?.role ?? "");
   const hasProjects = projects.length > 0;
-  const items = issues.data?.items ?? [];
-  const total = issues.data?.total ?? 0;
+  const items = issues.data?.pages.flatMap((p) => p.items) ?? [];
+  const total = issues.data?.pages[0]?.total ?? 0;
 
   const subtitle =
     overview.data && projectKey
@@ -207,11 +215,15 @@ export function IssueList() {
               <span className="font-mono text-xs text-graphite-soft">
                 Showing {items.length} of {total} {total === 1 ? "issue" : "issues"}
               </span>
-              {items.length < total && (
-                <span className="flex items-center gap-1.5 font-semibold text-blueprint">
-                  Load more
+              {issues.hasNextPage && (
+                <button
+                  onClick={() => issues.fetchNextPage()}
+                  disabled={issues.isFetchingNextPage}
+                  className="flex items-center gap-1.5 font-semibold text-blueprint transition hover:opacity-80 disabled:opacity-50"
+                >
+                  {issues.isFetchingNextPage ? "Loading…" : "Load more"}
                   <IconArrowDown size={13} />
-                </span>
+                </button>
               )}
             </div>
           )}

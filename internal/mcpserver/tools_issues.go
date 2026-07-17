@@ -90,7 +90,8 @@ type listIssuesArgs struct {
 	ProjectKey string `json:"project_key" jsonschema:"project key to list issues from, e.g. BUG"`
 	Filter     string `json:"filter,omitempty" jsonschema:"GitHub-style filter, e.g. 'is:open assignee:@me severity:critical'; @me = the token's own user"`
 	Sort       string `json:"sort,omitempty" jsonschema:"sort order, e.g. created, updated, priority"`
-	Limit      int    `json:"limit,omitempty" jsonschema:"max results (default 50)"`
+	Limit      int    `json:"limit,omitempty" jsonschema:"max results per page (default 50, max 200)"`
+	Offset     int    `json:"offset,omitempty" jsonschema:"skip this many results — page through a project with more issues than the limit, using the response's total"`
 }
 
 func (s *Server) listIssues(ctx context.Context, _ *mcp.CallToolRequest, a listIssuesArgs) (*mcp.CallToolResult, any, error) {
@@ -98,6 +99,7 @@ func (s *Server) listIssues(ctx context.Context, _ *mcp.CallToolRequest, a listI
 	setStr(q, "filter", a.Filter)
 	setStr(q, "sort", a.Sort)
 	setInt(q, "limit", a.Limit)
+	setInt(q, "offset", a.Offset)
 	return result(s.c.get(ctx, "/projects/"+seg(a.ProjectKey)+"/issues", q))
 }
 

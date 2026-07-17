@@ -1526,6 +1526,9 @@ func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
 	f := ParseFilter(key, r.URL.Query().Get("filter"), p.UserID)
 	f.Sort = r.URL.Query().Get("sort")
 	f.Limit = int32(atoiDefault(r.URL.Query().Get("limit"), 50))
+	// Paging: `total` in the response is the unpaged count, so clients page with
+	// offset until they've collected `total` items.
+	f.Offset = int32(atoiDefault(r.URL.Query().Get("offset"), 0))
 
 	items, total, err := h.issues.List(r.Context(), f)
 	if err != nil {

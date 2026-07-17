@@ -399,7 +399,7 @@ func (s *Store) ListIssues(ctx context.Context, f service.IssueFilter) ([]domain
 		return nil, 0, err
 	}
 
-	args = append(args, clampLimit(f.Limit), f.Offset)
+	args = append(args, clampLimit(f.Limit), clampOffset(f.Offset))
 	q := fmt.Sprintf(`%s WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
 		selectIssue, clause, orderBy(f.Sort), len(args)-1, len(args))
 	rows, err := s.pool.Query(ctx, q, args...)
@@ -1242,11 +1242,26 @@ func orderBy(sort string) string {
 	}
 }
 
+// clampLimit bounds a page size: unset/invalid falls back to the default, and anything
+// over the ceiling clamps *down* to it (asking for 500 should give you 200, not silently
+// drop you to the default).
 func clampLimit(l int32) int32 {
-	if l <= 0 || l > 200 {
+	switch {
+	case l <= 0:
 		return 50
+	case l > 200:
+		return 200
+	default:
+		return l
 	}
-	return l
+}
+
+// clampOffset guards against a negative OFFSET (Postgres errors on it).
+func clampOffset(o int32) int32 {
+	if o < 0 {
+		return 0
+	}
+	return o
 }
 
 var _ = time.Now // reserved for future time-based helpers

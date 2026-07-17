@@ -391,10 +391,13 @@ export const api = {
     }),
   removeProjectMember: (projectKey: string, userId: string) =>
     request<void>(`/projects/${projectKey}/members/${userId}`, { method: "DELETE" }),
-  listIssues: (projectKey: string, filter = "", sort = "") =>
-    request<{ items: Issue[]; total: number }>(
-      `/projects/${projectKey}/issues?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}`,
-    ),
+  // `total` is the unpaged count — page with offset until you've collected `total`.
+  listIssues: (projectKey: string, filter = "", sort = "", limit?: number, offset?: number) => {
+    const q = new URLSearchParams({ filter, sort });
+    if (limit != null) q.set("limit", String(limit));
+    if (offset) q.set("offset", String(offset));
+    return request<{ items: Issue[]; total: number }>(`/projects/${projectKey}/issues?${q}`);
+  },
   getIssue: (issueKey: string) => request<Issue>(`/issues/${issueKey}`),
   createIssue: (projectKey: string, body: NewIssue) =>
     request<Issue>(`/projects/${projectKey}/issues`, {
