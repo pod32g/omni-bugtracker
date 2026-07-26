@@ -115,6 +115,16 @@ type IssueReference struct {
 	CreatedAt time.Time   `json:"created_at"`
 }
 
+// SimilarIssue is a duplicate candidate surfaced while an issue is being written.
+type SimilarIssue struct {
+	IssueKey  string      `json:"issue_key"`
+	Title     string      `json:"title"`
+	Status    IssueStatus `json:"status"`
+	Type      IssueType   `json:"type"`
+	Score     float64     `json:"score"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
 // SavedSearch is a personal, named filter-grammar string.
 type SavedSearch struct {
 	ID        uuid.UUID `json:"id"`

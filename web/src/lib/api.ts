@@ -262,6 +262,16 @@ export interface IssueReference {
   created_at: string;
 }
 
+/** A duplicate candidate surfaced while an issue is being written. */
+export interface SimilarIssue {
+  issue_key: string;
+  title: string;
+  status: IssueStatus;
+  type: IssueType;
+  score: number;
+  created_at: string;
+}
+
 export interface Attachment {
   id: string;
   issue_id?: string;
@@ -558,6 +568,11 @@ export const api = {
     const q = new URLSearchParams({ filter, sort, format });
     return `${BASE}/projects/${encodeURIComponent(projectKey)}/issues/export?${q}`;
   },
+  similarIssues: (projectKey: string, title: string, excludeKey = "") =>
+    request<{ items: SimilarIssue[] }>(
+      `/projects/${encodeURIComponent(projectKey)}/issues/similar?title=${encodeURIComponent(title)}` +
+        (excludeKey ? `&exclude=${encodeURIComponent(excludeKey)}` : ""),
+    ),
   listReferences: (issueKey: string) =>
     request<{ items: IssueReference[] }>(`/issues/${issueKey}/references`),
   updateComment: (id: string, body_md: string) =>

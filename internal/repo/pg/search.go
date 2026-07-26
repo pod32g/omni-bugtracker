@@ -47,3 +47,42 @@ func (s *Store) Search(ctx context.Context, query string, limit int32) ([]domain
 	}
 	return out, rows.Err()
 }
+
+// FindSimilarIssues ranks live issues in a project against a full-text query built from
+// a draft title. Scoped to the project because a duplicate in another project is not a
+// duplicate; archived and deleted issues are excluded because filing against them is
+// not the mistake being prevented.
+//
+// excludeKey drops one issue from the results — the issue being edited, which would
+// otherwise always rank first against its own title.
+func (s *Store) FindSimilarIssues(
+	ctx context.Context, projectKey, query, excludeKey string, limit int32,
+) ([]domain.SimilarIssue, error) {
+	const q = `
+		WITH tsq AS (SELECT websearch_to_tsquery('english', $2) AS query)
+		SELECT p.key || '-' || i.number AS issue_key, i.title, i.status::text, i.type::text,
+		       ts_rank(i.fts, tsq.query) AS score, i.created_at
+		  FROM issues i JOIN projects p ON p.id = i.project_id, tsq
+		 WHERE p.key = $1
+		   AND i.fts @@ tsq.query
+		   AND i.deleted_at IS NULL AND i.archived_at IS NULL
+		   AND ($3 = '' OR p.key || '-' || i.number <> $3)
+		 ORDER BY score DESC, i.created_at DESC
+		 LIMIT $4`
+	rows, err := s.pool.Query(ctx, q, projectKey, query, excludeKey, clampLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []domain.SimilarIssue
+	for rows.Next() {
+		var si domain.SimilarIssue
+		if err := rows.Scan(&si.IssueKey, &si.Title, &si.Status, &si.Type,
+			&si.Score, &si.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}

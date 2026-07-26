@@ -74,6 +74,9 @@ type Repository interface {
 	// EachIssue streams every issue matching the filter, unpaged. Export needs the
 	// whole result set, which is exactly what the paged list is built to avoid.
 	EachIssue(ctx context.Context, f IssueFilter, fn func(domain.Issue) error) error
+	// FindSimilarIssues ranks a project's live issues against a query built from a
+	// draft title, for duplicate detection at filing time.
+	FindSimilarIssues(ctx context.Context, projectKey, query, excludeKey string, limit int32) ([]domain.SimilarIssue, error)
 	TransitionIssue(ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID, publish PublishFn) (domain.Issue, error)
 	UpdateIssue(ctx context.Context, id, actor uuid.UUID, in UpdateIssueInput, publish PublishFn) (domain.Issue, error)
 	MoveIssue(ctx context.Context, id, actor uuid.UUID, targetProjectKey string, publish PublishFn) (domain.Issue, error)
