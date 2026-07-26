@@ -52,7 +52,7 @@ export function Dashboard() {
   return (
     <div>
       {/* Topbar */}
-      <div className="sticky top-0 z-10 flex items-end justify-between border-b border-hairline bg-paper/80 px-9 pb-5 pt-7 backdrop-blur">
+      <div className="sticky top-0 z-10 flex items-end justify-between border-b border-hairline bg-paper/80 px-4 md:px-9 pb-5 pt-7 backdrop-blur">
         <div className="flex flex-col gap-1.5">
           <h1 className="text-[30px] font-bold leading-none tracking-[-0.02em] text-ink">Dashboard</h1>
           <p className="font-mono text-xs uppercase tracking-[0.06em] text-graphite">
@@ -66,7 +66,7 @@ export function Dashboard() {
         <RangeControl />
       </div>
 
-      <div className="flex max-w-6xl flex-col gap-4 px-9 py-8">
+      <div className="flex max-w-6xl flex-col gap-4 px-4 md:px-9 py-8">
         {/* KPIs */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           <Kpi label="Open Issues" value={String(data.open_issues)} foot={<span className="text-graphite">{data.critical_issues} critical open</span>} />

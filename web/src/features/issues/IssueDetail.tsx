@@ -138,9 +138,9 @@ export function IssueDetail() {
     },
   });
 
-  if (issue.isLoading) return <div className="px-9 py-10 text-sm text-graphite">Loading…</div>;
+  if (issue.isLoading) return <div className="px-4 md:px-9 py-10 text-sm text-graphite">Loading…</div>;
   if (issue.isError || !issue.data)
-    return <div className="px-9 py-10 text-sm text-critical">{(issue.error as Error)?.message ?? "Not found"}</div>;
+    return <div className="px-4 md:px-9 py-10 text-sm text-critical">{(issue.error as Error)?.message ?? "Not found"}</div>;
 
   const i = issue.data;
   const commentItems = comments.data?.pages.flatMap((p) => p.items) ?? [];
@@ -152,15 +152,17 @@ export function IssueDetail() {
   return (
     <div>
       {/* Topbar */}
-      <div className="sticky top-0 z-10 flex h-[60px] items-center justify-between border-b border-hairline bg-paper/80 px-8 backdrop-blur">
-        <div className="flex items-center gap-2.5 text-sm">
-          <Link to="/issues" className="text-graphite transition hover:text-ink">
+      <div className="sticky top-0 z-10 flex h-[60px] items-center justify-between gap-2 border-b border-hairline bg-paper/80 px-4 backdrop-blur md:px-8">
+        <div className="flex min-w-0 items-center gap-2.5 text-sm">
+          <Link to="/issues" className="shrink-0 text-graphite transition hover:text-ink">
             Issues
           </Link>
-          <span className="text-graphite-soft">›</span>
-          <span className="font-mono font-medium text-blueprint">{i.key}</span>
+          {/* The key is already the page heading below; on a phone the breadcrumb is
+              costing room the actions need. */}
+          <span className="hidden text-graphite-soft sm:inline">›</span>
+          <span className="hidden font-mono font-medium text-blueprint sm:inline">{i.key}</span>
         </div>
-        <div className="relative flex items-center gap-2.5">
+        <div className="relative flex shrink-0 items-center gap-2 md:gap-2.5">
           <WatchButton issueKey={issueKey} />
           <button
             onClick={() => setEditing(true)}

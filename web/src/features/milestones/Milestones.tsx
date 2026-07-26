@@ -41,14 +41,14 @@ export function Milestones() {
 
   return (
     <div>
-      <div className="sticky top-0 z-10 flex flex-col gap-1.5 border-b border-hairline bg-paper/80 px-9 pb-5 pt-7 backdrop-blur">
+      <div className="sticky top-0 z-10 flex flex-col gap-1.5 border-b border-hairline bg-paper/80 px-4 md:px-9 pb-5 pt-7 backdrop-blur">
         <h1 className="text-[30px] font-bold leading-none tracking-[-0.02em] text-ink">Milestones</h1>
         <p className="font-mono text-xs uppercase tracking-[0.06em] text-graphite">
           {projectKey} · {items.filter((m) => m.state === "open").length} open
         </p>
       </div>
 
-      <div className="flex max-w-3xl flex-col gap-6 px-9 py-8">
+      <div className="flex max-w-3xl flex-col gap-6 px-4 md:px-9 py-8">
         {canManage && (
           <div className="flex items-end gap-3 rounded-lg border border-hairline bg-paper p-4">
             <label className="grow text-sm">

@@ -79,7 +79,7 @@ export function Board() {
 
   return (
     <div>
-      <div className="sticky top-0 z-10 flex items-end justify-between border-b border-hairline bg-paper/80 px-9 pb-5 pt-7 backdrop-blur">
+      <div className="sticky top-0 z-10 flex items-end justify-between border-b border-hairline bg-paper/80 px-4 md:px-9 pb-5 pt-7 backdrop-blur">
         <div className="flex flex-col gap-1.5">
           <h1 className="text-[30px] font-bold leading-none tracking-[-0.02em] text-ink">Board</h1>
           <p className="font-mono text-xs uppercase tracking-[0.06em] text-graphite">
@@ -107,19 +107,19 @@ export function Board() {
 
       {configuring && board.data && <BoardConfigPanel board={board.data} projectKey={projectKey} />}
 
-      {issues.isError && <div className="px-9 py-6 text-sm text-critical">{(issues.error as Error).message}</div>}
-      {board.isError && <div className="px-9 py-6 text-sm text-critical">{(board.error as Error).message}</div>}
+      {issues.isError && <div className="px-4 md:px-9 py-6 text-sm text-critical">{(issues.error as Error).message}</div>}
+      {board.isError && <div className="px-4 md:px-9 py-6 text-sm text-critical">{(board.error as Error).message}</div>}
       {transition.isError && (
-        <div className="px-9 py-3 text-sm text-critical">{(transition.error as Error).message}</div>
+        <div className="px-4 md:px-9 py-3 text-sm text-critical">{(transition.error as Error).message}</div>
       )}
       {truncated && !issues.isFetchingNextPage && (
-        <div className="px-9 py-3 text-sm text-graphite">
+        <div className="px-4 md:px-9 py-3 text-sm text-graphite">
           Showing {items.length} of {total} issues — this board is capped at {BOARD_MAX_ISSUES}. Use the
           issue list with a filter to narrow it down.
         </div>
       )}
 
-      <div className="flex flex-col gap-6 px-9 py-6">
+      <div className="flex flex-col gap-6 px-4 md:px-9 py-6">
         {lanes.map((lane) => (
           <div key={lane.label || "all"} className="flex flex-col gap-2">
             {lane.label && (
@@ -127,7 +127,7 @@ export function Board() {
                 {lane.label} · {lane.issues.length}
               </span>
             )}
-            <div className="flex items-stretch gap-4 overflow-x-auto">
+            <div className="flex snap-x snap-mandatory items-stretch gap-4 overflow-x-auto md:snap-none">
               {columns.map((col) => (
                 <Column
                   key={col.id}
@@ -164,7 +164,7 @@ function Column({
     <div
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
-      className={`flex w-[300px] shrink-0 flex-col gap-3 rounded-lg border p-3 ${
+      className={`flex w-[85vw] max-w-[300px] shrink-0 snap-start flex-col gap-3 rounded-lg border p-3 sm:w-[300px] ${
         overWip ? "border-critical/50 bg-critical-soft/30" : "border-hairline bg-panel"
       } ${compact ? "min-h-[120px]" : "min-h-[calc(100vh-200px)]"}`}
     >
@@ -217,7 +217,7 @@ function BoardConfigPanel({ board, projectKey }: { board: BoardConfig; projectKe
   const err = setSwimlane.error ?? patchCol.error ?? addCol.error ?? delCol.error;
 
   return (
-    <div className="flex flex-col gap-3 border-b border-hairline bg-panel/60 px-9 py-4">
+    <div className="flex flex-col gap-3 border-b border-hairline bg-panel/60 px-4 md:px-9 py-4">
       <div className="flex items-center gap-3">
         <span className="font-mono text-[10px] font-medium uppercase tracking-caps text-graphite-soft">Swimlanes</span>
         <select

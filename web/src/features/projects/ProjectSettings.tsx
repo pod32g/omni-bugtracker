@@ -72,13 +72,13 @@ export function ProjectSettings() {
     },
   });
 
-  if (project.isLoading) return <div className="px-9 py-10 text-sm text-graphite">Loading…</div>;
+  if (project.isLoading) return <div className="px-4 md:px-9 py-10 text-sm text-graphite">Loading…</div>;
   if (project.isError || !project.data)
-    return <div className="px-9 py-10 text-sm text-critical">{(project.error as Error)?.message ?? "Not found"}</div>;
+    return <div className="px-4 md:px-9 py-10 text-sm text-critical">{(project.error as Error)?.message ?? "Not found"}</div>;
 
   return (
     <div>
-      <div className="sticky top-0 z-10 flex flex-col gap-1.5 border-b border-hairline bg-paper/80 px-9 pb-5 pt-7 backdrop-blur">
+      <div className="sticky top-0 z-10 flex flex-col gap-1.5 border-b border-hairline bg-paper/80 px-4 md:px-9 pb-5 pt-7 backdrop-blur">
         <h1 className="flex items-center gap-3 text-[30px] font-bold leading-none tracking-[-0.02em] text-ink">
           <span className="rounded-sm bg-blueprint-soft px-2 py-1 font-mono text-lg font-semibold text-blueprint">
             {key}
@@ -90,7 +90,7 @@ export function ProjectSettings() {
         </p>
       </div>
 
-      <div className="flex max-w-3xl flex-col gap-6 px-9 py-8">
+      <div className="flex max-w-3xl flex-col gap-6 px-4 md:px-9 py-8">
         {!canManage && (
           <p className="rounded-md border border-hairline bg-panel px-4 py-3 text-sm text-graphite">
             You need the maintainer role (or above) to change project settings.

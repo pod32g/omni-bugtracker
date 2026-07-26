@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, session, type Project, type User } from "../lib/api";
 import { ProjectProvider, useProject } from "../lib/project";
@@ -14,6 +14,7 @@ import {
   IconGear,
   IconLogout,
   IconMark,
+  IconMenu,
   IconMoon,
   IconPlus,
   IconSearch,
@@ -27,6 +28,13 @@ const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
 export function Layout() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me(), retry: false });
   const [searchOpen, setSearchOpen] = useState(false);
+  // Below md the sidebar is a drawer over the content rather than a column beside it —
+  // at phone widths a 248px rail leaves no room for the thing you came to read.
+  const [navOpen, setNavOpen] = useState(false);
+  const location = useLocation();
+
+  // Navigating is the end of the reason the drawer was open.
+  useEffect(() => setNavOpen(false), [location.pathname]);
 
   // Global search shortcuts: ⌘K / Ctrl-K anywhere, "/" outside form fields.
   useEffect(() => {
@@ -59,17 +67,54 @@ export function Layout() {
       {/* App shell: fixed viewport, sidebar stays put, only <main> scrolls (its content
           grows internally instead of growing the whole page). */}
       <div className="flex h-screen overflow-hidden bg-mist">
-        <Sidebar me={me.data} onSearch={() => setSearchOpen(true)} />
-        <main className="min-w-0 flex-1 overflow-auto">
-          <Outlet />
-        </main>
+        {navOpen && (
+          <button
+            aria-label="Close navigation"
+            onClick={() => setNavOpen(false)}
+            className="fixed inset-0 z-30 cursor-default bg-ink/40 md:hidden"
+          />
+        )}
+        <Sidebar me={me.data} onSearch={() => setSearchOpen(true)} open={navOpen} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <MobileBar onOpenNav={() => setNavOpen(true)} onSearch={() => setSearchOpen(true)} />
+          <main className="min-w-0 flex-1 overflow-auto">
+            <Outlet />
+          </main>
+        </div>
       </div>
       <SearchPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
     </ProjectProvider>
   );
 }
 
-function Sidebar({ me, onSearch }: { me?: User; onSearch: () => void }) {
+/** The mobile-only header: the drawer handle and search, which live in the sidebar above md. */
+function MobileBar({ onOpenNav, onSearch }: { onOpenNav: () => void; onSearch: () => void }) {
+  return (
+    <header className="flex shrink-0 items-center gap-2 border-b border-hairline bg-mist px-3 py-2.5 md:hidden">
+      <button
+        onClick={onOpenNav}
+        aria-label="Open navigation"
+        className="grid h-9 w-9 place-items-center rounded-md text-graphite transition hover:bg-paper hover:text-ink"
+      >
+        <IconMenu size={18} />
+      </button>
+      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-blueprint text-paper">
+        <IconMark size={16} />
+      </span>
+      <span className="truncate text-sm font-bold text-ink">Omni BugTracker</span>
+      <span className="grow" />
+      <button
+        onClick={onSearch}
+        aria-label="Search"
+        className="grid h-9 w-9 place-items-center rounded-md text-graphite transition hover:bg-paper hover:text-ink"
+      >
+        <IconSearch size={18} />
+      </button>
+    </header>
+  );
+}
+
+function Sidebar({ me, onSearch, open }: { me?: User; onSearch: () => void; open: boolean }) {
   const { projects, projectKey, current, setProjectKey } = useProject();
   const { theme, toggle } = useTheme();
   const canManage = CAN_MANAGE.has(me?.role ?? "");
@@ -83,7 +128,11 @@ function Sidebar({ me, onSearch }: { me?: User; onSearch: () => void }) {
   const openCount = overview.data?.open_issues;
 
   return (
-    <aside className="flex w-[248px] shrink-0 flex-col border-r border-hairline bg-mist px-4 py-6">
+    <aside
+      className={`fixed inset-y-0 left-0 z-40 flex w-[248px] shrink-0 flex-col overflow-y-auto border-r border-hairline bg-mist px-4 py-6 transition-transform md:static md:translate-x-0 md:overflow-visible md:transition-none ${
+        open ? "translate-x-0" : "-translate-x-full"
+      }`}
+    >
       <div className="flex items-center gap-2.5 px-2 pt-1">
         <span className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-lg bg-blueprint text-paper">
           <IconMark size={20} />

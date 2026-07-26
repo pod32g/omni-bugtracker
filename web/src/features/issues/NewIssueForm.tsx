@@ -33,7 +33,7 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
 
   return (
     <Modal title={`New issue in ${projectKey}`} onClose={onClose}>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Type">
           <Select value={form.type} onChange={(v) => set("type", v as IssueType)} options={TYPES} />
         </Field>
@@ -64,7 +64,7 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
       </Field>
 
       {isBug && (
-        <div className="mt-3 grid grid-cols-2 gap-3">
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Reproduction steps">
             <Textarea value={form.repro_steps_md ?? ""} onChange={(v) => set("repro_steps_md", v)} rows={3} />
           </Field>

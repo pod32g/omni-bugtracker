@@ -90,13 +90,13 @@ export function IssueList() {
   return (
     <div>
       {/* Topbar */}
-      <div className="sticky top-0 z-10 flex items-end justify-between border-b border-hairline bg-paper/80 px-9 pb-5 pt-7 backdrop-blur">
+      <div className="sticky top-0 z-10 flex flex-wrap items-end justify-between gap-3 border-b border-hairline bg-paper/80 px-4 pb-5 pt-5 backdrop-blur md:px-9 md:pt-7">
         <div className="flex flex-col gap-1.5">
-          <h1 className="text-[30px] font-bold leading-none tracking-[-0.02em] text-ink">Issues</h1>
+          <h1 className="text-2xl font-bold leading-none tracking-[-0.02em] text-ink md:text-[30px]">Issues</h1>
           <p className="font-mono text-xs uppercase tracking-[0.06em] text-graphite">{subtitle}</p>
         </div>
-        <div className="flex items-center gap-3">
-          <label className="flex h-10 w-[280px] items-center gap-2 rounded-md border border-hairline bg-paper px-3 focus-within:border-blueprint">
+        <div className="flex w-full items-center gap-2 md:w-auto md:gap-3">
+          <label className="flex h-10 min-w-0 grow items-center gap-2 rounded-md border border-hairline bg-paper px-3 focus-within:border-blueprint md:w-[280px] md:grow-0">
             <IconSearch size={16} className="text-graphite" />
             <input
               ref={searchRef}
@@ -110,10 +110,10 @@ export function IssueList() {
           <button
             onClick={() => setShowNewIssue(true)}
             disabled={!projectKey}
-            className="flex h-10 items-center gap-1.5 rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+            className="flex h-10 shrink-0 items-center gap-1.5 rounded-md bg-blueprint px-3 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50 md:px-4"
           >
             <IconPlus size={15} />
-            New issue
+            <span className="hidden sm:inline">New issue</span>
           </button>
         </div>
       </div>
@@ -130,7 +130,7 @@ export function IssueList() {
       {hasProjects && (
         <>
           {/* Toolbar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-paper/80 px-9 py-4 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-paper/80 px-4 md:px-9 py-4 backdrop-blur">
             <div className="flex flex-wrap items-center gap-2">
               {QUICK_FILTERS.map((q) => {
                 const active = filter === q.filter;
@@ -170,7 +170,7 @@ export function IssueList() {
           </div>
 
           {/* Column header */}
-          <div className="flex items-center gap-4 border-b border-hairline bg-panel px-9 py-2.5">
+          <div className="flex items-center gap-2 border-b border-hairline bg-panel px-4 py-2.5 sm:gap-4 md:px-9">
             <span className="flex w-4 shrink-0 justify-center">
               <input
                 type="checkbox"
@@ -183,19 +183,19 @@ export function IssueList() {
               />
             </span>
             <Lane className="w-3" />
-            <Lane className="w-[88px]">ID</Lane>
+            <Lane className="w-16 sm:w-[88px]">ID</Lane>
             <Lane className="grow">Issue</Lane>
-            <Lane className="w-10 text-center">Who</Lane>
-            <Lane className="w-11">Pri</Lane>
-            <Lane className="w-[92px]">Severity</Lane>
-            <Lane className="w-[132px]">Status</Lane>
-            <Lane className="w-[70px] text-right">Updated</Lane>
+            <Lane className="hidden w-10 text-center sm:block">Who</Lane>
+            <Lane className="hidden w-11 sm:block">Pri</Lane>
+            <Lane className="hidden w-[92px] lg:block">Severity</Lane>
+            <Lane className="w-[88px] sm:w-[132px]">Status</Lane>
+            <Lane className="hidden w-[70px] text-right md:block">Updated</Lane>
           </div>
 
           {/* Rows */}
-          {issues.isLoading && <div className="px-9 py-8 text-sm text-graphite">Loading…</div>}
+          {issues.isLoading && <div className="px-4 md:px-9 py-8 text-sm text-graphite">Loading…</div>}
           {issues.isError && (
-            <div className="px-9 py-8 text-sm text-critical">{(issues.error as Error).message}</div>
+            <div className="px-4 md:px-9 py-8 text-sm text-critical">{(issues.error as Error).message}</div>
           )}
           {items.map((issue) => (
             <IssueRow
@@ -213,12 +213,12 @@ export function IssueList() {
             />
           ))}
           {issues.isSuccess && items.length === 0 && (
-            <div className="px-9 py-10 text-sm text-graphite-soft">No issues match this filter.</div>
+            <div className="px-4 md:px-9 py-10 text-sm text-graphite-soft">No issues match this filter.</div>
           )}
 
           {/* Footer */}
           {items.length > 0 && (
-            <div className="flex items-center justify-between px-9 py-4">
+            <div className="flex items-center justify-between px-4 md:px-9 py-4">
               <span className="font-mono text-xs text-graphite-soft">
                 Showing {items.length} of {total} {total === 1 ? "issue" : "issues"}
               </span>
@@ -260,7 +260,7 @@ function IssueRow({ issue, selected, onToggle }: { issue: Issue; selected: boole
   return (
     <Link
       to={`/issues/${issue.key}`}
-      className={`flex items-center gap-4 border-b border-hairline px-9 py-[11px] transition hover:bg-panel/60 ${
+      className={`flex items-center gap-2 border-b border-hairline px-4 py-[11px] transition hover:bg-panel/60 sm:gap-4 md:px-9 ${
         selected ? "bg-blueprint-soft/40" : ""
       }`}
     >
@@ -277,27 +277,31 @@ function IssueRow({ issue, selected, onToggle }: { issue: Issue; selected: boole
       <div className="flex w-3 shrink-0 justify-center">
         <SeverityBar severity={issue.severity} />
       </div>
-      <span className="w-[88px] shrink-0 font-mono text-sm font-medium text-blueprint">{issue.key}</span>
+      <span className="w-16 shrink-0 font-mono text-sm font-medium text-blueprint sm:w-[88px]">{issue.key}</span>
       <div className="flex min-w-0 grow flex-col gap-1">
         <span className="truncate text-[15px] font-medium leading-tight text-ink">{issue.title}</span>
-        <div className="flex items-center gap-1.5">
-          {issue.labels?.slice(0, 3).map((l) => <LabelChip key={l} name={l} />)}
+        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+          <span className="hidden min-w-0 items-center gap-1.5 sm:flex">
+            {issue.labels?.slice(0, 3).map((l) => <LabelChip key={l} name={l} />)}
+          </span>
           <span className="font-mono text-xs text-graphite-soft">#{issue.number}</span>
         </div>
       </div>
-      <div className="flex w-10 shrink-0 justify-center">
+      <div className="hidden w-10 shrink-0 justify-center sm:flex">
         <Avatar user={issue.assignee} size={28} />
       </div>
-      <div className="w-11 shrink-0">
+      <div className="hidden w-11 shrink-0 sm:block">
         <PriorityText priority={issue.priority} />
       </div>
-      <div className="w-[92px] shrink-0">
+      <div className="hidden w-[92px] shrink-0 lg:block">
         <SeverityMark severity={issue.severity} />
       </div>
-      <div className="w-[132px] shrink-0">
+      <div className="w-[88px] shrink-0 sm:w-[132px]">
         <StatusPill status={issue.status} />
       </div>
-      <span className="w-[70px] shrink-0 text-right font-mono text-xs text-graphite">{shortAgo(issue.updated_at)}</span>
+      <span className="hidden w-[70px] shrink-0 text-right font-mono text-xs text-graphite md:block">
+        {shortAgo(issue.updated_at)}
+      </span>
     </Link>
   );
 }

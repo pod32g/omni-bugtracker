@@ -44,7 +44,7 @@ export function EditIssueForm({ issue, onClose }: { issue: Issue; onClose: () =>
 
   return (
     <Modal title={`Edit ${issue.key}`} onClose={onClose}>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Type">
           <Select value={form.type} onChange={(v) => set("type", v as IssueType)} options={TYPES} />
         </Field>
@@ -83,7 +83,7 @@ export function EditIssueForm({ issue, onClose }: { issue: Issue; onClose: () =>
       </Field>
 
       {isBug && (
-        <div className="mt-3 grid grid-cols-2 gap-3">
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Reproduction steps">
             <Textarea value={form.repro_steps_md ?? ""} onChange={(v) => set("repro_steps_md", v)} rows={3} />
           </Field>

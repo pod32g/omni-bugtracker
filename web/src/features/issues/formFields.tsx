@@ -190,9 +190,11 @@ export function TextInput({
 
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/40 p-4" onClick={onClose}>
+    // Below sm the dialog fills the screen: a centred card with 16px of gutter wastes
+    // most of a phone and leaves the form scrolling inside a box inside a page.
+    <div className="fixed inset-0 z-50 grid place-items-end bg-ink/40 sm:place-items-center sm:p-4" onClick={onClose}>
       <div
-        className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-lg border border-hairline bg-paper p-6 shadow-xl shadow-ink/10"
+        className="max-h-[92vh] w-full overflow-auto border-hairline bg-paper p-4 shadow-xl shadow-ink/10 sm:max-h-[90vh] sm:max-w-2xl sm:rounded-lg sm:border sm:p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
