@@ -31,8 +31,8 @@ export function Board() {
   // computed from what's loaded, so a partial page renders a quietly wrong board.
   // Pages until every issue is in hand (the API caps a single request at 200).
   const issues = useInfiniteQuery({
-    queryKey: ["issues", projectKey, "", "board"],
-    queryFn: ({ pageParam }) => api.listIssues(projectKey, "", "", BOARD_PAGE_SIZE, pageParam),
+    queryKey: ["issues", projectKey, "", "board-rank"],
+    queryFn: ({ pageParam }) => api.listIssues(projectKey, "", "rank", BOARD_PAGE_SIZE, pageParam),
     initialPageParam: 0,
     getNextPageParam: (last, pages) => {
       const loaded = pages.reduce((n, p) => n + p.items.length, 0);
@@ -48,6 +48,13 @@ export function Board() {
 
   const transition = useMutation({
     mutationFn: ({ key, to }: { key: string; to: IssueStatus }) => api.transition(key, to),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["issues"] }),
+  });
+  // Ranking is a separate call from the transition: a card can move column, position,
+  // or both, and a drop that only reorders must not pretend to be a status change.
+  const rank = useMutation({
+    mutationFn: ({ key, after, before }: { key: string; after: string; before: string }) =>
+      api.rankIssue(key, after, before),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["issues"] }),
   });
 
@@ -70,11 +77,29 @@ export function Board() {
       .map(([label, laneIssues]) => ({ label, issues: laneIssues }));
   }, [items, swimlane]);
 
-  const onDrop = (col: BoardColumn) => (e: DragEvent) => {
+  /**
+   * A drop carries both the column and the position within it. `atIndex` is where the
+   * card landed among that column's cards as currently rendered; the two keys either
+   * side of it are what the server ranks between.
+   */
+  const onDropAt = (col: BoardColumn, colIssues: Issue[]) => (atIndex: number) => (e: DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     const key = e.dataTransfer.getData("text/plain");
     const cur = items.find((i) => i.key === key);
-    if (key && cur && !col.statuses.includes(cur.status)) transition.mutate({ key, to: col.statuses[0] });
+    if (!key || !cur) return;
+
+    if (!col.statuses.includes(cur.status)) transition.mutate({ key, to: col.statuses[0] });
+
+    // Neighbours are computed with the dragged card removed, so dropping it one slot
+    // down from where it already is does not rank it against itself.
+    const without = colIssues.filter((i) => i.key !== key);
+    const target = Math.max(0, Math.min(atIndex, without.length));
+    rank.mutate({
+      key,
+      after: without[target - 1]?.key ?? "",
+      before: without[target]?.key ?? "",
+    });
   };
 
   return (
@@ -135,7 +160,7 @@ export function Board() {
                   issues={lane.issues.filter((i) => col.statuses.includes(i.status))}
                   totalInColumn={items.filter((i) => col.statuses.includes(i.status)).length}
                   compact={swimlane !== "none"}
-                  onDrop={onDrop(col)}
+                  onDropAt={onDropAt(col, lane.issues.filter((i) => col.statuses.includes(i.status)))}
                 />
               ))}
             </div>
@@ -151,19 +176,20 @@ function Column({
   issues,
   totalInColumn,
   compact,
-  onDrop,
+  onDropAt,
 }: {
   column: BoardColumn;
   issues: Issue[];
   totalInColumn: number;
   compact: boolean;
-  onDrop: (e: DragEvent) => void;
+  onDropAt: (atIndex: number) => (e: DragEvent) => void;
 }) {
   const overWip = column.wip_limit != null && totalInColumn > column.wip_limit;
   return (
     <div
       onDragOver={(e) => e.preventDefault()}
-      onDrop={onDrop}
+      // Dropping on the column background, not on a gap, means "the end".
+      onDrop={onDropAt(issues.length)}
       className={`flex w-[85vw] max-w-[300px] shrink-0 snap-start flex-col gap-3 rounded-lg border p-3 sm:w-[300px] ${
         overWip ? "border-critical/50 bg-critical-soft/30" : "border-hairline bg-panel"
       } ${compact ? "min-h-[120px]" : "min-h-[calc(100vh-200px)]"}`}
@@ -176,10 +202,14 @@ function Column({
           {column.wip_limit != null ? `${totalInColumn}/${column.wip_limit}` : issues.length}
         </span>
       </div>
-      <div className="flex flex-1 flex-col gap-2">
-        {issues.map((i) => (
-          <BoardCard key={i.id} issue={i} />
+      <div className="flex flex-1 flex-col">
+        {issues.map((i, index) => (
+          <div key={i.id}>
+            <DropGap onDrop={onDropAt(index)} />
+            <BoardCard issue={i} />
+          </div>
         ))}
+        <DropGap onDrop={onDropAt(issues.length)} last />
         {issues.length === 0 && (
           <div className="grid min-h-[60px] flex-1 place-items-center rounded-md border border-dashed border-hairline text-xs text-graphite-soft">
             Drop here
@@ -187,6 +217,31 @@ function Column({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * DropGap is the target between two cards. It is a thin strip that grows and highlights
+ * while a card is over it — without a visible landing zone, precise reordering is
+ * guesswork, and the gap has to be reachable without being so tall it pushes the column
+ * around whenever nothing is being dragged.
+ */
+function DropGap({ onDrop, last = false }: { onDrop: (e: DragEvent) => void; last?: boolean }) {
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        setOver(false);
+        onDrop(e);
+      }}
+      className={`rounded transition-all ${over ? "my-1 h-6 bg-blueprint/30" : last ? "h-3" : "h-2"}`}
+    />
   );
 }
 

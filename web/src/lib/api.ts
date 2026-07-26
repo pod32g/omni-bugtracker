@@ -592,6 +592,16 @@ export const api = {
     }),
   markIssueRead: (issueKey: string) => request<void>(`/issues/${issueKey}/read`, { method: "POST" }),
   /** The same filter grammar across every project the caller can see. */
+  /**
+   * Position a card between the two it was dropped between. Neighbours are named, not
+   * ranks — the ordering scheme stays server-side, so a stale tab cannot write a rank
+   * that contradicts the column.
+   */
+  rankIssue: (issueKey: string, after: string, before: string) =>
+    request<{ key: string; rank: string }>(`/issues/${issueKey}/rank`, {
+      method: "POST",
+      body: JSON.stringify({ after, before }),
+    }),
   listAllIssues: (filter: string, sort = "", limit = 20) =>
     request<{ items: Issue[]; total: number }>(
       `/issues?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}&limit=${limit}`,

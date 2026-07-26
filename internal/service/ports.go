@@ -84,6 +84,10 @@ type Repository interface {
 	// SetIssueArchived archives (archived=true) or restores an issue, records an
 	// activity entry, and runs publish in the same tx.
 	SetIssueArchived(ctx context.Context, id, actor uuid.UUID, archived bool, publish PublishFn) (domain.Issue, error)
+	// SetIssueRank writes a card's manual board position.
+	SetIssueRank(ctx context.Context, id uuid.UUID, rank string) error
+	// NeighbourRanks resolves the ranks either side of a drop position.
+	NeighbourRanks(ctx context.Context, projectKey, beforeKey, afterKey string) (string, string, error)
 	// SetIssueSnooze hides an issue until a time, or wakes it when until is nil.
 	SetIssueSnooze(ctx context.Context, id, actor uuid.UUID, until *time.Time, note string, publish PublishFn) (domain.Issue, error)
 	// WakeSnoozedIssues clears every snooze that has come due, returning the ids.

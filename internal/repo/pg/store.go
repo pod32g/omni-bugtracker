@@ -1307,6 +1307,7 @@ const selectIssue = `
 	       i.version_affected, i.version_fixed, i.git_commit_sha, i.pull_request_url,
 	       i.repro_steps_md, i.expected_md, i.actual_md, i.environment_md, i.source,
 	       i.created_at, i.updated_at, i.archived_at, i.snoozed_until, i.snooze_note,
+	       COALESCE(i.rank, ''),
 	       ru.id, ru.display_name, ru.email,
 	       au.id, au.display_name, au.email,
 	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
@@ -1341,7 +1342,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 		&i.ID, &i.ProjectKey, &i.Number, &i.Type, &i.Title, &i.DescriptionMD, &i.Status, &sev, &i.Priority,
 		&i.VersionAffected, &i.VersionFixed, &i.GitCommitSHA, &i.PullRequestURL,
 		&i.ReproStepsMD, &i.ExpectedMD, &i.ActualMD, &i.EnvironmentMD, &i.Source,
-		&i.CreatedAt, &i.UpdatedAt, &i.ArchivedAt, &i.SnoozedUntil, &i.SnoozeNote,
+		&i.CreatedAt, &i.UpdatedAt, &i.ArchivedAt, &i.SnoozedUntil, &i.SnoozeNote, &i.Rank,
 		&reporterID, &reporterName, &reporterEmail,
 		&assigneeID, &assigneeName, &assigneeEmail,
 		&i.Labels, &i.Components,
@@ -1463,6 +1464,11 @@ func orderBy(sort string) string {
 		return "i.priority ASC, i.created_at DESC"
 	case "severity":
 		return "i.severity ASC NULLS LAST, i.created_at DESC"
+	case "rank":
+		// Board order. Unranked issues sort last and fall back to recency, so a
+		// project that has never been reordered looks exactly as it does today and
+		// needs no backfill.
+		return "i.rank ASC NULLS LAST, i.updated_at DESC"
 	default:
 		return "i.created_at DESC"
 	}
@@ -1491,3 +1497,47 @@ func clampOffset(o int32) int32 {
 }
 
 var _ = time.Now // reserved for future time-based helpers
+
+// SetIssueRank writes a card's manual board position. Ranking is a view preference
+// rather than a change to the issue, so it records no activity and emits no event —
+// a timeline full of "moved a card up" entries would bury the things that matter.
+func (s *Store) SetIssueRank(ctx context.Context, id uuid.UUID, rank string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE issues SET rank = $2 WHERE id = $1 AND deleted_at IS NULL`, id, rank)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// NeighbourRanks returns the ranks of the issues either side of a drop position within
+// one board column, identified by the keys the client saw. Reading them server-side
+// keeps the decision on one side of the wire: the client says "between these two
+// cards", not "here is the rank I computed".
+func (s *Store) NeighbourRanks(ctx context.Context, projectKey, beforeKey, afterKey string) (string, string, error) {
+	rankOf := func(key string) (string, error) {
+		if key == "" {
+			return "", nil
+		}
+		var rank string
+		err := s.pool.QueryRow(ctx,
+			`SELECT COALESCE(i.rank, '') FROM issues i JOIN projects p ON p.id = i.project_id
+			  WHERE p.key || '-' || i.number = $1 AND i.deleted_at IS NULL`, key).Scan(&rank)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The neighbour was deleted or moved between render and drop. Treating it
+			// as absent puts the card at that end of the column, which is closer to
+			// what the user asked for than refusing the drag.
+			return "", nil
+		}
+		return rank, err
+	}
+	before, err := rankOf(beforeKey)
+	if err != nil {
+		return "", "", err
+	}
+	after, err := rankOf(afterKey)
+	return before, after, err
+}

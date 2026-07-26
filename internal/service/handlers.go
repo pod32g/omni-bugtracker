@@ -116,6 +116,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Delete("/issues/{issueKey}", h.deleteIssue)
 	r.Post("/issues/{issueKey}/transition", h.transition)
 	r.Post("/issues/{issueKey}/move", h.moveIssue)
+	r.Post("/issues/{issueKey}/rank", h.rankIssue)
 	r.Post("/issues/{issueKey}/archive", h.archiveIssue)
 	r.Post("/issues/{issueKey}/unarchive", h.unarchiveIssue)
 	r.Post("/issues/{issueKey}/read", h.markIssueRead)
@@ -1942,6 +1943,45 @@ func (h *httpHandlers) setSnooze(w http.ResponseWriter, r *http.Request, until *
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// rankIssue positions a card within a board column, between the two cards the client
+// saw either side of the drop. Body: {"after": "BUG-4", "before": "BUG-7"} — either may
+// be empty for the ends of the column.
+//
+// The client names neighbours rather than sending a computed rank: the ordering scheme
+// then lives in one place, and a stale client cannot write a rank that contradicts what
+// is actually in the column.
+func (h *httpHandlers) rankIssue(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueUpdate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
+		return
+	}
+	var body struct {
+		After  string `json:"after"`  // the card above the drop
+		Before string `json:"before"` // the card below the drop
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+
+	prev, next, err := h.repo.NeighbourRanks(r.Context(), issue.ProjectKey, body.After, body.Before)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "rank failed", err.Error())
+		return
+	}
+	rank := RankBetween(prev, next)
+	if err := h.repo.SetIssueRank(r.Context(), issue.ID, rank); err != nil {
+		writeNotFoundOrError(w, err, "issue", "rank failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"key": issue.Key, "rank": rank})
 }
 
 func (h *httpHandlers) setArchived(w http.ResponseWriter, r *http.Request, archived bool) {

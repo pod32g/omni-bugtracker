@@ -123,6 +123,9 @@ type Issue struct {
 	// which is indefinite, and from status, which it does not change.
 	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
 	SnoozeNote   string     `json:"snooze_note,omitempty"`
+	// Rank is the manual board order within a column. Empty means never ranked, which
+	// the board sorts after everything that has been.
+	Rank string `json:"rank,omitempty"`
 }
 
 // Key builds the human-readable issue key from a project key and number.
