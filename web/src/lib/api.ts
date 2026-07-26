@@ -639,6 +639,17 @@ export const api = {
    * ranks — the ordering scheme stays server-side, so a stale tab cannot write a rank
    * that contradicts the column.
    */
+  notificationPrefs: () =>
+    request<{ channels: Record<string, string>; defaults: Record<string, string>; explicit: Record<string, string> }>(
+      "/me/notification-prefs",
+    ),
+  setNotificationPrefs: (channels: Record<string, string>) =>
+    request<{ channels: Record<string, string> }>("/me/notification-prefs", {
+      method: "PUT",
+      body: JSON.stringify(channels),
+    }),
+  setIssueMute: (issueKey: string, muted: boolean) =>
+    request<{ muted: boolean }>(`/issues/${issueKey}/mute`, { method: muted ? "POST" : "DELETE" }),
   audit: (params: { action?: string; actor?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.action) q.set("action", params.action);

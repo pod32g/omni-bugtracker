@@ -160,6 +160,13 @@ type Repository interface {
 	DeleteSavedSearch(ctx context.Context, userID, id uuid.UUID) (bool, error)
 
 	// Watchers (issue subscriptions; auto-watch on report/comment/assign)
+	GetNotificationPrefs(ctx context.Context, userID uuid.UUID) (map[string]string, error)
+	SetNotificationPrefs(ctx context.Context, userID uuid.UUID, prefs, defaults map[string]string) error
+	SetIssueMute(ctx context.Context, issueID, userID uuid.UUID, muted bool) error
+	// RouteRecipients applies per-user preferences and per-issue mutes, splitting
+	// candidates into inbox and push audiences.
+	RouteRecipients(ctx context.Context, issueID uuid.UUID, eventType string, emails []string, defaults map[string]string) (inbox, push []string, err error)
+
 	// RecordNotifications writes the in-app inbox rows for a notify job's recipients.
 	RecordNotifications(ctx context.Context, issueID uuid.UUID, eventType string, actorID *uuid.UUID, emails []string) error
 	ListNotifications(ctx context.Context, userID uuid.UUID, unreadOnly bool, limit, offset int32) ([]domain.Notification, int, error)

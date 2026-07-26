@@ -182,6 +182,17 @@ func (w *notifyWorker) Work(ctx context.Context, job *river.Job[events.NotifyJob
 		}
 	}
 
+	// Preferences and per-issue mutes are applied once, server-side, and split the
+	// audience by channel — so the inbox writer and the outbound adapter cannot
+	// disagree about who asked for what.
+	inboxTo, pushTo, err := w.d.Store.RouteRecipients(
+		ctx, issue.ID, job.Args.EventType, recipients, service.DefaultChannels)
+	if err != nil {
+		// Routing is a read; failing it should not drop the notification entirely.
+		w.d.Logger.Error("route recipients", "err", err, "issue", issue.Key)
+		inboxTo, pushTo = recipients, recipients
+	}
+
 	// The inbox is written by the same step that pushes outward, so the two can never
 	// disagree about who was told. It is deliberately not conditional on the external
 	// adapter succeeding — Omni-Notify being unreachable is exactly when the in-app
@@ -190,9 +201,16 @@ func (w *notifyWorker) Work(ctx context.Context, job *river.Job[events.NotifyJob
 	if id, err := uuid.Parse(job.Args.ActorID); err == nil {
 		actor = &id
 	}
-	if err := w.d.Store.RecordNotifications(ctx, issue.ID, job.Args.EventType, actor, recipients); err != nil {
+	if err := w.d.Store.RecordNotifications(ctx, issue.ID, job.Args.EventType, actor, inboxTo); err != nil {
 		w.d.Logger.Error("record notifications", "err", err, "issue", issue.Key)
 	}
+
+	// Nobody wants this pushed: stop here rather than posting an event with an empty
+	// recipient list, which Omni-Notify would route by its own rules.
+	if len(pushTo) == 0 {
+		return nil
+	}
+	recipients = pushTo
 
 	severity := "info"
 	if issue.Severity != nil {
