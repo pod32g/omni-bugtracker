@@ -971,6 +971,19 @@ func (s *Store) SoftDeleteComment(ctx context.Context, id, actor uuid.UUID) (boo
 	if err := recordActivity(ctx, tx, issueID, actor, "comment.deleted", "comment", id); err != nil {
 		return false, err
 	}
+	// Comments are soft-deleted, so the ON DELETE CASCADE on source_comment_id never
+	// fires: without this, deleting a comment leaves its cross-references showing in
+	// the target's "Referenced by" panel, pointing at text nobody can read — and an
+	// unclaimed mention would still notify for a comment that no longer exists.
+	// Derived rows follow the prose they were derived from.
+	for _, q := range []string{
+		`DELETE FROM issue_references WHERE source_comment_id = $1`,
+		`DELETE FROM issue_mentions WHERE source_comment_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, q, id); err != nil {
+			return false, err
+		}
+	}
 	return true, tx.Commit(ctx)
 }
 

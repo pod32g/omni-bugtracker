@@ -196,3 +196,93 @@ func TestIntegrationCrossReferenceTypes(t *testing.T) {
 		t.Errorf("unresolvable key left %d rows, want 0", count)
 	}
 }
+
+// TestIntegrationSoftDeletedCommentDropsDerivedRows pins the follow-up to the above.
+// Comments are soft-deleted, so the ON DELETE CASCADE on source_comment_id never fires:
+// deleting a comment used to leave its cross-reference showing on the target, pointing
+// at text nobody can read.
+func TestIntegrationSoftDeletedCommentDropsDerivedRows(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := &Store{pool: pool}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	key := "D" + strings.ToUpper(suffix[:4])
+
+	var actorID, projectID, source, target, commentID uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO users (identity_sub, email, display_name, role)
+		 VALUES ($1, $2, $3, 'owner') RETURNING id`,
+		"test:del-"+suffix, "del-"+suffix+"@test.local", "del-"+suffix).Scan(&actorID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO projects (key, name) VALUES ($1, 'Delete Test') RETURNING id`, key).Scan(&projectID); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	for i, into := range []*uuid.UUID{&source, &target} {
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO issues (project_id, number, type, title, status, priority, reporter_id)
+			 VALUES ($1, $2, 'bug', 'delete test', 'open', 'p2', $3) RETURNING id`,
+			projectID, i+1, actorID).Scan(into); err != nil {
+			t.Fatalf("seed issue %d: %v", i+1, err)
+		}
+	}
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO comments (issue_id, author_id, body_md) VALUES ($1,$2,$3) RETURNING id`,
+		source, actorID, "see "+key+"-2 and cc @del-"+suffix).Scan(&commentID); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+
+	if err := syncReferences(ctx, tx, source, &commentID, key+"-1", actorID,
+		"see "+key+"-2"); err != nil {
+		t.Fatalf("sync references: %v", err)
+	}
+	if err := syncMentions(ctx, tx, source, &commentID, actorID, "cc @del-"+suffix); err != nil {
+		t.Fatalf("sync mentions: %v", err)
+	}
+	if got := countBy(t, ctx, tx, `SELECT count(*) FROM issue_references WHERE source_comment_id = $1`, commentID); got != 1 {
+		t.Fatalf("setup: want 1 reference, got %d", got)
+	}
+
+	// Commit so SoftDeleteComment (which opens its own transaction) can see the rows,
+	// then clean up by hand — the seed lives outside this test's rollback from here on.
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit seed: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+		_, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, actorID)
+	})
+
+	if _, err := store.SoftDeleteComment(ctx, commentID, actorID); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	for _, table := range []string{"issue_references", "issue_mentions"} {
+		var n int
+		if err := pool.QueryRow(ctx,
+			`SELECT count(*) FROM `+table+` WHERE source_comment_id = $1`, commentID).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if n != 0 {
+			t.Errorf("%s kept %d row(s) for a deleted comment — the panel would point at "+
+				"text nobody can read", table, n)
+		}
+	}
+}
+
+func countBy(t *testing.T, ctx context.Context, tx pgx.Tx, q string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := tx.QueryRow(ctx, q, args...).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	return n
+}
