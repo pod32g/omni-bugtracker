@@ -291,6 +291,26 @@ export interface Notification {
   created_at: string;
 }
 
+/** One emoji on a comment (or on the issue body when comment_id is absent). */
+export interface Reaction {
+  comment_id?: string | null;
+  emoji: string;
+  count: number;
+  users: string[];
+  mine: boolean;
+}
+
+/** Reaction keys map to glyphs here; the server stores names, not characters. */
+export const EMOJI: Record<string, string> = {
+  "+1": "👍",
+  "-1": "👎",
+  tada: "🎉",
+  confused: "😕",
+  heart: "❤️",
+  rocket: "🚀",
+  eyes: "👀",
+};
+
 export interface Attachment {
   id: string;
   issue_id?: string;
@@ -604,6 +624,13 @@ export const api = {
    * ranks — the ordering scheme stays server-side, so a stale tab cannot write a rank
    * that contradicts the column.
    */
+  listReactions: (issueKey: string) =>
+    request<{ items: Reaction[]; emoji: string[] }>(`/issues/${issueKey}/reactions`),
+  toggleReaction: (issueKey: string, emoji: string, commentId?: string) =>
+    request<{ emoji: string; reacted: boolean }>(`/issues/${issueKey}/reactions`, {
+      method: "POST",
+      body: JSON.stringify({ emoji, comment_id: commentId ?? "" }),
+    }),
   listProjectViews: (projectKey: string) =>
     request<{ items: SavedSearch[] }>(`/projects/${encodeURIComponent(projectKey)}/views`),
   createProjectView: (projectKey: string, body: { name: string; query: string; description?: string }) =>

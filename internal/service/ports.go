@@ -166,6 +166,9 @@ type Repository interface {
 	SetWatcher(ctx context.Context, issueID, userID uuid.UUID, watching bool) error
 
 	// Issue relations (blocks / duplicates / relates / caused_by)
+	// Reactions are aggregated per target and emoji; viewerID resolves "mine".
+	ToggleReaction(ctx context.Context, issueID uuid.UUID, commentID *uuid.UUID, userID uuid.UUID, emoji string) (bool, error)
+	ListReactions(ctx context.Context, issueID, viewerID uuid.UUID) ([]domain.Reaction, error)
 	ListRelations(ctx context.Context, issueID uuid.UUID) ([]domain.IssueRelation, error)
 	// ClaimPendingMentions stamps and returns the email addresses of everyone newly
 	// @mentioned on an issue. The claim is the stamp, so a mention notifies exactly

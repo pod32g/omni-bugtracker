@@ -135,6 +135,8 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/issues/{issueKey}/relations", h.addRelation)
 	r.Delete("/relations/{id}", h.deleteRelation)
 	r.Get("/issues/{issueKey}/references", h.listReferences)
+	r.Get("/issues/{issueKey}/reactions", h.listReactions)
+	r.Post("/issues/{issueKey}/reactions", h.toggleReaction)
 	r.Get("/issues/{issueKey}/watchers", h.listWatchers)
 	r.Put("/issues/{issueKey}/watchers/me", h.watchIssue)
 	r.Delete("/issues/{issueKey}/watchers/me", h.unwatchIssue)

@@ -137,6 +137,17 @@ type Notification struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
+// Reaction is one emoji on a comment or on the issue body, aggregated across everyone
+// who left it. CommentID is nil when the target is the issue body itself.
+type Reaction struct {
+	CommentID *uuid.UUID `json:"comment_id,omitempty"`
+	Emoji     string     `json:"emoji"`
+	Count     int        `json:"count"`
+	Users     []string   `json:"users"`
+	// Mine is whether the requesting user is among them, so the toggle renders right.
+	Mine bool `json:"mine"`
+}
+
 // SavedSearch is a named filter-grammar string. Personal by default; a shared one
 // belongs to a project and is visible to every member of it.
 type SavedSearch struct {

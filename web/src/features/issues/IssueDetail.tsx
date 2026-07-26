@@ -8,6 +8,7 @@ import {
   UNASSIGNED,
   type Comment,
   type Issue,
+  EMOJI,
   type IssueStatus,
   type Milestone,
   type NewIssue,
@@ -256,6 +257,9 @@ export function IssueDetail() {
 
           <Section title="Description">
             <Markdown body={i.description_md} />
+            <div className="group">
+              <Reactions issueKey={issueKey} />
+            </div>
           </Section>
 
           {i.repro_steps_md && (
@@ -938,6 +942,72 @@ function ReferencedBy({ issueKey }: { issueKey: string }) {
   );
 }
 
+/**
+ * Reactions is the row of emoji under a body. Acknowledgement is most of the traffic on
+ * any issue and the only way to express it used to be a comment saying "+1", which
+ * notified every watcher — so these deliberately notify nobody and write no activity.
+ */
+function Reactions({ issueKey, commentId }: { issueKey: string; commentId?: string }) {
+  const qc = useQueryClient();
+  const [picking, setPicking] = useState(false);
+  const all = useQuery({ queryKey: ["reactions", issueKey], queryFn: () => api.listReactions(issueKey) });
+  const toggle = useMutation({
+    mutationFn: (emoji: string) => api.toggleReaction(issueKey, emoji, commentId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["reactions", issueKey] }),
+  });
+
+  // One query serves every body on the page; each row filters to its own target.
+  const mine = (all.data?.items ?? []).filter((r) => (r.comment_id ?? undefined) === commentId);
+  const available = all.data?.emoji ?? [];
+
+  return (
+    <div className="relative flex flex-wrap items-center gap-1.5">
+      {mine.map((r) => (
+        <button
+          key={r.emoji}
+          onClick={() => toggle.mutate(r.emoji)}
+          title={r.users.join(", ")}
+          className={`flex h-6 items-center gap-1 rounded-full border px-2 text-xs transition ${
+            r.mine
+              ? "border-blueprint bg-blueprint-soft font-semibold text-blueprint"
+              : "border-hairline text-graphite hover:border-graphite"
+          }`}
+        >
+          <span>{EMOJI[r.emoji] ?? r.emoji}</span>
+          <span className="font-mono">{r.count}</span>
+        </button>
+      ))}
+      <button
+        onClick={() => setPicking((o) => !o)}
+        aria-label="Add a reaction"
+        className="flex h-6 items-center rounded-full border border-hairline px-2 text-xs text-graphite-soft opacity-0 transition hover:border-graphite hover:text-graphite group-hover:opacity-100"
+      >
+        ☺+
+      </button>
+      {picking && (
+        <>
+          <button className="fixed inset-0 z-10 cursor-default" aria-hidden onClick={() => setPicking(false)} />
+          <div className="absolute bottom-7 left-0 z-20 flex gap-1 rounded-md border border-hairline bg-paper p-1.5 shadow-lg">
+            {available.map((e) => (
+              <button
+                key={e}
+                onClick={() => {
+                  setPicking(false);
+                  toggle.mutate(e);
+                }}
+                title={e}
+                className="grid h-7 w-7 place-items-center rounded transition hover:bg-panel"
+              >
+                {EMOJI[e] ?? e}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function CommentCard({
   comment: c,
   isAuthor,
@@ -1021,7 +1091,12 @@ function CommentCard({
             </div>
           </div>
         ) : (
-          <Markdown body={c.body_md} />
+          <>
+            <Markdown body={c.body_md} />
+            <div className="mt-2">
+              <Reactions issueKey={issueKey} commentId={c.id} />
+            </div>
+          </>
         )}
       </div>
     </div>
