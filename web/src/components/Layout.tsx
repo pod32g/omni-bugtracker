@@ -42,7 +42,7 @@ export function Layout() {
   useEffect(() => setNavOpen(false), [location.pathname]);
 
   // g-then-key jumps between the main views, the way every keyboard-driven tracker does.
-  useChord("g", { i: "/issues", b: "/board", d: "/", m: "/milestones", r: "/releases", s: "/settings", n: "/inbox", w: "/my" }, navigate);
+  useChord("g", { i: "/issues", b: "/board", d: "/", m: "/milestones", r: "/releases", s: "/settings", n: "/inbox", w: "/my", p: "/reports" }, navigate);
 
   useShortcut((e) => {
     if (e.key === "?") {
@@ -237,6 +237,7 @@ function Sidebar({ me, onSearch, open }: { me?: User; onSearch: () => void; open
           trailing={openCount != null ? String(openCount) : undefined}
         />
         <NavItem to="/board" icon={<IconBoard size={17} />} label="Board" />
+        <NavItem to="/reports" icon={<IconDashboard size={17} />} label="Reports" />
         <NavItem to="/milestones" icon={<IconFlag size={17} />} label="Milestones" />
         <NavItem to="/releases" icon={<IconTag size={17} />} label="Releases" />
         <NavItem to="/settings" icon={<IconGear size={17} />} label="Settings" />

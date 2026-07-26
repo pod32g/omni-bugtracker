@@ -69,6 +69,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/users", h.users)
 	r.Patch("/users/{id}/role", h.updateUserRole)
 	r.Get("/dashboards/overview", h.dashboard)
+	r.Get("/reports", h.reports)
 	r.Get("/search", h.search)
 	r.Get("/projects/{key}/board", h.getProjectBoard)
 	r.Patch("/boards/{id}", h.updateBoard)

@@ -326,6 +326,18 @@ export interface AuditEntry {
   created_at: string;
 }
 
+export interface Report {
+  flow: { period: string; created: number; resolved: number }[];
+  age: { bucket: string; severity: string; count: number }[];
+  throughput: { name: string; count: number }[];
+  resolve_p50_hours: number;
+  resolve_p90_hours: number;
+  respond_p50_hours: number;
+  respond_p90_hours: number;
+  resolved_count: number;
+  responded_count: number;
+}
+
 export interface Attachment {
   id: string;
   issue_id?: string;
@@ -639,6 +651,13 @@ export const api = {
    * ranks — the ordering scheme stays server-side, so a stale tab cannot write a rank
    * that contradicts the column.
    */
+  report: (projectKey: string, days: number) => {
+    const until = new Date();
+    const since = new Date(until.getTime() - days * 86400_000);
+    const q = new URLSearchParams({ since: since.toISOString(), until: until.toISOString() });
+    if (projectKey) q.set("project", projectKey);
+    return request<Report>(`/reports?${q}`);
+  },
   notificationPrefs: () =>
     request<{ channels: Record<string, string>; defaults: Record<string, string>; explicit: Record<string, string> }>(
       "/me/notification-prefs",

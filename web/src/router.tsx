@@ -1,5 +1,6 @@
 import { Inbox } from "./features/inbox/Inbox";
 import { MyWork } from "./features/mywork/MyWork";
+import { Reports } from "./features/reports/Reports";
 import { createBrowserRouter } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./features/dashboard/Dashboard";
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { path: "inbox", element: <Inbox /> },
       { path: "issues", element: <IssueList /> },
       { path: "issues/:issueKey", element: <IssueDetail /> },
+      { path: "reports", element: <Reports /> },
       { path: "milestones", element: <Milestones /> },
       { path: "releases", element: <Releases /> },
       { path: "settings", element: <Settings /> },
