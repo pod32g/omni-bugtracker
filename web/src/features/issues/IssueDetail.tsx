@@ -16,7 +16,7 @@ import {
   type Release,
   type User,
 } from "../../lib/api";
-import { humanizeVerb, timeAgo } from "../../lib/activity";
+import { describeActivity, timeAgo } from "../../lib/activity";
 import { Avatar, LabelChip, PriorityText, SeverityMark, SeverityPill, StatusPill, statusLabel, statusTone } from "../../components/Badges";
 import { IconBranch, IconChevronDown, IconCommit, IconEye, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
 import { EditIssueForm } from "./EditIssueForm";
@@ -434,7 +434,7 @@ export function IssueDetail() {
                 {activityItems.map((a) => (
                   <li key={a.id} className="text-xs text-graphite">
                     <span className="font-medium text-ink">{a.actor?.display_name ?? "system"}</span>{" "}
-                    {humanizeVerb(a.verb)}
+                    {describeActivity(a)}
                     <span className="text-graphite-soft"> · {timeAgo(a.occurred_at)}</span>
                   </li>
                 ))}

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 import { api, type DashboardOverview, type Issue } from "../../lib/api";
 import { useProject } from "../../lib/project";
-import { humanizeVerb, timeAgo } from "../../lib/activity";
+import { describeActivity, timeAgo } from "../../lib/activity";
 import { Avatar, PriorityText, StatusPill } from "../../components/Badges";
 
 const empty: DashboardOverview = {
@@ -127,7 +127,7 @@ export function Dashboard() {
                   <li key={a.id} className="flex items-center gap-3">
                     <span className={`h-[7px] w-[7px] shrink-0 rounded-full ${activityDot(a.verb)}`} />
                     <span className="grow text-sm text-graphite">
-                      <span className="text-ink">{a.actor?.display_name ?? "system"}</span> {humanizeVerb(a.verb)}
+                      <span className="text-ink">{a.actor?.display_name ?? "system"}</span> {describeActivity(a)}
                       {a.issue_key && (
                         <>
                           {" "}

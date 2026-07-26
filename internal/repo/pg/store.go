@@ -9,6 +9,7 @@ package pg
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -278,6 +279,19 @@ func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, pu
 		Scan(&projectID, &number, &defaultAssignee); err != nil {
 		return domain.Issue{}, fmt.Errorf("allocate number: %w", err)
 	}
+	// Routing precedence: whoever the reporter named, then the lead of a component
+	// the issue is filed against, then the project default. components.lead_id was
+	// stored, editable and never read by anything until this.
+	var routedVia string
+	if in.AssigneeID == nil && len(in.Components) > 0 {
+		lead, component, err := componentLead(ctx, tx, projectID, in.Components)
+		if err != nil {
+			return domain.Issue{}, fmt.Errorf("component lead: %w", err)
+		}
+		if lead != nil {
+			in.AssigneeID, routedVia = lead, component
+		}
+	}
 	if in.AssigneeID == nil {
 		in.AssigneeID = defaultAssignee
 	}
@@ -318,6 +332,17 @@ func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, pu
 	}
 	if err := recordActivity(ctx, tx, issue.ID, in.ReporterID, "issue.created", "issue", issue.ID); err != nil {
 		return domain.Issue{}, err
+	}
+	// Say why it landed on them — nobody should have to guess who assigned this.
+	if routedVia != "" {
+		changes, err := json.Marshal(map[string]string{"reason": "component_lead", "component": routedVia})
+		if err != nil {
+			return domain.Issue{}, err
+		}
+		if err := recordActivityChanges(ctx, tx, issue.ID, in.ReporterID,
+			"issue.auto_assigned", "issue", issue.ID, changes); err != nil {
+			return domain.Issue{}, err
+		}
 	}
 	// Auto-watch: the reporter and initial assignee follow their issue.
 	if err := addWatcher(ctx, tx, issue.ID, in.ReporterID); err != nil {
@@ -1247,10 +1272,56 @@ func deref(s *string) string {
 }
 
 func recordActivity(ctx context.Context, tx pgx.Tx, issueID, actor uuid.UUID, verb, entityType string, entityID uuid.UUID) error {
+	return recordActivityChanges(ctx, tx, issueID, actor, verb, entityType, entityID, []byte("{}"))
+}
+
+// recordActivityChanges is recordActivity with a payload, for verbs whose line in the
+// timeline needs more than the verb to make sense.
+func recordActivityChanges(
+	ctx context.Context, tx pgx.Tx, issueID, actor uuid.UUID,
+	verb, entityType string, entityID uuid.UUID, changes []byte,
+) error {
+	if len(changes) == 0 {
+		changes = []byte("{}")
+	}
 	_, err := tx.Exec(ctx,
 		`INSERT INTO activity (issue_id, actor_id, verb, entity_type, entity_id, changes)
-		 VALUES ($1,$2,$3,$4,$5,'{}')`, issueID, actor, verb, entityType, entityID)
+		 VALUES ($1,$2,$3,$4,$5,$6)`, issueID, actor, verb, entityType, entityID, changes)
 	return err
+}
+
+// componentLead returns the lead of the first named component that has one. Order
+// follows the caller's list rather than the database's, so an issue filed against
+// ["api", "web"] always routes to the api lead instead of whichever row came back
+// first.
+func componentLead(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, names []string) (*uuid.UUID, string, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT name, lead_id FROM components
+		 WHERE project_id = $1 AND lead_id IS NOT NULL AND name = ANY($2)`, projectID, names)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	leads := make(map[string]uuid.UUID, len(names))
+	for rows.Next() {
+		var name string
+		var lead uuid.UUID
+		if err := rows.Scan(&name, &lead); err != nil {
+			return nil, "", err
+		}
+		leads[name] = lead
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	for _, name := range names {
+		if lead, ok := leads[name]; ok {
+			id := lead
+			return &id, name, nil
+		}
+	}
+	return nil, "", nil
 }
 
 func sevPtr(s *domain.Severity) *string {

@@ -12,10 +12,30 @@ const VERBS: Record<string, string> = {
   "issue.pr_linked": "linked a pull request",
   "issue.resolved_by_git": "resolved via a commit",
   "issue.closed_by_git": "closed via a merged PR",
+  "issue.auto_assigned": "was auto-assigned",
+  "issue.referenced": "referenced this issue",
 };
 
 export function humanizeVerb(verb: string): string {
   return VERBS[verb] ?? verb.replace(/^issue\./, "").replace(/_/g, " ");
+}
+
+/**
+ * describeActivity is humanizeVerb plus whatever the entry's payload adds. Auto-assignment
+ * is meaningless without the reason — "was auto-assigned" leaves the assignee guessing who
+ * decided that, which is exactly the complaint routing is supposed to avoid.
+ */
+export function describeActivity(a: { verb: string; changes?: Record<string, unknown> | null }): string {
+  const base = humanizeVerb(a.verb);
+  const c = a.changes;
+  if (!c) return base;
+  if (a.verb === "issue.auto_assigned" && c.reason === "component_lead" && typeof c.component === "string") {
+    return `${base} as lead of ${c.component}`;
+  }
+  if (a.verb === "issue.referenced" && typeof c.from === "string") {
+    return `referenced this from ${c.from}`;
+  }
+  return base;
 }
 
 export function timeAgo(iso: string): string {

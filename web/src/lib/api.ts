@@ -170,6 +170,8 @@ export interface Activity {
   entity_type: string;
   issue_key?: string;
   occurred_at: string;
+  /** Verb-specific payload — e.g. the component an auto-assignment routed through. */
+  changes?: Record<string, unknown> | null;
 }
 
 export interface BoardColumn {
