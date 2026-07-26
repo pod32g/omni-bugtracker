@@ -94,6 +94,8 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/projects/{key}/releases", h.listReleases)
 	r.Post("/projects/{key}/releases", h.createRelease)
 	r.Patch("/releases/{id}", h.updateRelease)
+	r.Get("/releases/{id}/notes", h.releaseNotes)
+	r.Post("/releases/{id}/notes", h.releaseNotes)
 	r.Delete("/releases/{id}", h.deleteRelease)
 	r.Get("/projects/{key}/members", h.listProjectMembers)
 	r.Put("/projects/{key}/members/{id}", h.putProjectMember)

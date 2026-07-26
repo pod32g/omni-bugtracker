@@ -183,24 +183,28 @@ func (s *Store) DeleteMilestone(ctx context.Context, id uuid.UUID) (bool, error)
 // ── releases ──
 
 const selectRelease = `
-	SELECT r.id, r.version, r.name, r.notes_md, r.state, r.git_tag, r.released_at, r.created_at,
+	SELECT r.id, rp.key, r.version, r.name, r.notes_md, r.state, r.git_tag, r.released_at, r.created_at,
 	       (SELECT count(*) FROM issues i WHERE i.release_id = r.id AND i.deleted_at IS NULL
 	          AND i.status NOT IN ('resolved','closed')) AS open_issues,
 	       (SELECT count(*) FROM issues i WHERE i.release_id = r.id AND i.deleted_at IS NULL
 	          AND i.status IN ('resolved','closed')) AS done_issues
-	FROM releases r`
+	FROM releases r JOIN projects rp ON rp.id = r.project_id`
 
 func scanRelease(row scanner) (domain.Release, error) {
 	var r domain.Release
-	err := row.Scan(&r.ID, &r.Version, &r.Name, &r.NotesMD, &r.State, &r.GitTag, &r.ReleasedAt, &r.CreatedAt,
-		&r.OpenIssues, &r.DoneIssues)
+	err := row.Scan(&r.ID, &r.ProjectKey, &r.Version, &r.Name, &r.NotesMD, &r.State, &r.GitTag,
+		&r.ReleasedAt, &r.CreatedAt, &r.OpenIssues, &r.DoneIssues)
 	return r, err
+}
+
+// GetRelease returns one release by id, with its project key resolved.
+func (s *Store) GetRelease(ctx context.Context, id uuid.UUID) (domain.Release, error) {
+	return scanRelease(s.pool.QueryRow(ctx, selectRelease+` WHERE r.id = $1`, id))
 }
 
 func (s *Store) ListReleases(ctx context.Context, projectKey string) ([]domain.Release, error) {
 	q := selectRelease + `
-		JOIN projects p ON p.id = r.project_id
-		WHERE p.key = $1
+		WHERE rp.key = $1
 		ORDER BY (r.state = 'published'), r.created_at DESC`
 	rows, err := s.pool.Query(ctx, q, projectKey)
 	if err != nil {

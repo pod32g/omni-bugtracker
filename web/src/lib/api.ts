@@ -410,6 +410,12 @@ export const api = {
   listReleases: (projectKey: string) => request<{ items: Release[] }>(`/projects/${projectKey}/releases`),
   createRelease: (projectKey: string, body: { version: string; name?: string; notes_md?: string; git_tag?: string }) =>
     request<Release>(`/projects/${projectKey}/releases`, { method: "POST", body: JSON.stringify(body) }),
+  /** Preview the notes a release would generate, without saving them. */
+  previewReleaseNotes: (id: string) =>
+    request<{ notes_md: string; issue_count: number; current_notes_md: string }>(`/releases/${id}/notes`),
+  /** Write the generated notes into notes_md. force replaces notes that are already there. */
+  applyReleaseNotes: (id: string, force: boolean) =>
+    request<Release>(`/releases/${id}/notes?apply=true${force ? "&force=true" : ""}`, { method: "POST" }),
   updateRelease: (
     id: string,
     patch: { version?: string; name?: string; notes_md?: string; git_tag?: string; state?: "draft" | "published" },

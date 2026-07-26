@@ -60,6 +60,7 @@ type Repository interface {
 	DeleteMilestone(ctx context.Context, id uuid.UUID) (bool, error)
 
 	// Releases
+	GetRelease(ctx context.Context, id uuid.UUID) (domain.Release, error)
 	ListReleases(ctx context.Context, projectKey string) ([]domain.Release, error)
 	CreateRelease(ctx context.Context, in CreateReleaseInput) (domain.Release, error)
 	UpdateRelease(ctx context.Context, in UpdateReleaseInput) (domain.Release, error)

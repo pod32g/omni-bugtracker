@@ -62,6 +62,7 @@ type Milestone struct {
 // Release is a project-scoped shippable version issues can be targeted at.
 type Release struct {
 	ID         uuid.UUID  `json:"id"`
+	ProjectKey string     `json:"project_key"`
 	Version    string     `json:"version"` // e.g. "2.1.0"
 	Name       string     `json:"name"`
 	NotesMD    string     `json:"notes_md"`

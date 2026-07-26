@@ -128,6 +128,30 @@ function ReleaseCard({
   onDelete: () => void;
 }) {
   const published = r.state === "published";
+  const qc = useQueryClient();
+  const [preview, setPreview] = useState<string | null>(null);
+
+  // Generated then curated: the draft lands in notes_md for editing, and replacing
+  // notes somebody already wrote takes a second, explicit confirmation.
+  const generate = useMutation({
+    mutationFn: async () => {
+      const p = await api.previewReleaseNotes(r.id);
+      if (
+        p.current_notes_md.trim() &&
+        !window.confirm(`${r.version} already has notes. Replace them with the generated draft?`)
+      ) {
+        setPreview(p.notes_md);
+        return null;
+      }
+      return api.applyReleaseNotes(r.id, true);
+    },
+    onSuccess: (updated) => {
+      if (updated) {
+        setPreview(updated.notes_md);
+        qc.invalidateQueries({ queryKey: ["releases"] });
+      }
+    },
+  });
   return (
     <div className={`flex flex-col gap-2.5 rounded-lg border border-hairline bg-paper p-5 ${published ? "opacity-80" : ""}`}>
       <div className="flex items-center gap-3">
@@ -149,6 +173,16 @@ function ReleaseCard({
           {r.state}
         </span>
         <span className="grow" />
+        {canManage && !published && (
+          <button
+            onClick={() => generate.mutate()}
+            disabled={generate.isPending}
+            title="Compose notes from the issues targeting this release"
+            className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink disabled:opacity-50"
+          >
+            {generate.isPending ? "Generating…" : "Generate notes"}
+          </button>
+        )}
         {canManage && !published && (
           <button
             onClick={onPublish}
@@ -173,6 +207,20 @@ function ReleaseCard({
         {r.git_tag && <span>tag {r.git_tag}</span>}
         {published && r.released_at && <span>released {timeAgo(r.released_at)}</span>}
       </div>
+      {generate.isError && <p className="text-sm text-critical">{(generate.error as Error).message}</p>}
+      {preview !== null && (
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-hairline bg-panel p-3 font-mono text-xs leading-relaxed text-graphite">
+          {preview}
+        </pre>
+      )}
+      {(r.notes_md || preview) && (
+        <button
+          onClick={() => setPreview(preview === null ? r.notes_md : null)}
+          className="self-start text-xs font-semibold text-blueprint transition hover:opacity-80"
+        >
+          {preview === null ? "Show notes" : "Hide notes"}
+        </button>
+      )}
     </div>
   );
 }
