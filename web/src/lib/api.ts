@@ -272,6 +272,18 @@ export interface SimilarIssue {
   created_at: string;
 }
 
+/** One entry in the in-app inbox. */
+export interface Notification {
+  id: string;
+  event_type: string;
+  issue_key: string;
+  issue_title: string;
+  issue_status: IssueStatus;
+  actor?: User;
+  read_at?: string | null;
+  created_at: string;
+}
+
 export interface Attachment {
   id: string;
   issue_id?: string;
@@ -568,6 +580,17 @@ export const api = {
     const q = new URLSearchParams({ filter, sort, format });
     return `${BASE}/projects/${encodeURIComponent(projectKey)}/issues/export?${q}`;
   },
+  notifications: (unreadOnly: boolean, limit = 30) =>
+    request<{ items: Notification[]; unread: number }>(
+      `/me/notifications?unread=${unreadOnly}&limit=${limit}`,
+    ),
+  /** Empty ids marks the whole inbox read. */
+  markNotificationsRead: (ids: string[] = []) =>
+    request<{ marked: number }>("/me/notifications/read", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+  markIssueRead: (issueKey: string) => request<void>(`/issues/${issueKey}/read`, { method: "POST" }),
   similarIssues: (projectKey: string, title: string, excludeKey = "") =>
     request<{ items: SimilarIssue[] }>(
       `/projects/${encodeURIComponent(projectKey)}/issues/similar?title=${encodeURIComponent(title)}` +

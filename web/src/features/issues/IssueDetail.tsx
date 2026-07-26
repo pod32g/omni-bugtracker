@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
@@ -129,6 +129,16 @@ export function IssueDetail() {
       qc.invalidateQueries({ queryKey: ["activity", issueKey] });
     },
   });
+  // Opening the issue is the act the badge was pointing at, so it counts as reading.
+  // A count that survives opening the thing it referred to is a count people learn to
+  // ignore. Fire-and-forget: a failure here must never block the page.
+  useEffect(() => {
+    api
+      .markIssueRead(issueKey)
+      .then(() => qc.invalidateQueries({ queryKey: ["notifications"] }))
+      .catch(() => undefined);
+  }, [issueKey, qc]);
+
   const snooze = useMutation({
     mutationFn: (until: string | null) =>
       until ? api.snoozeIssue(issueKey, until, "") : api.wakeIssue(issueKey),

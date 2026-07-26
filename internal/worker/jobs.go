@@ -182,6 +182,18 @@ func (w *notifyWorker) Work(ctx context.Context, job *river.Job[events.NotifyJob
 		}
 	}
 
+	// The inbox is written by the same step that pushes outward, so the two can never
+	// disagree about who was told. It is deliberately not conditional on the external
+	// adapter succeeding — Omni-Notify being unreachable is exactly when the in-app
+	// list is the only thing that works.
+	var actor *uuid.UUID
+	if id, err := uuid.Parse(job.Args.ActorID); err == nil {
+		actor = &id
+	}
+	if err := w.d.Store.RecordNotifications(ctx, issue.ID, job.Args.EventType, actor, recipients); err != nil {
+		w.d.Logger.Error("record notifications", "err", err, "issue", issue.Key)
+	}
+
 	severity := "info"
 	if issue.Severity != nil {
 		switch *issue.Severity {

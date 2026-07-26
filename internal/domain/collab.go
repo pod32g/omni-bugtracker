@@ -125,6 +125,18 @@ type SimilarIssue struct {
 	CreatedAt time.Time   `json:"created_at"`
 }
 
+// Notification is one entry in a user's in-app inbox.
+type Notification struct {
+	ID          uuid.UUID  `json:"id"`
+	EventType   string     `json:"event_type"`
+	IssueKey    string     `json:"issue_key"`
+	IssueTitle  string     `json:"issue_title"`
+	IssueStatus string     `json:"issue_status"`
+	Actor       *User      `json:"actor,omitempty"`
+	ReadAt      *time.Time `json:"read_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
 // SavedSearch is a personal, named filter-grammar string.
 type SavedSearch struct {
 	ID        uuid.UUID `json:"id"`

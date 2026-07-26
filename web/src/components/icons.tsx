@@ -69,6 +69,12 @@ export const IconSearch = (p: P) => (
   </Svg>
 );
 
+export const IconInbox = (p: P) => (
+  <Svg {...p} viewBox="0 0 16 16">
+    <path d="M2 9.5V4a1.5 1.5 0 0 1 1.5-1.5h9A1.5 1.5 0 0 1 14 4v5.5M2 9.5h3l1 2h4l1-2h3M2 9.5V12a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 14 12V9.5" strokeWidth={p.strokeWidth ?? 1.4} />
+  </Svg>
+);
+
 export const IconMenu = (p: P) => (
   <Svg {...p} viewBox="0 0 16 16">
     <path d="M2 4H14M2 8H14M2 12H14" strokeWidth={p.strokeWidth ?? 1.5} />

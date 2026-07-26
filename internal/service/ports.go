@@ -143,6 +143,12 @@ type Repository interface {
 	DeleteSavedSearch(ctx context.Context, userID, id uuid.UUID) (bool, error)
 
 	// Watchers (issue subscriptions; auto-watch on report/comment/assign)
+	// RecordNotifications writes the in-app inbox rows for a notify job's recipients.
+	RecordNotifications(ctx context.Context, issueID uuid.UUID, eventType string, actorID *uuid.UUID, emails []string) error
+	ListNotifications(ctx context.Context, userID uuid.UUID, unreadOnly bool, limit, offset int32) ([]domain.Notification, int, error)
+	MarkNotificationsRead(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (int, error)
+	MarkIssueNotificationsRead(ctx context.Context, userID, issueID uuid.UUID) error
+
 	ListWatchers(ctx context.Context, issueID uuid.UUID) ([]domain.User, error)
 	IsWatcher(ctx context.Context, issueID, userID uuid.UUID) (bool, error)
 	SetWatcher(ctx context.Context, issueID, userID uuid.UUID, watching bool) error

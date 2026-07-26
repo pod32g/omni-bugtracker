@@ -13,6 +13,7 @@ import {
   IconDashboard,
   IconFlag,
   IconGear,
+  IconInbox,
   IconLogout,
   IconMark,
   IconMenu,
@@ -41,7 +42,7 @@ export function Layout() {
   useEffect(() => setNavOpen(false), [location.pathname]);
 
   // g-then-key jumps between the main views, the way every keyboard-driven tracker does.
-  useChord("g", { i: "/issues", b: "/board", d: "/", m: "/milestones", r: "/releases", s: "/settings" }, navigate);
+  useChord("g", { i: "/issues", b: "/board", d: "/", m: "/milestones", r: "/releases", s: "/settings", n: "/inbox" }, navigate);
 
   useShortcut((e) => {
     if (e.key === "?") {
@@ -110,6 +111,7 @@ export function Layout() {
 
 /** The mobile-only header: the drawer handle and search, which live in the sidebar above md. */
 function MobileBar({ onOpenNav, onSearch }: { onOpenNav: () => void; onSearch: () => void }) {
+  const unread = useUnread();
   return (
     <header className="flex shrink-0 items-center gap-2 border-b border-hairline bg-mist px-3 py-2.5 md:hidden">
       <button
@@ -124,6 +126,18 @@ function MobileBar({ onOpenNav, onSearch }: { onOpenNav: () => void; onSearch: (
       </span>
       <span className="truncate text-sm font-bold text-ink">Omni BugTracker</span>
       <span className="grow" />
+      <NavLink
+        to="/inbox"
+        aria-label={unread > 0 ? `Inbox, ${unread} unread` : "Inbox"}
+        className="relative grid h-9 w-9 place-items-center rounded-md text-graphite transition hover:bg-paper hover:text-ink"
+      >
+        <IconInbox size={18} />
+        {unread > 0 && (
+          <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-blueprint px-1 font-mono text-[10px] font-semibold text-paper">
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </NavLink>
       <button
         onClick={onSearch}
         aria-label="Search"
@@ -135,8 +149,24 @@ function MobileBar({ onOpenNav, onSearch }: { onOpenNav: () => void; onSearch: (
   );
 }
 
+/**
+ * useUnread polls the inbox count. Polling rather than SSE for now: 30s is well inside
+ * the latency anybody expects from a notification badge, and it needs no connection to
+ * keep alive through a deploy.
+ */
+function useUnread() {
+  const inbox = useQuery({
+    queryKey: ["notifications", "badge"],
+    queryFn: () => api.notifications(true, 1),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+  return inbox.data?.unread ?? 0;
+}
+
 function Sidebar({ me, onSearch, open }: { me?: User; onSearch: () => void; open: boolean }) {
   const { projects, projectKey, current, setProjectKey } = useProject();
+  const unread = useUnread();
   const { theme, toggle } = useTheme();
   const canManage = CAN_MANAGE.has(me?.role ?? "");
   // Shares the ["dashboard"] cache with the Dashboard page — the open count is free here.
@@ -190,6 +220,12 @@ function Sidebar({ me, onSearch, open }: { me?: User; onSearch: () => void; open
           Workspace
         </div>
         <NavItem to="/" end icon={<IconDashboard size={17} />} label="Dashboard" />
+        <NavItem
+          to="/inbox"
+          icon={<IconInbox size={17} />}
+          label="Inbox"
+          trailing={unread > 0 ? String(unread) : undefined}
+        />
         <NavItem
           to="/issues"
           icon={<IconTarget size={17} />}
@@ -436,7 +472,7 @@ const SHORTCUTS: { keys: string; what: string }[] = [
   { keys: "⌘K", what: "Search issues" },
   { keys: "/", what: "Focus the filter (or search)" },
   { keys: "c", what: "New issue" },
-  { keys: "g then i / b / d / m / r / s", what: "Go to Issues, Board, Dashboard, Milestones, Releases, Settings" },
+  { keys: "g then i / b / d / m / r / s / n", what: "Go to Issues, Board, Dashboard, Milestones, Releases, Settings, iNbox" },
   { keys: "j / k", what: "Move down / up the issue list" },
   { keys: "Enter", what: "Open the focused issue" },
   { keys: "x", what: "Select the focused issue for a bulk action" },
