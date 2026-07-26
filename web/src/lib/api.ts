@@ -669,6 +669,14 @@ export const api = {
     }),
   setIssueMute: (issueKey: string, muted: boolean) =>
     request<{ muted: boolean }>(`/issues/${issueKey}/mute`, { method: muted ? "POST" : "DELETE" }),
+  ops: () =>
+    request<{
+      queues: { queue: string; state: string; count: number; max_attempt: number }[];
+      failures: { kind: string; state: string; attempt: number; error: string; created_at: string }[];
+      deliveries: { url: string; succeeded: number; total: number; last_at?: string | null }[];
+      queue_error?: string;
+      process: { uptime_seconds: number; go_version: string; goroutines: number };
+    }>("/ops"),
   audit: (params: { action?: string; actor?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.action) q.set("action", params.action);

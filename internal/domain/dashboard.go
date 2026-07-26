@@ -53,3 +53,38 @@ type ReportThroughput struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
 }
+
+// OpsSnapshot is the operator's view: what the queue is doing and whether outbound
+// deliveries are landing. Every figure already existed in Postgres or the process — the
+// gap was that a self-hosted tool with no ops surface makes its operator guess.
+type OpsSnapshot struct {
+	Queues     []QueueState     `json:"queues"`
+	Failures   []JobFailure     `json:"failures"`
+	Deliveries []DeliveryHealth `json:"deliveries"`
+	// QueueError is set when River's tables cannot be read, so the page can say why
+	// instead of failing to load — the one page that must survive things being broken.
+	QueueError string `json:"queue_error,omitempty"`
+}
+
+type QueueState struct {
+	Queue      string `json:"queue"`
+	State      string `json:"state"`
+	Count      int    `json:"count"`
+	MaxAttempt int    `json:"max_attempt"`
+}
+
+type JobFailure struct {
+	Kind        string     `json:"kind"`
+	State       string     `json:"state"`
+	Attempt     int        `json:"attempt"`
+	Error       string     `json:"error"`
+	FinalizedAt *time.Time `json:"finalized_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+type DeliveryHealth struct {
+	URL       string     `json:"url"`
+	Succeeded int        `json:"succeeded"`
+	Total     int        `json:"total"`
+	LastAt    *time.Time `json:"last_at,omitempty"`
+}

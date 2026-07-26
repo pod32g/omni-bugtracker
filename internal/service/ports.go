@@ -213,6 +213,8 @@ type Repository interface {
 	RecentActivity(ctx context.Context, projectKey string, limit int32) ([]domain.Activity, error)
 	// Dashboard aggregates health metrics; an empty projectKey spans every project.
 	Dashboard(ctx context.Context, projectKey string) (domain.Dashboard, error)
+	// OpsSnapshot is the queue and delivery health view for admins.
+	OpsSnapshot(ctx context.Context) (domain.OpsSnapshot, error)
 	// Report is the trend view over a date range; see ReportFilter.
 	Report(ctx context.Context, f ReportFilter) (domain.Report, error)
 	ListUsers(ctx context.Context, limit int32) ([]domain.User, error)
