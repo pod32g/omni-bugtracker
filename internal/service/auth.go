@@ -30,6 +30,7 @@ func (a *Auth) AuthenticateToken(ctx context.Context, tokenHash []byte) (*auth.P
 		Role:        tp.User.Role,
 		Scopes:      tp.Scopes,
 		ViaToken:    true,
+		TokenID:     tp.TokenID.String(),
 	}, nil
 }
 

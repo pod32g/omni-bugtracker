@@ -26,6 +26,9 @@ type Deps struct {
 	DB       *pgxpool.Pool
 	Verifier *auth.Verifier
 	Authn    mw.Authenticator
+	// Limiter backs rate limiting. Nil (Redis unreachable at boot, or rate limiting
+	// switched off in config) leaves the middleware out of the chain entirely.
+	Limiter mw.Limiter
 	// Handlers is the OpenAPI strict server implementation, mounted under /api/v1
 	// once `make generate` has produced the httpgen package. See mountGenerated().
 	Handlers http.Handler
@@ -71,18 +74,49 @@ func NewRouter(d Deps) http.Handler {
 		r.Mount("/auth", d.AuthFlow)
 	}
 
+	budgets, observe := rateLimiting(d)
+
 	// Authenticated API surface.
 	r.Route("/api/v1", func(api chi.Router) {
-		// Inbound integration webhooks authenticate via HMAC, not bearer — mounted first.
-		mountInboundIntegrations(api, d)
+		// Inbound integration webhooks authenticate via HMAC, not bearer — mounted
+		// first, and limited by source address since they carry no principal.
+		api.Group(func(inbound chi.Router) {
+			inbound.Use(mw.RateLimitInbound(d.Limiter, budgets, d.Logger, observe))
+			mountInboundIntegrations(inbound, d)
+		})
 
 		api.Group(func(secured chi.Router) {
 			secured.Use(mw.Auth(d.Verifier, d.Authn))
+			// After Auth: the budget is charged to the principal, not the address.
+			secured.Use(mw.RateLimit(d.Limiter, budgets, d.Logger, observe))
 			mountGenerated(secured, d)
 		})
 	})
 
 	return r
+}
+
+// rateLimiting resolves the configured budgets and the metrics observer. When the
+// feature is switched off it returns zero budgets, which makes every bucket a no-op
+// even if a limiter was supplied.
+func rateLimiting(d Deps) (mw.Budgets, mw.Observer) {
+	var observe mw.Observer
+	if d.Metrics != nil {
+		observe = func(bucket, outcome string) {
+			d.Metrics.RateLimitEvents.WithLabelValues(bucket, outcome).Inc()
+		}
+	}
+	if !d.Cfg.RateLimit.Enabled {
+		return mw.Budgets{}, observe
+	}
+	rl := d.Cfg.RateLimit.WithDefaults()
+	return mw.Budgets{
+		Window:  rl.Window,
+		Read:    rl.Read,
+		Write:   rl.Write,
+		Search:  rl.Search,
+		Inbound: rl.Inbound,
+	}, observe
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {

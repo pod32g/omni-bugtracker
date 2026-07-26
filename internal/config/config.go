@@ -20,6 +20,7 @@ type Config struct {
 	Server        Server        `koanf:"server"`
 	Database      Database      `koanf:"database"`
 	Redis         Redis         `koanf:"redis"`
+	RateLimit     RateLimit     `koanf:"rate_limit"`
 	Worker        Worker        `koanf:"worker"`
 	Identity      Identity      `koanf:"identity"`
 	Integrations  Integrations  `koanf:"integrations"`
@@ -59,6 +60,39 @@ type Database struct {
 type Redis struct {
 	Addr string `koanf:"addr"`
 	DB   int    `koanf:"db"`
+}
+
+// RateLimit budgets API requests per principal per window. Each bucket is counted
+// separately, so a burst of writes cannot starve reads. A budget of 0 disables that
+// bucket; Enabled: false disables limiting entirely.
+type RateLimit struct {
+	Enabled bool          `koanf:"enabled"`
+	Window  time.Duration `koanf:"window"`
+	Read    int           `koanf:"read"`
+	Write   int           `koanf:"write"`
+	Search  int           `koanf:"search"`
+	Inbound int           `koanf:"inbound"`
+}
+
+// WithDefaults fills in any budget left at zero by an incomplete config, so a partial
+// `rate_limit:` block cannot silently disable the whole thing.
+func (r RateLimit) WithDefaults() RateLimit {
+	if r.Window <= 0 {
+		r.Window = time.Minute
+	}
+	if r.Read <= 0 {
+		r.Read = 600
+	}
+	if r.Write <= 0 {
+		r.Write = 120
+	}
+	if r.Search <= 0 {
+		r.Search = 60
+	}
+	if r.Inbound <= 0 {
+		r.Inbound = 300
+	}
+	return r
 }
 
 type Worker struct {

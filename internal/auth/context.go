@@ -23,6 +23,9 @@ type Principal struct {
 	Role        domain.Role
 	Scopes      []string // for API tokens
 	ViaToken    bool
+	// TokenID identifies the API token the request arrived on (empty for sessions).
+	// Rate limiting budgets each token separately from its owner's browser session.
+	TokenID string
 }
 
 // WithPrincipal stores the principal on the request context.

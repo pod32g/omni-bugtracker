@@ -19,6 +19,17 @@ redis:
   addr: "localhost:6379"
   db: 0
 
+# Per-principal API budgets (sliding window, counted in Redis). Each bucket is
+# separate, so a burst of writes cannot starve reads. Requests are keyed by API token,
+# then user, then source address. If Redis is unreachable the limiter fails OPEN.
+rate_limit:
+  enabled: true
+  window: "1m"
+  read: 600      # GET/HEAD
+  write: 120     # POST/PATCH/PUT/DELETE
+  search: 60     # /search — ranked full-text, an order of magnitude dearer than a read
+  inbound: 300   # unauthenticated integration webhooks, keyed by source address
+
 worker:
   queues:
     default: 10

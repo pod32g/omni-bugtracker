@@ -15,6 +15,7 @@ import (
 	"github.com/omni/bugtracker/internal/config"
 	"github.com/omni/bugtracker/internal/events"
 	"github.com/omni/bugtracker/internal/httpapi"
+	mw "github.com/omni/bugtracker/internal/httpapi/middleware"
 	"github.com/omni/bugtracker/internal/platform"
 	"github.com/omni/bugtracker/internal/repo/pg"
 	"github.com/omni/bugtracker/internal/service"
@@ -41,9 +42,14 @@ func main() {
 	}
 	defer db.Close()
 
-	// Redis is used for caching / rate limiting only.
-	if _, err := platform.NewRedis(ctx, cfg.Redis); err != nil {
-		logger.Warn("redis unavailable — cache disabled", "err", err)
+	// Redis backs rate limiting only — never a source of truth. If it is unreachable
+	// the limiter stays nil and the API serves unlimited rather than not at all.
+	var limiter mw.Limiter
+	if rdb, err := platform.NewRedis(ctx, cfg.Redis); err != nil {
+		logger.Warn("redis unavailable — rate limiting disabled", "err", err)
+	} else {
+		defer func() { _ = rdb.Close() }()
+		limiter = mw.NewRedisLimiter(rdb)
 	}
 
 	// River insert-only client: enqueue event-dispatch jobs transactionally on writes.
@@ -69,6 +75,7 @@ func main() {
 		DB:             db,
 		Verifier:       verifier,
 		Authn:          authn,
+		Limiter:        limiter,
 		Handlers:       handlers,
 		AuthFlow:       authFlow,
 		InboundGit:     integrations.GitEvents,

@@ -14,6 +14,7 @@ type Metrics struct {
 	IssuesCreated   *prometheus.CounterVec
 	JobsProcessed   *prometheus.CounterVec
 	WebhookAttempts *prometheus.CounterVec
+	RateLimitEvents *prometheus.CounterVec
 }
 
 // NewMetrics registers the collectors on a dedicated registry.
@@ -45,5 +46,11 @@ func NewMetrics() *Metrics {
 			Name: "bugtracker_webhook_attempts_total",
 			Help: "Outbound webhook delivery attempts by outcome.",
 		}, []string{"outcome"}),
+		// Only "limited" and "error" are counted — allowed requests are already in
+		// HTTPRequests, and counting them twice buys nothing.
+		RateLimitEvents: factory.NewCounterVec(prometheus.CounterOpts{
+			Name: "bugtracker_rate_limit_events_total",
+			Help: "Rate limiter outcomes by bucket: limited (429) or error (failed open).",
+		}, []string{"bucket", "outcome"}),
 	}
 }
