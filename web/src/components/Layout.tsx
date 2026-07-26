@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, session, type Project, type User } from "../lib/api";
 import { ProjectProvider, useProject } from "../lib/project";
+import { isTypingTarget, useChord, useShortcut } from "../lib/shortcuts";
 import { useTheme } from "../lib/theme";
 import { Avatar } from "./Badges";
 import { SearchPalette } from "./SearchPalette";
@@ -33,8 +34,28 @@ export function Layout() {
   const [navOpen, setNavOpen] = useState(false);
   const location = useLocation();
 
+  const [helpOpen, setHelpOpen] = useState(false);
+  const navigate = useNavigate();
+
   // Navigating is the end of the reason the drawer was open.
   useEffect(() => setNavOpen(false), [location.pathname]);
+
+  // g-then-key jumps between the main views, the way every keyboard-driven tracker does.
+  useChord("g", { i: "/issues", b: "/board", d: "/", m: "/milestones", r: "/releases", s: "/settings" }, navigate);
+
+  useShortcut((e) => {
+    if (e.key === "?") {
+      e.preventDefault();
+      setHelpOpen((o) => !o);
+    } else if (e.key === "Escape") {
+      setHelpOpen(false);
+    } else if (e.key === "c") {
+      // The composer lives in the issue list; ?new=1 is how it opens, which also makes
+      // "file an issue" a linkable action rather than a keystroke-only one.
+      e.preventDefault();
+      navigate("/issues?new=1");
+    }
+  });
 
   // Global search shortcuts: ⌘K / Ctrl-K anywhere, "/" outside form fields.
   useEffect(() => {
@@ -45,8 +66,7 @@ export function Layout() {
       } else if (e.key === "/") {
         // The issues list binds "/" to its own filter box — don't fight it there.
         if (window.location.pathname === "/issues") return;
-        const t = e.target as HTMLElement;
-        if (t.tagName !== "INPUT" && t.tagName !== "TEXTAREA" && t.tagName !== "SELECT" && !t.isContentEditable) {
+        if (!isTypingTarget(e.target)) {
           e.preventDefault();
           setSearchOpen(true);
         }
@@ -83,6 +103,7 @@ export function Layout() {
         </div>
       </div>
       <SearchPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
+      {helpOpen && <ShortcutHelp onClose={() => setHelpOpen(false)} />}
     </ProjectProvider>
   );
 }
@@ -406,6 +427,46 @@ function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; onCreat
             {create.isPending ? "Creating…" : "Create project"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+const SHORTCUTS: { keys: string; what: string }[] = [
+  { keys: "⌘K", what: "Search issues" },
+  { keys: "/", what: "Focus the filter (or search)" },
+  { keys: "c", what: "New issue" },
+  { keys: "g then i / b / d / m / r / s", what: "Go to Issues, Board, Dashboard, Milestones, Releases, Settings" },
+  { keys: "j / k", what: "Move down / up the issue list" },
+  { keys: "Enter", what: "Open the focused issue" },
+  { keys: "x", what: "Select the focused issue for a bulk action" },
+  { keys: "?", what: "This list" },
+];
+
+function ShortcutHelp({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/40 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-md rounded-lg border border-hairline bg-paper p-6 shadow-xl shadow-ink/10"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-bold text-ink">Keyboard shortcuts</h2>
+          <button onClick={onClose} className="text-graphite transition hover:text-ink">
+            ✕
+          </button>
+        </div>
+        <dl className="flex flex-col gap-2.5">
+          {SHORTCUTS.map((s) => (
+            <div key={s.keys} className="flex items-baseline gap-3">
+              <dt className="w-52 shrink-0 font-mono text-xs text-graphite">{s.keys}</dt>
+              <dd className="text-sm text-ink">{s.what}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-4 text-xs text-graphite-soft">
+          Shortcuts are off while a text field has focus.
+        </p>
       </div>
     </div>
   );

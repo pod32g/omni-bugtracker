@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, type Issue, type IssueStatus, type Priority } from "../../lib/api";
 import { useProject } from "../../lib/project";
+import { useShortcut } from "../../lib/shortcuts";
 import { timeAgo } from "../../lib/activity";
 import { Avatar, LabelChip, PriorityText, SeverityBar, SeverityMark, StatusPill } from "../../components/Badges";
 import { IconArrowDown, IconLabelLines, IconPlus, IconSearch } from "../../components/icons";
@@ -32,13 +33,27 @@ const shortAgo = (iso: string) => timeAgo(iso).replace(" ago", "");
 
 export function IssueList() {
   const { projects, projectKey } = useProject();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   // Initial filter can be deep-linked from the dashboard gadgets (e.g. ?filter=assignee:@me).
   const [filter, setFilter] = useState(() => searchParams.get("filter") ?? "is:open");
   const [sort, setSort] = useState("");
-  const [showNewIssue, setShowNewIssue] = useState(false);
+  // ?new=1 opens the composer, so the "c" shortcut can reach it from any page and
+  // "file an issue here" is a link somebody can send.
+  const [showNewIssue, setShowNewIssue] = useState(() => searchParams.get("new") === "1");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // -1 = no row focused, which is the state until j/k is pressed.
+  const [cursor, setCursor] = useState(-1);
   const searchRef = useRef<HTMLInputElement>(null);
+  const rowsRef = useRef<(HTMLAnchorElement | null)[]>([]);
+  const navigate = useNavigate();
+
+  const toggleSelected = (id: string) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me(), retry: false });
   // Scoped to the selected project — the subtitle prints these next to the list,
@@ -62,18 +77,60 @@ export function IssueList() {
     enabled: !!projectKey,
   });
 
-  // Press "/" anywhere to jump to the filter box.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.metaKey || e.ctrlKey) return;
-      const el = document.activeElement;
-      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+  // Press "/" anywhere to jump to the filter box, and j/k/Enter/x to work the list
+  // without leaving the keyboard — triage is a loop, and the mouse round trip is paid
+  // on every issue in it.
+  useShortcut((e) => {
+    if (e.key === "/") {
       e.preventDefault();
       searchRef.current?.focus();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+      return;
+    }
+    if (items.length === 0) return;
+
+    switch (e.key) {
+      case "j":
+      case "ArrowDown":
+        e.preventDefault();
+        setCursor((c) => Math.min(c < 0 ? 0 : c + 1, items.length - 1));
+        break;
+      case "k":
+      case "ArrowUp":
+        e.preventDefault();
+        setCursor((c) => Math.max(c <= 0 ? 0 : c - 1, 0));
+        break;
+      case "Enter":
+        if (cursor >= 0) {
+          e.preventDefault();
+          navigate(`/issues/${items[cursor].key}`);
+        }
+        break;
+      case "x":
+        if (cursor >= 0) {
+          e.preventDefault();
+          toggleSelected(items[cursor].id);
+        }
+        break;
+      case "Escape":
+        setCursor(-1);
+        break;
+    }
+  });
+
+  // Keep the focused row on screen; a cursor you have to scroll to find is no help.
+  useEffect(() => {
+    if (cursor < 0) return;
+    rowsRef.current[cursor]?.scrollIntoView({ block: "nearest" });
+  }, [cursor]);
+
+  // A new filter renders a different list, so the old position means nothing.
+  useEffect(() => setCursor(-1), [filter, sort, projectKey]);
+
+  // "c" navigates to /issues?new=1; when we are already here that is a param change,
+  // not a mount, so the initial state above never runs.
+  useEffect(() => {
+    if (searchParams.get("new") === "1") setShowNewIssue(true);
+  }, [searchParams]);
 
   const canManage = CAN_MANAGE.has(me.data?.role ?? "");
   const hasProjects = projects.length > 0;
@@ -197,19 +254,14 @@ export function IssueList() {
           {issues.isError && (
             <div className="px-4 md:px-9 py-8 text-sm text-critical">{(issues.error as Error).message}</div>
           )}
-          {items.map((issue) => (
+          {items.map((issue, index) => (
             <IssueRow
               key={issue.id}
               issue={issue}
               selected={selected.has(issue.id)}
-              onToggle={() =>
-                setSelected((s) => {
-                  const next = new Set(s);
-                  if (next.has(issue.id)) next.delete(issue.id);
-                  else next.add(issue.id);
-                  return next;
-                })
-              }
+              focused={index === cursor}
+              rowRef={(el) => (rowsRef.current[index] = el)}
+              onToggle={() => toggleSelected(issue.id)}
             />
           ))}
           {issues.isSuccess && items.length === 0 && (
@@ -238,7 +290,18 @@ export function IssueList() {
       )}
 
       {showNewIssue && projectKey && (
-        <NewIssueForm projectKey={projectKey} onClose={() => setShowNewIssue(false)} />
+        <NewIssueForm
+          projectKey={projectKey}
+          onClose={() => {
+            setShowNewIssue(false);
+            // Drop ?new=1 so a reload (or Back) does not reopen the composer.
+            if (searchParams.has("new")) {
+              const next = new URLSearchParams(searchParams);
+              next.delete("new");
+              setSearchParams(next, { replace: true });
+            }
+          }}
+        />
       )}
 
       {selected.size > 0 && (
@@ -256,13 +319,26 @@ function Lane({ className = "", children }: { className?: string; children?: Rea
   );
 }
 
-function IssueRow({ issue, selected, onToggle }: { issue: Issue; selected: boolean; onToggle: () => void }) {
+function IssueRow({
+  issue,
+  selected,
+  focused,
+  rowRef,
+  onToggle,
+}: {
+  issue: Issue;
+  selected: boolean;
+  focused: boolean;
+  rowRef: (el: HTMLAnchorElement | null) => void;
+  onToggle: () => void;
+}) {
   return (
     <Link
+      ref={rowRef}
       to={`/issues/${issue.key}`}
       className={`flex items-center gap-2 border-b border-hairline px-4 py-[11px] transition hover:bg-panel/60 sm:gap-4 md:px-9 ${
         selected ? "bg-blueprint-soft/40" : ""
-      }`}
+      } ${focused ? "bg-panel ring-1 ring-inset ring-blueprint" : ""}`}
     >
       <span
         className="flex w-4 shrink-0 justify-center"
