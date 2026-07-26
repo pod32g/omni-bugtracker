@@ -44,7 +44,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 			maxUploadMB = cfg.Storage.MaxUploadMB
 		}
 	}
-	h := &httpHandlers{issues: issues, repo: repo, pub: pub, cfg: cfg, attachDir: attachDir, maxUpload: maxUploadMB << 20}
+	h := &httpHandlers{issues: issues, repo: repo, pub: pub, log: logger, cfg: cfg, attachDir: attachDir, maxUpload: maxUploadMB << 20}
 
 	r := chi.NewRouter()
 	r.Get("/me", h.me)
@@ -63,6 +63,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/projects/{key}/views", h.createProjectView)
 	r.Patch("/views/{id}", h.updateProjectView)
 	r.Delete("/views/{id}", h.deleteProjectView)
+	r.Get("/audit", h.listAudit)
 	r.Get("/users", h.users)
 	r.Patch("/users/{id}/role", h.updateUserRole)
 	r.Get("/dashboards/overview", h.dashboard)
@@ -153,6 +154,7 @@ type httpHandlers struct {
 	issues    *Issues
 	repo      Repository
 	pub       Publisher
+	log       *slog.Logger
 	cfg       *config.Config // bootstrap defaults (e.g. archive fallback)
 	attachDir string         // local-disk attachment storage root
 	maxUpload int64          // bytes
@@ -239,6 +241,9 @@ func (h *httpHandlers) createToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// `token` is the only time the plaintext is ever returned — shown once.
+	// Scopes and name only — the plaintext above never reaches the log.
+	h.audit(r, AuditTokenCreated, "api_token", tok.ID.String(), tok.Name,
+		map[string]any{"scopes": tok.Scopes})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token":      plaintext,
 		"id":         tok.ID,
@@ -264,6 +269,7 @@ func (h *httpHandlers) revokeToken(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such token")
 		return
 	}
+	h.audit(r, AuditTokenRevoked, "api_token", chi.URLParam(r, "id"), "", nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -370,6 +376,8 @@ func (h *httpHandlers) updateUserRole(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
 		return
 	}
+	h.audit(r, AuditUserRoleChanged, "user", id.String(), user.Email,
+		map[string]any{"role": body.Role})
 	writeJSON(w, http.StatusOK, user)
 }
 
@@ -429,6 +437,8 @@ func (h *httpHandlers) updateArchiveSettings(w http.ResponseWriter, r *http.Requ
 	if body.AutoAfterDays > 0 {
 		_ = h.pub.EnqueueAutoArchive(r.Context())
 	}
+	h.audit(r, AuditSettingsUpdated, "settings", "archive", "auto-archive",
+		map[string]any{"auto_after_days": body.AutoAfterDays})
 	writeJSON(w, http.StatusOK, map[string]any{"auto_after_days": body.AutoAfterDays})
 }
 
@@ -726,6 +736,8 @@ func (h *httpHandlers) createAutomationRule(w http.ResponseWriter, r *http.Reque
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
 		return
 	}
+	h.audit(r, AuditRuleCreated, "automation_rule", rule.ID.String(), rule.Name,
+		map[string]any{"project": rule.ProjectKey, "active": rule.IsActive})
 	writeJSON(w, http.StatusCreated, rule)
 }
 
@@ -782,6 +794,7 @@ func (h *httpHandlers) deleteAutomationRule(w http.ResponseWriter, r *http.Reque
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such rule")
 		return
 	}
+	h.audit(r, AuditRuleDeleted, "automation_rule", chi.URLParam(r, "id"), "", nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -858,6 +871,9 @@ func (h *httpHandlers) createWebhook(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
 		return
 	}
+	// URL and event filter, never the signing secret.
+	h.audit(r, AuditWebhookCreated, "webhook", wh.ID.String(), wh.URL,
+		map[string]any{"events": wh.Events, "project": wh.ProjectKey, "has_secret": wh.HasSecret})
 	writeJSON(w, http.StatusCreated, wh)
 }
 
@@ -912,6 +928,7 @@ func (h *httpHandlers) deleteWebhook(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such webhook")
 		return
 	}
+	h.audit(r, AuditWebhookDeleted, "webhook", chi.URLParam(r, "id"), "", nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1100,6 +1117,8 @@ func (h *httpHandlers) putProjectMember(w http.ResponseWriter, r *http.Request) 
 		httpapi.WriteProblem(w, http.StatusConflict, "add member failed", err.Error())
 		return
 	}
+	h.audit(r, AuditMemberSet, "project_member", uid.String(), m.User.Email,
+		map[string]any{"project": key, "role": body.Role})
 	writeJSON(w, http.StatusOK, m)
 }
 
@@ -1124,6 +1143,8 @@ func (h *httpHandlers) deleteProjectMember(w http.ResponseWriter, r *http.Reques
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "not a member")
 		return
 	}
+	h.audit(r, AuditMemberRemoved, "project_member", chi.URLParam(r, "id"), "",
+		map[string]any{"project": chi.URLParam(r, "key")})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1160,6 +1181,7 @@ func (h *httpHandlers) updateProject(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
 		return
 	}
+	h.audit(r, AuditProjectUpdated, "project", project.Key, project.Name, nil)
 	writeJSON(w, http.StatusOK, project)
 }
 
@@ -1200,6 +1222,9 @@ func (h *httpHandlers) renameProjectKey(w http.ResponseWriter, r *http.Request) 
 			"a project with key "+newKey+" may already exist: "+err.Error())
 		return
 	}
+	// Every issue key in the project changed with it — worth recording both sides.
+	h.audit(r, AuditProjectKeyRenamed, "project", newKey, newKey,
+		map[string]any{"from": key, "to": newKey})
 	writeJSON(w, http.StatusOK, project)
 }
 
@@ -1219,6 +1244,7 @@ func (h *httpHandlers) archiveProject(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "archive failed", err.Error())
 		return
 	}
+	h.audit(r, AuditProjectArchived, "project", key, key, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

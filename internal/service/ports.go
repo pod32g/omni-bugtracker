@@ -142,6 +142,11 @@ type Repository interface {
 	ResetWebhookDelivery(ctx context.Context, id uuid.UUID) error
 
 	// Saved searches (personal named filters)
+	// The audit log is append-only: there is no update or delete in this interface,
+	// deliberately.
+	RecordAudit(ctx context.Context, in AuditEntry) error
+	ListAudit(ctx context.Context, f AuditFilter) ([]domain.AuditEntry, int, error)
+
 	ListSavedSearches(ctx context.Context, userID uuid.UUID) ([]domain.SavedSearch, error)
 	// Shared views are project-scoped saved searches: the same rows, owned by a
 	// project rather than a person.

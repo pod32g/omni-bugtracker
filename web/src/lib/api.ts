@@ -311,6 +311,21 @@ export const EMOJI: Record<string, string> = {
   eyes: "👀",
 };
 
+/** One privileged action, from the append-only audit log. */
+export interface AuditEntry {
+  id: string;
+  actor_name?: string;
+  actor_email: string;
+  action: string;
+  target_type: string;
+  target_id?: string;
+  target_label?: string;
+  details?: Record<string, unknown>;
+  ip?: string;
+  via_token: boolean;
+  created_at: string;
+}
+
 export interface Attachment {
   id: string;
   issue_id?: string;
@@ -624,6 +639,13 @@ export const api = {
    * ranks — the ordering scheme stays server-side, so a stale tab cannot write a rank
    * that contradicts the column.
    */
+  audit: (params: { action?: string; actor?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.action) q.set("action", params.action);
+    if (params.actor) q.set("actor", params.actor);
+    q.set("limit", String(params.limit ?? 50));
+    return request<{ items: AuditEntry[]; total: number; actions: string[] }>(`/audit?${q}`);
+  },
   listReactions: (issueKey: string) =>
     request<{ items: Reaction[]; emoji: string[] }>(`/issues/${issueKey}/reactions`),
   toggleReaction: (issueKey: string, emoji: string, commentId?: string) =>

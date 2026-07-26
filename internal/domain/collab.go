@@ -148,6 +148,21 @@ type Reaction struct {
 	Mine bool `json:"mine"`
 }
 
+// AuditEntry is one privileged action, as read back from the log.
+type AuditEntry struct {
+	ID          uuid.UUID       `json:"id"`
+	ActorName   string          `json:"actor_name,omitempty"`
+	ActorEmail  string          `json:"actor_email"`
+	Action      string          `json:"action"`
+	TargetType  string          `json:"target_type"`
+	TargetID    string          `json:"target_id,omitempty"`
+	TargetLabel string          `json:"target_label,omitempty"`
+	Details     json.RawMessage `json:"details,omitempty"`
+	IP          string          `json:"ip,omitempty"`
+	ViaToken    bool            `json:"via_token"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
 // SavedSearch is a named filter-grammar string. Personal by default; a shared one
 // belongs to a project and is visible to every member of it.
 type SavedSearch struct {
