@@ -81,6 +81,10 @@ type Repository interface {
 	// SetIssueArchived archives (archived=true) or restores an issue, records an
 	// activity entry, and runs publish in the same tx.
 	SetIssueArchived(ctx context.Context, id, actor uuid.UUID, archived bool, publish PublishFn) (domain.Issue, error)
+	// SetIssueSnooze hides an issue until a time, or wakes it when until is nil.
+	SetIssueSnooze(ctx context.Context, id, actor uuid.UUID, until *time.Time, note string, publish PublishFn) (domain.Issue, error)
+	// WakeSnoozedIssues clears every snooze that has come due, returning the ids.
+	WakeSnoozedIssues(ctx context.Context) ([]uuid.UUID, error)
 	// ArchiveStaleClosed archives every non-archived issue closed more than `days`
 	// ago (attributed to actor). Returns how many were archived. Used by auto-archive.
 	ArchiveStaleClosed(ctx context.Context, days int, actor uuid.UUID) (int, error)
@@ -432,6 +436,7 @@ type IssueFilter struct {
 	// ShowArchived flips the list to archived-only. Default (false) excludes archived
 	// issues; set via the `is:archived` filter term.
 	ShowArchived bool
+	ShowSnoozed  bool
 	Sort         string
 	Limit        int32
 	Offset       int32

@@ -18,6 +18,7 @@ const QUICK_FILTERS = [
   { label: "Critical", filter: "severity:critical" },
   { label: "All", filter: "" },
   { label: "Archived", filter: "is:archived" },
+  { label: "Snoozed", filter: "is:snoozed" },
 ];
 
 const SORTS = [

@@ -72,6 +72,13 @@ type AutoArchiveArgs struct{}
 func (AutoArchiveArgs) Kind() string                 { return "auto_archive" }
 func (AutoArchiveArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "default"} }
 
+// WakeSnoozedArgs is the periodic job that clears snoozes that have come due. No
+// payload — it looks for whatever is now overdue.
+type WakeSnoozedArgs struct{}
+
+func (WakeSnoozedArgs) Kind() string                 { return "wake_snoozed" }
+func (WakeSnoozedArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "default"} }
+
 // ObsIngestArgs → create/dedupe an issue from a logging/metrics alert.
 type ObsIngestArgs struct {
 	Source      string          `json:"source"` // logging|metrics

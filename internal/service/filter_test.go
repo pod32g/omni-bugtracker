@@ -182,3 +182,21 @@ func TestParseFilterFreeTextPassesThrough(t *testing.T) {
 		t.Errorf("query = %q", f.Query)
 	}
 }
+
+// `is:snoozed` is orthogonal to status, exactly as `is:archived` is: a snoozed issue is
+// still open, it is just not now.
+func TestParseFilterSnoozedIsOrthogonalToStatus(t *testing.T) {
+	f, bad := ParseFilter("BUG", "is:snoozed", "")
+	if len(bad) != 0 {
+		t.Fatalf("unexpected errors: %v", bad)
+	}
+	if !f.ShowSnoozed {
+		t.Error("is:snoozed should set ShowSnoozed")
+	}
+	if len(f.Statuses) != 0 {
+		t.Errorf("is:snoozed should not constrain status, got %v", f.Statuses)
+	}
+	if f.ShowArchived {
+		t.Error("is:snoozed is not is:archived")
+	}
+}

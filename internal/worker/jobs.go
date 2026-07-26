@@ -495,6 +495,38 @@ type autoArchiveWorker struct {
 	d Deps
 }
 
+// wakeSnoozedWorker clears snoozes that have come due and tells the people who care.
+//
+// Runs every 15 minutes rather than daily: "snooze until tomorrow morning" is a promise
+// about a time, and a day-granularity sweep would break it by up to 24 hours.
+type wakeSnoozedWorker struct {
+	river.WorkerDefaults[events.WakeSnoozedArgs]
+	d Deps
+}
+
+func (w *wakeSnoozedWorker) Work(ctx context.Context, _ *river.Job[events.WakeSnoozedArgs]) error {
+	ids, err := w.d.Store.WakeSnoozedIssues(ctx)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	w.d.Logger.Info("woke snoozed issues", "count", len(ids))
+
+	client := river.ClientFromContext[pgx.Tx](ctx)
+	for _, id := range ids {
+		// A woken issue is back in everyone's queue, which is the whole point of the
+		// snooze — so say so, through the same fan-out every other event uses.
+		if _, err := client.Insert(ctx, events.DomainEventArgs{
+			EventType: events.IssueWoke, IssueID: id.String(),
+		}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (w *autoArchiveWorker) Work(ctx context.Context, _ *river.Job[events.AutoArchiveArgs]) error {
 	// Read live: the Settings value (DB) overrides the bootstrap config default, so an
 	// admin can toggle auto-archive without restarting the worker.

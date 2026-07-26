@@ -448,6 +448,15 @@ func issueWhere(f service.IssueFilter) (string, []any) {
 	} else {
 		where = append(where, "i.archived_at IS NULL")
 	}
+	// Snoozed issues are hidden the same way, and `is:snoozed` shows only them. A
+	// snooze whose time has passed reads as awake even before the job clears it, so a
+	// late worker run cannot keep an issue buried.
+	switch {
+	case f.ShowSnoozed:
+		where = append(where, "i.snoozed_until IS NOT NULL AND i.snoozed_until > now()")
+	case !f.ShowArchived:
+		where = append(where, "(i.snoozed_until IS NULL OR i.snoozed_until <= now())")
+	}
 	args := []any{f.ProjectKey}
 	add := func(cond string, val any) {
 		args = append(args, val)
@@ -1273,7 +1282,7 @@ const selectIssue = `
 	SELECT i.id, p.key, i.number, i.type, i.title, i.description_md, i.status, i.severity, i.priority,
 	       i.version_affected, i.version_fixed, i.git_commit_sha, i.pull_request_url,
 	       i.repro_steps_md, i.expected_md, i.actual_md, i.environment_md, i.source,
-	       i.created_at, i.updated_at, i.archived_at,
+	       i.created_at, i.updated_at, i.archived_at, i.snoozed_until, i.snooze_note,
 	       ru.id, ru.display_name, ru.email,
 	       au.id, au.display_name, au.email,
 	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
@@ -1308,7 +1317,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 		&i.ID, &i.ProjectKey, &i.Number, &i.Type, &i.Title, &i.DescriptionMD, &i.Status, &sev, &i.Priority,
 		&i.VersionAffected, &i.VersionFixed, &i.GitCommitSHA, &i.PullRequestURL,
 		&i.ReproStepsMD, &i.ExpectedMD, &i.ActualMD, &i.EnvironmentMD, &i.Source,
-		&i.CreatedAt, &i.UpdatedAt, &i.ArchivedAt,
+		&i.CreatedAt, &i.UpdatedAt, &i.ArchivedAt, &i.SnoozedUntil, &i.SnoozeNote,
 		&reporterID, &reporterName, &reporterEmail,
 		&assigneeID, &assigneeName, &assigneeEmail,
 		&i.Labels, &i.Components,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -111,6 +112,23 @@ func (s *Issues) SetArchived(ctx context.Context, id, actor uuid.UUID, archived 
 		eventType = events.IssueArchived
 	}
 	return s.repo.SetIssueArchived(ctx, id, actor, archived, func(tx pgx.Tx) error {
+		return s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
+			EventType: eventType,
+			IssueID:   id.String(),
+			ActorID:   actor.String(),
+		})
+	})
+}
+
+// SetSnooze hides an issue until `until`, or wakes it when until is nil.
+func (s *Issues) SetSnooze(
+	ctx context.Context, id, actor uuid.UUID, until *time.Time, note string,
+) (domain.Issue, error) {
+	eventType := events.IssueWoke
+	if until != nil {
+		eventType = events.IssueSnoozed
+	}
+	return s.repo.SetIssueSnooze(ctx, id, actor, until, note, func(tx pgx.Tx) error {
 		return s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
 			EventType: eventType,
 			IssueID:   id.String(),

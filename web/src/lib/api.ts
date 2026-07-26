@@ -143,6 +143,9 @@ export interface Issue {
   created_at: string;
   updated_at: string;
   archived_at?: string | null;
+  /** Hidden from default lists until this time; still open, just not now. */
+  snoozed_until?: string | null;
+  snooze_note?: string;
 }
 
 export interface Comment {
@@ -607,5 +610,11 @@ export const api = {
    * request, so inline images do not render in that mode.
    */
   attachmentSrc: (id: string) => `${BASE}/attachments/${id}`,
+  snoozeIssue: (issueKey: string, until: string, note: string) =>
+    request<Issue>(`/issues/${issueKey}/snooze`, {
+      method: "POST",
+      body: JSON.stringify({ until, note }),
+    }),
+  wakeIssue: (issueKey: string) => request<Issue>(`/issues/${issueKey}/snooze`, { method: "DELETE" }),
   deleteAttachment: (id: string) => request<void>(`/attachments/${id}`, { method: "DELETE" }),
 };

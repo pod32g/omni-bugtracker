@@ -25,6 +25,8 @@ const (
 	IssueReopened      = "issue.reopened"
 	IssueArchived      = "issue.archived"
 	IssueUnarchived    = "issue.unarchived"
+	IssueSnoozed       = "issue.snoozed"
+	IssueWoke          = "issue.woke"
 	IssueCommented     = "comment.created"
 	IssueLinked        = "issue.linked"
 	UserMentioned      = "user.mentioned"

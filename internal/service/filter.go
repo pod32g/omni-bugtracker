@@ -39,6 +39,8 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 			switch {
 			case strings.EqualFold(val, "archived"):
 				f.ShowArchived = true
+			case strings.EqualFold(val, "snoozed"):
+				f.ShowSnoozed = true
 			case strings.EqualFold(val, "open"):
 				f.Statuses = append(f.Statuses, domain.OpenStatuses...)
 			case strings.EqualFold(val, "closed"):
@@ -47,7 +49,7 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 				s := domain.IssueStatus(strings.ToLower(val))
 				if !domain.ValidStatus(s) {
 					fields[key] = "unknown value " + quoted(val) +
-						" — expected open, closed, archived, or a status name (" + joinStatuses() + ")"
+						" — expected open, closed, archived, snoozed, or a status name (" + joinStatuses() + ")"
 					continue
 				}
 				f.Statuses = append(f.Statuses, s)

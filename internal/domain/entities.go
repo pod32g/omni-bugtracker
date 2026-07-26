@@ -118,6 +118,11 @@ type Issue struct {
 	// ArchivedAt is set when the issue is archived — hidden from default lists and
 	// search but recoverable. nil = active. Distinct from status and soft-delete.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	// SnoozedUntil hides the issue from default lists until the given time, when a
+	// periodic job wakes it. Still open, just not now — distinct from ArchivedAt,
+	// which is indefinite, and from status, which it does not change.
+	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
+	SnoozeNote   string     `json:"snooze_note,omitempty"`
 }
 
 // Key builds the human-readable issue key from a project key and number.

@@ -7,6 +7,7 @@ import {
   api,
   UNASSIGNED,
   type Comment,
+  type Issue,
   type IssueStatus,
   type Milestone,
   type NewIssue,
@@ -128,6 +129,15 @@ export function IssueDetail() {
       qc.invalidateQueries({ queryKey: ["activity", issueKey] });
     },
   });
+  const snooze = useMutation({
+    mutationFn: (until: string | null) =>
+      until ? api.snoozeIssue(issueKey, until, "") : api.wakeIssue(issueKey),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["issue", issueKey] });
+      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: ["activity", issueKey] });
+    },
+  });
   const addComment = useMutation({
     mutationFn: () => api.addComment(issueKey, comment),
     onSuccess: () => {
@@ -147,7 +157,7 @@ export function IssueDetail() {
   const activityItems = activity.data?.pages.flatMap((p) => p.items) ?? [];
   // Every rail control writes through these mutations; without a visible error a
   // rejected write just snaps the control back to its old value with no explanation.
-  const railError = (transition.error ?? patch.error ?? move.error ?? archive.error) as Error | null;
+  const railError = (transition.error ?? patch.error ?? move.error ?? archive.error ?? snooze.error) as Error | null;
 
   return (
     <div>
@@ -402,7 +412,8 @@ export function IssueDetail() {
             </MetaRow>
           )}
 
-          <LinkedIssues issueKey={issueKey} />
+          <SnoozeControl issue={i} onSnooze={(until) => snooze.mutate(until)} pending={snooze.isPending} />
+      <LinkedIssues issueKey={issueKey} />
       <ReferencedBy issueKey={issueKey} />
 
           <div className="flex flex-col gap-3 border-t border-hairline pt-5">
@@ -783,6 +794,107 @@ function MentionTextarea({
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  );
+}
+
+// Relative offsets for the common cases. An exact date is the input below them.
+const SNOOZE_PRESETS: { label: string; hours: number }[] = [
+  { label: "Tomorrow", hours: 24 },
+  { label: "Next week", hours: 24 * 7 },
+  { label: "In a month", hours: 24 * 30 },
+];
+
+/**
+ * SnoozeControl hides an issue until a date. Shown in the rail rather than buried in the
+ * ⋯ menu next to Archive: those two look alike and mean very different things — archive
+ * is indefinite and manual to reverse, a snooze comes back on its own.
+ */
+function SnoozeControl({
+  issue,
+  onSnooze,
+  pending,
+}: {
+  issue: Issue;
+  onSnooze: (until: string | null) => void;
+  pending: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState("");
+  const snoozed = issue.snoozed_until ? new Date(issue.snoozed_until) : null;
+  const active = snoozed !== null && snoozed.getTime() > Date.now();
+
+  if (active) {
+    return (
+      <div className="flex flex-col gap-2 border-t border-hairline pt-5">
+        <MicroLabel>Snoozed</MicroLabel>
+        <p className="text-sm text-ink">
+          Hidden until {snoozed.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+        </p>
+        {issue.snooze_note && <p className="text-xs text-graphite-soft">{issue.snooze_note}</p>}
+        <button
+          onClick={() => onSnooze(null)}
+          disabled={pending}
+          className="self-start text-xs font-semibold text-blueprint transition hover:opacity-80 disabled:opacity-50"
+        >
+          {pending ? "Waking…" : "Wake now"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-hairline pt-5">
+      <div className="flex items-center justify-between">
+        <MicroLabel>Snooze</MicroLabel>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="text-xs font-semibold text-blueprint transition hover:opacity-80"
+        >
+          {open ? "Cancel" : "Snooze…"}
+        </button>
+      </div>
+      {open && (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap gap-1.5">
+            {SNOOZE_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                disabled={pending}
+                onClick={() => {
+                  onSnooze(new Date(Date.now() + preset.hours * 3600_000).toISOString());
+                  setOpen(false);
+                }}
+                className="rounded-full border border-hairline px-2.5 py-1 text-xs text-graphite transition hover:border-graphite hover:text-ink disabled:opacity-50"
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="grow rounded-md border border-hairline bg-paper px-2 py-1 text-xs text-ink outline-none focus:border-blueprint"
+            />
+            <button
+              disabled={!date || pending}
+              onClick={() => {
+                // Local 09:00 on the chosen day: "until the 14th" means the start of
+                // that working day, not midnight the night before.
+                const at = new Date(`${date}T09:00`);
+                onSnooze(at.toISOString());
+                setOpen(false);
+                setDate("");
+              }}
+              className="shrink-0 rounded-md border border-hairline px-2 py-1 text-xs font-medium text-graphite transition hover:border-graphite hover:text-ink disabled:opacity-50"
+            >
+              Set
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

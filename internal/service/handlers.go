@@ -111,6 +111,8 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/issues/{issueKey}/move", h.moveIssue)
 	r.Post("/issues/{issueKey}/archive", h.archiveIssue)
 	r.Post("/issues/{issueKey}/unarchive", h.unarchiveIssue)
+	r.Post("/issues/{issueKey}/snooze", h.snoozeIssue)
+	r.Delete("/issues/{issueKey}/snooze", h.wakeIssue)
 	r.Get("/issues/{issueKey}/comments", h.listComments)
 	r.Post("/issues/{issueKey}/comments", h.addComment)
 	r.Patch("/comments/{id}", h.updateComment)
@@ -1874,6 +1876,54 @@ func (h *httpHandlers) archiveIssue(w http.ResponseWriter, r *http.Request) {
 }
 func (h *httpHandlers) unarchiveIssue(w http.ResponseWriter, r *http.Request) {
 	h.setArchived(w, r, false)
+}
+
+// snoozeIssue hides an issue until a date. Body: {"until": RFC3339, "note": "..."}.
+func (h *httpHandlers) snoozeIssue(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Until string `json:"until"`
+		Note  string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	until, err := time.Parse(time.RFC3339, body.Until)
+	if err != nil {
+		httpapi.WriteValidation(w, map[string]string{"until": "expected an RFC 3339 timestamp"})
+		return
+	}
+	// A snooze into the past is almost certainly a timezone mistake, and it would
+	// silently do nothing — the waking job would clear it on the next run.
+	if !until.After(time.Now()) {
+		httpapi.WriteValidation(w, map[string]string{"until": "must be in the future"})
+		return
+	}
+	h.setSnooze(w, r, &until, body.Note)
+}
+
+// wakeIssue clears a snooze early.
+func (h *httpHandlers) wakeIssue(w http.ResponseWriter, r *http.Request) {
+	h.setSnooze(w, r, nil, "")
+}
+
+func (h *httpHandlers) setSnooze(w http.ResponseWriter, r *http.Request, until *time.Time, note string) {
+	p := auth.FromContext(r.Context())
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueUpdate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing issue:update")
+		return
+	}
+	actor, _ := uuid.Parse(p.UserID)
+	updated, err := h.issues.SetSnooze(r.Context(), issue.ID, actor, until, note)
+	if err != nil {
+		writeNotFoundOrError(w, err, "issue", "snooze failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (h *httpHandlers) setArchived(w http.ResponseWriter, r *http.Request, archived bool) {

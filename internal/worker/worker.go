@@ -38,6 +38,7 @@ func New(d Deps) (*river.Client[pgx.Tx], error) {
 	river.AddWorker(workers, &gitIngestWorker{d: d})
 	river.AddWorker(workers, &obsIngestWorker{d: d})
 	river.AddWorker(workers, &autoArchiveWorker{d: d})
+	river.AddWorker(workers, &wakeSnoozedWorker{d: d})
 
 	q := d.Cfg.Worker.Queues
 	queues := map[string]river.QueueConfig{
@@ -53,6 +54,13 @@ func New(d Deps) (*river.Client[pgx.Tx], error) {
 		river.NewPeriodicJob(
 			river.PeriodicInterval(24*time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) { return events.AutoArchiveArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: true},
+		),
+		// Snooze granularity. "Until tomorrow morning" is a promise about a time, and a
+		// daily sweep could break it by most of a day.
+		river.NewPeriodicJob(
+			river.PeriodicInterval(15*time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) { return events.WakeSnoozedArgs{}, nil },
 			&river.PeriodicJobOpts{RunOnStart: true},
 		),
 	}
