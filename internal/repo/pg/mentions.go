@@ -3,6 +3,7 @@ package pg
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -46,13 +47,23 @@ func syncMentions(
 		var inserted bool
 		// notified_at is pre-stamped for a self-mention: the row exists for the
 		// inbox, but the dispatcher will never pick it up.
+		//
+		// Decided in Go rather than as `CASE WHEN $3 = $4` in SQL: comparing two bare
+		// parameters gives Postgres nothing to infer from, and it resolved one side as
+		// text against a uuid — the same 42883/42P08 class of failure the enum params
+		// elsewhere in this file are cast for.
+		var notifiedAt *time.Time
+		if m.userID == actor {
+			now := time.Now()
+			notifiedAt = &now
+		}
 		err := tx.QueryRow(ctx,
 			`INSERT INTO issue_mentions (issue_id, source_comment_id, user_id, mentioned_by, notified_at)
-			 SELECT $1, $2, $3, $4, CASE WHEN $3 = $4 THEN now() END
+			 SELECT $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::timestamptz
 			  WHERE NOT EXISTS (
 			        SELECT 1 FROM issue_mentions
 			         WHERE issue_id = $1 AND source_comment_id IS NOT DISTINCT FROM $2 AND user_id = $3)
-			 RETURNING TRUE`, issueID, sourceCommentID, m.userID, actor).Scan(&inserted)
+			 RETURNING TRUE`, issueID, sourceCommentID, m.userID, actor, notifiedAt).Scan(&inserted)
 		if err == pgx.ErrNoRows {
 			continue // already mentioned here; nothing new to announce
 		}
