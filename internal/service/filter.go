@@ -31,10 +31,11 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 		}
 		val = unquote(val)
 		switch strings.ToLower(key) {
-		case "is", "status":
-			// `is:archived` is orthogonal to status — it shows the archived set.
-			// `is:open` / `is:closed` are lifecycle *sets*, not single statuses:
-			// "open" means "not finished", which is what the dashboard counts too.
+		case "is":
+			// `is:` is the lifecycle predicate. `is:open` / `is:closed` are *sets* —
+			// "open" means "not finished", the same definition the dashboard counts —
+			// and `is:archived` is orthogonal to status entirely. To match one exact
+			// status, use `status:` instead.
 			switch {
 			case strings.EqualFold(val, "archived"):
 				f.ShowArchived = true
@@ -45,11 +46,22 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 			default:
 				s := domain.IssueStatus(strings.ToLower(val))
 				if !domain.ValidStatus(s) {
-					fields[key] = "unknown status " + quoted(val) + " — expected open, closed, archived, " + joinStatuses()
+					fields[key] = "unknown value " + quoted(val) +
+						" — expected open, closed, archived, or a status name (" + joinStatuses() + ")"
 					continue
 				}
 				f.Statuses = append(f.Statuses, s)
 			}
+		case "status":
+			// Exact status match only. `status:open` must mean the literal "open"
+			// status, not the whole unfinished set — otherwise there is no way to
+			// ask for just-filed issues.
+			s := domain.IssueStatus(strings.ToLower(val))
+			if !domain.ValidStatus(s) {
+				fields[key] = "unknown status " + quoted(val) + " — expected " + joinStatuses()
+				continue
+			}
+			f.Statuses = append(f.Statuses, s)
 		case "assignee":
 			// Fail closed: an unresolvable assignee must not widen the result set
 			// to every issue in the project.

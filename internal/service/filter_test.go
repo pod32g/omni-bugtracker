@@ -59,6 +59,37 @@ func TestParseFilterExactStatusStillNarrows(t *testing.T) {
 	}
 }
 
+// `status:` is an exact match while `is:` is the lifecycle predicate. Collapsing
+// the two left no way to ask for issues that are literally in the "open" status.
+func TestParseFilterStatusOpenIsExactNotTheOpenSet(t *testing.T) {
+	f, bad := ParseFilter("BUG", "status:open", "")
+	if len(bad) != 0 {
+		t.Fatalf("unexpected errors: %v", bad)
+	}
+	if len(f.Statuses) != 1 || f.Statuses[0] != domain.StatusOpen {
+		t.Fatalf("status:open must match only the open status, got %v", f.Statuses)
+	}
+
+	if g, _ := ParseFilter("BUG", "is:open", ""); len(g.Statuses) != len(domain.OpenStatuses) {
+		t.Fatalf("is:open must stay the lifecycle set, got %v", g.Statuses)
+	}
+}
+
+func TestParseFilterStatusClosedIsExactNotTheClosedSet(t *testing.T) {
+	f, _ := ParseFilter("BUG", "status:closed", "")
+	if len(f.Statuses) != 1 || f.Statuses[0] != domain.StatusClosed {
+		t.Fatalf("status:closed must match only the closed status, got %v", f.Statuses)
+	}
+}
+
+// `archived` is only meaningful on `is:` — it is not a status value.
+func TestParseFilterStatusArchivedIsRejected(t *testing.T) {
+	_, bad := ParseFilter("BUG", "status:archived", "")
+	if _, ok := bad["status"]; !ok {
+		t.Fatalf("status:archived should be a validation error, got %v", bad)
+	}
+}
+
 func TestParseFilterDedupesOverlappingStatusTerms(t *testing.T) {
 	f, _ := ParseFilter("BUG", "is:open status:blocked", "")
 	seen := map[domain.IssueStatus]int{}

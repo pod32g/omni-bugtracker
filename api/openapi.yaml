@@ -187,7 +187,12 @@ paths:
       parameters:
         - name: filter
           in: query
-          description: "GitHub-style filter, e.g. `is:open assignee:@me severity:critical component:auth`"
+          description: >
+            GitHub-style filter, e.g. `is:open assignee:@me severity:critical component:auth`.
+            `is:open` / `is:closed` are lifecycle sets (open = every unfinished status);
+            `status:<name>` matches one exact status; `is:archived` shows the archived set.
+            Quote values containing spaces: `label:"needs triage"`. An unknown value is
+            rejected with 422 naming the offending term.
           schema: { type: string }
         - name: sort
           in: query
