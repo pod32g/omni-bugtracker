@@ -103,6 +103,18 @@ type WebhookDelivery struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
+// IssueReference is an incidental mention of one issue in another's prose, derived
+// from the text rather than created deliberately. Distinct from IssueRelation, which
+// is a typed link somebody chose to make.
+type IssueReference struct {
+	IssueID   uuid.UUID   `json:"issue_id"`
+	IssueKey  string      `json:"issue_key"`
+	Title     string      `json:"title"`
+	Status    IssueStatus `json:"status"`
+	InComment bool        `json:"in_comment"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
 // SavedSearch is a personal, named filter-grammar string.
 type SavedSearch struct {
 	ID        uuid.UUID `json:"id"`

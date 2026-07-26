@@ -115,6 +115,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/issues/{issueKey}/relations", h.listRelations)
 	r.Post("/issues/{issueKey}/relations", h.addRelation)
 	r.Delete("/relations/{id}", h.deleteRelation)
+	r.Get("/issues/{issueKey}/references", h.listReferences)
 	r.Get("/issues/{issueKey}/watchers", h.listWatchers)
 	r.Put("/issues/{issueKey}/watchers/me", h.watchIssue)
 	r.Delete("/issues/{issueKey}/watchers/me", h.unwatchIssue)
@@ -2061,6 +2062,23 @@ func (h *httpHandlers) listRelations(w http.ResponseWriter, r *http.Request) {
 	}
 	if items == nil {
 		items = []domain.IssueRelation{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// listReferences returns the issues that mention this one in their prose.
+func (h *httpHandlers) listReferences(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.resolveIssue(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.repo.ListReferencedBy(r.Context(), issue.ID)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.IssueReference{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

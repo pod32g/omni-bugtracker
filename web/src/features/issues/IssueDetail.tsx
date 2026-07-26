@@ -17,6 +17,7 @@ import {
   type User,
 } from "../../lib/api";
 import { describeActivity, timeAgo } from "../../lib/activity";
+import { remarkIssueKeys } from "../../lib/issueRefs";
 import { Avatar, LabelChip, PriorityText, SeverityMark, SeverityPill, StatusPill, statusLabel, statusTone } from "../../components/Badges";
 import { IconBranch, IconChevronDown, IconCommit, IconEye, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
 import { EditIssueForm } from "./EditIssueForm";
@@ -403,6 +404,7 @@ export function IssueDetail() {
           )}
 
           <LinkedIssues issueKey={issueKey} />
+      <ReferencedBy issueKey={issueKey} />
 
           <div className="flex flex-col gap-3 border-t border-hairline pt-5">
             <MicroLabel>Development</MicroLabel>
@@ -579,6 +581,34 @@ function LinkedIssues({ issueKey }: { issueKey: string }) {
   );
 }
 
+// ReferencedBy lists issues whose prose mentions this one. Read-only by design: a
+// reference is derived from the text, so the way to remove one is to edit the sentence
+// that made it, not to click an ✕ here and have it reappear on the next save.
+function ReferencedBy({ issueKey }: { issueKey: string }) {
+  const refs = useQuery({ queryKey: ["references", issueKey], queryFn: () => api.listReferences(issueKey) });
+  const items = refs.data?.items ?? [];
+  if (items.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-2.5 border-t border-hairline pt-5">
+      <MicroLabel>Referenced by</MicroLabel>
+      {items.map((ref) => (
+        <div key={ref.issue_id} className="flex items-center gap-2 text-sm">
+          <Link to={`/issues/${ref.issue_key}`} className="shrink-0 font-mono text-xs font-medium text-blueprint hover:underline">
+            {ref.issue_key}
+          </Link>
+          <span className="truncate text-xs text-graphite-soft" title={ref.title}>
+            {ref.title}
+          </span>
+          <span className="grow" />
+          {ref.in_comment && <span className="shrink-0 text-[10px] uppercase tracking-caps text-graphite-soft">comment</span>}
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusTone[ref.status].dot}`} title={statusLabel[ref.status]} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function CommentCard({
   comment: c,
   isAuthor,
@@ -662,9 +692,7 @@ function CommentCard({
             </div>
           </div>
         ) : (
-          <div className="markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{c.body_md}</ReactMarkdown>
-          </div>
+          <Markdown body={c.body_md} />
         )}
       </div>
     </div>
@@ -774,10 +802,33 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Markdown({ body }: { body?: string }) {
+// MARKDOWN_PLUGINS and MarkdownLink are shared by every body on the page: descriptions,
+// bug narrative callouts and comments. Centralised so a new call site cannot quietly opt
+// out of issue-key linkification.
+const MARKDOWN_PLUGINS = [remarkGfm, remarkIssueKeys];
+
+/** Keeps in-app links inside the SPA; anything external opens safely in a new tab. */
+function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
+  if (href?.startsWith("/")) {
+    return (
+      <Link to={href} className="text-blueprint hover:underline">
+        {children}
+      </Link>
+    );
+  }
   return (
-    <div className="markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{body || "_No content_"}</ReactMarkdown>
+    <a href={href} target="_blank" rel="noreferrer noopener">
+      {children}
+    </a>
+  );
+}
+
+function Markdown({ body, className = "markdown" }: { body?: string; className?: string }) {
+  return (
+    <div className={className}>
+      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={{ a: MarkdownLink }}>
+        {body || "_No content_"}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -788,9 +839,7 @@ function Callout({ tone, label, body }: { tone: "resolved" | "critical"; label: 
   return (
     <div className={`flex grow basis-0 flex-col gap-2 rounded-md border-l-[3px] bg-panel/50 px-4 py-3.5 ${border}`}>
       <span className={`font-mono text-[10px] font-medium uppercase tracking-caps ${text}`}>{label}</span>
-      <div className="markdown text-[14px] leading-[1.55]">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
-      </div>
+      <Markdown body={body} className="markdown text-[14px] leading-[1.55]" />
     </div>
   );
 }

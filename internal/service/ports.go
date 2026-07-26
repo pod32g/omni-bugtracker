@@ -138,6 +138,9 @@ type Repository interface {
 
 	// Issue relations (blocks / duplicates / relates / caused_by)
 	ListRelations(ctx context.Context, issueID uuid.UUID) ([]domain.IssueRelation, error)
+	// ListReferencedBy returns the issues whose prose mentions this one. Derived from
+	// the text on every write, unlike relations, which are created deliberately.
+	ListReferencedBy(ctx context.Context, issueID uuid.UUID) ([]domain.IssueReference, error)
 	CreateRelation(ctx context.Context, fromIssue, toIssue uuid.UUID, kind string, actor uuid.UUID) (domain.IssueRelation, error)
 	GetRelationProjectKeys(ctx context.Context, id uuid.UUID) (fromKey, toKey string, err error)
 	DeleteRelation(ctx context.Context, id, actor uuid.UUID) (bool, error)

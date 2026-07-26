@@ -249,6 +249,16 @@ export interface IssueRelation {
   status: IssueStatus;
 }
 
+/** An incidental mention of this issue in another issue's prose. Derived, not curated. */
+export interface IssueReference {
+  issue_id: string;
+  issue_key: string;
+  title: string;
+  status: IssueStatus;
+  in_comment: boolean;
+  created_at: string;
+}
+
 export interface Attachment {
   id: string;
   issue_id?: string;
@@ -530,6 +540,8 @@ export const api = {
       body: JSON.stringify({ kind, issue_key: otherIssueKey }),
     }),
   deleteRelation: (id: string) => request<void>(`/relations/${id}`, { method: "DELETE" }),
+  listReferences: (issueKey: string) =>
+    request<{ items: IssueReference[] }>(`/issues/${issueKey}/references`),
   updateComment: (id: string, body_md: string) =>
     request<Comment>(`/comments/${id}`, { method: "PATCH", body: JSON.stringify({ body_md }) }),
   deleteComment: (id: string) => request<void>(`/comments/${id}`, { method: "DELETE" }),
