@@ -100,6 +100,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Delete("/projects/{key}/members/{id}", h.deleteProjectMember)
 	r.Get("/projects/{key}/issues", h.listIssues)
 	r.Post("/projects/{key}/issues", h.createIssue)
+	r.Get("/projects/{key}/issues/export", h.exportIssues)
 	r.Post("/issues/bulk", h.bulkUpdateIssues)
 	r.Get("/issues/{issueKey}", h.getIssue)
 	r.Patch("/issues/{issueKey}", h.updateIssue)

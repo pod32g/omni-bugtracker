@@ -218,10 +218,11 @@ export function IssueList() {
               </button>
               <SavedSearches filter={filter} onApply={setFilter} />
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3 md:gap-4">
               <span className="font-mono text-xs text-graphite">
                 {total} {total === 1 ? "issue" : "issues"}
               </span>
+              <ExportMenu projectKey={projectKey} filter={filter} sort={sort} disabled={total === 0} />
               <SortSelect value={sort} onChange={setSort} />
             </div>
           </div>
@@ -379,6 +380,57 @@ function IssueRow({
         {shortAgo(issue.updated_at)}
       </span>
     </Link>
+  );
+}
+
+/**
+ * ExportMenu downloads the current filter's whole result set — not the page on screen.
+ * A plain link, so the browser streams it to disk; fetching it into memory first would
+ * undo the point of a streaming endpoint.
+ */
+function ExportMenu({
+  projectKey,
+  filter,
+  sort,
+  disabled,
+}: {
+  projectKey: string;
+  filter: string;
+  sort: string;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!projectKey) return null;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        disabled={disabled}
+        title={disabled ? "Nothing to export" : "Export these issues"}
+        className="flex h-[30px] items-center gap-1.5 rounded-md border border-hairline px-3 text-sm text-graphite transition hover:border-graphite hover:text-ink disabled:opacity-40"
+      >
+        <IconArrowDown size={13} />
+        <span className="hidden sm:inline">Export</span>
+      </button>
+      {open && (
+        <>
+          <button className="fixed inset-0 z-10 cursor-default" aria-hidden onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-[34px] z-20 w-40 rounded-md border border-hairline bg-paper py-1 shadow-lg shadow-ink/5">
+            {(["csv", "json"] as const).map((format) => (
+              <a
+                key={format}
+                href={api.exportIssuesURL(projectKey, filter, sort, format)}
+                onClick={() => setOpen(false)}
+                className="block px-3 py-2 text-sm text-ink transition hover:bg-panel"
+              >
+                Download {format.toUpperCase()}
+              </a>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

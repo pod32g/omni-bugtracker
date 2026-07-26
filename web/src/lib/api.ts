@@ -540,6 +540,15 @@ export const api = {
       body: JSON.stringify({ kind, issue_key: otherIssueKey }),
     }),
   deleteRelation: (id: string) => request<void>(`/relations/${id}`, { method: "DELETE" }),
+  /**
+   * The export URL for the current filter. Returned rather than fetched: the browser
+   * should stream it straight to disk, which a fetch into memory would defeat, and the
+   * session cookie is first-party so the plain navigation is already authenticated.
+   */
+  exportIssuesURL: (projectKey: string, filter: string, sort: string, format: "csv" | "json") => {
+    const q = new URLSearchParams({ filter, sort, format });
+    return `${BASE}/projects/${encodeURIComponent(projectKey)}/issues/export?${q}`;
+  },
   listReferences: (issueKey: string) =>
     request<{ items: IssueReference[] }>(`/issues/${issueKey}/references`),
   updateComment: (id: string, body_md: string) =>

@@ -70,6 +70,9 @@ type Repository interface {
 	GetIssueByKey(ctx context.Context, projectKey string, number int32) (domain.Issue, error)
 	GetIssueByID(ctx context.Context, id uuid.UUID) (domain.Issue, error)
 	ListIssues(ctx context.Context, f IssueFilter) ([]domain.Issue, int, error)
+	// EachIssue streams every issue matching the filter, unpaged. Export needs the
+	// whole result set, which is exactly what the paged list is built to avoid.
+	EachIssue(ctx context.Context, f IssueFilter, fn func(domain.Issue) error) error
 	TransitionIssue(ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID, publish PublishFn) (domain.Issue, error)
 	UpdateIssue(ctx context.Context, id, actor uuid.UUID, in UpdateIssueInput, publish PublishFn) (domain.Issue, error)
 	MoveIssue(ctx context.Context, id, actor uuid.UUID, targetProjectKey string, publish PublishFn) (domain.Issue, error)

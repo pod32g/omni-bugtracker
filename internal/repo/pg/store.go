@@ -384,6 +384,63 @@ func (s *Store) GetIssueByID(ctx context.Context, id uuid.UUID) (domain.Issue, e
 }
 
 func (s *Store) ListIssues(ctx context.Context, f service.IssueFilter) ([]domain.Issue, int, error) {
+	clause, args := issueWhere(f)
+
+	var total int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM issues i JOIN projects p ON p.id = i.project_id WHERE `+clause, args...).
+		Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	args = append(args, clampLimit(f.Limit), clampOffset(f.Offset))
+	q := fmt.Sprintf(`%s WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
+		selectIssue, clause, orderBy(f.Sort), len(args)-1, len(args))
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var out []domain.Issue
+	for rows.Next() {
+		iss, err := scanIssue(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, iss)
+	}
+	return out, total, rows.Err()
+}
+
+// EachIssue streams every issue matching the filter, unpaged, calling fn per row.
+// Export needs the whole result set, and materialising a 500-issue project into a slice
+// just to serialise it one row at a time would be pointless — the rows come off the
+// connection in order, so they can go straight out to the response.
+func (s *Store) EachIssue(ctx context.Context, f service.IssueFilter, fn func(domain.Issue) error) error {
+	clause, args := issueWhere(f)
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`%s WHERE %s ORDER BY %s`,
+		selectIssue, clause, orderBy(f.Sort)), args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		iss, err := scanIssue(rows)
+		if err != nil {
+			return err
+		}
+		if err := fn(iss); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// issueWhere builds the shared filter predicate and its arguments. Kept in one place so
+// an export can never disagree with the list it was launched from.
+func issueWhere(f service.IssueFilter) (string, []any) {
 	where := []string{"i.deleted_at IS NULL", "p.key = $1"}
 	// Archived issues are hidden from the default list; `is:archived` shows only them.
 	if f.ShowArchived {
@@ -429,33 +486,7 @@ func (s *Store) ListIssues(ctx context.Context, f service.IssueFilter) ([]domain
 	if strings.TrimSpace(f.Query) != "" {
 		add("i.fts @@ websearch_to_tsquery('english', $%d)", f.Query)
 	}
-	clause := strings.Join(where, " AND ")
-
-	var total int
-	if err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM issues i JOIN projects p ON p.id = i.project_id WHERE `+clause, args...).
-		Scan(&total); err != nil {
-		return nil, 0, err
-	}
-
-	args = append(args, clampLimit(f.Limit), clampOffset(f.Offset))
-	q := fmt.Sprintf(`%s WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
-		selectIssue, clause, orderBy(f.Sort), len(args)-1, len(args))
-	rows, err := s.pool.Query(ctx, q, args...)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	var out []domain.Issue
-	for rows.Next() {
-		iss, err := scanIssue(rows)
-		if err != nil {
-			return nil, 0, err
-		}
-		out = append(out, iss)
-	}
-	return out, total, rows.Err()
+	return strings.Join(where, " AND "), args
 }
 
 func (s *Store) TransitionIssue(ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID, publish service.PublishFn) (domain.Issue, error) {
