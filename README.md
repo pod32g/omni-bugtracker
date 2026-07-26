@@ -4,8 +4,7 @@ A developer-first, self-hosted issue & bug tracker for the Omni ecosystem.
 Git-native, API-first, automatable — not a Jira clone.
 
 > **Status:** actively developed; runs as a self-hosted deployment. Architecture is in
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the AI/MCP integration is in
-> [`docs/MCP.md`](docs/MCP.md). Generated code (sqlc, OpenAPI types, TS client) is kept out
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Generated code (sqlc, OpenAPI types, TS client) is kept out
 > of git — run `make generate`, then `go mod tidy`.
 
 ## Stack
@@ -52,13 +51,6 @@ Interactive **Swagger UI** is served by the API at [`/docs`](http://localhost:80
 (the raw OpenAPI 3.1 spec is at `/openapi.yaml`). Click **Authorize**, paste a personal
 `obt_` token, and "Try it out" issues live calls against `/api/v1`. The spec is embedded
 in the server binary, so it's always in sync with the deployed build.
-
-## MCP server (AI clients)
-
-`cmd/mcp` exposes the tracker to AI assistants (Claude Code, Claude Desktop) over the
-Model Context Protocol as 72 typed tools — issues, comments, boards, webhooks,
-automation, and more — all subject to your API token's RBAC. Build with `make mcp` and
-point it at your API with a personal `obt_` token. See [`docs/MCP.md`](docs/MCP.md).
 
 ## Design choices
 

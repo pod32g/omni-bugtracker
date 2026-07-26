@@ -14,7 +14,6 @@ coverage.*
 .env
 .env.local
 *.local.yaml
-.mcp.json          # local MCP client config; may hold an API token (see .mcp.json.example)
 
 # Node / frontend
 /web/node_modules/
