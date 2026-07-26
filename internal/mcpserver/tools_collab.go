@@ -11,7 +11,7 @@ func (s *Server) registerCollab() {
 	mcp.AddTool(s.srv, &mcp.Tool{
 		Name:        "list_comments",
 		Title:       "List comments",
-		Description: "List comments on an issue (with author and timestamps).",
+		Description: "List comments on an issue (with author and timestamps). Returns one page plus the unpaged `total` — page with offset when total exceeds what you received.",
 	}, s.listComments)
 	mcp.AddTool(s.srv, &mcp.Tool{
 		Name:        "add_comment",
@@ -67,7 +67,7 @@ func (s *Server) registerCollab() {
 	mcp.AddTool(s.srv, &mcp.Tool{
 		Name:        "get_issue_activity",
 		Title:       "Get issue activity",
-		Description: "Return the humanized activity timeline of an issue (status changes, field edits, comments, links).",
+		Description: "Return the activity timeline of an issue (status changes, field edits, comments, links). Returns one page plus the unpaged `total` — page with offset when total exceeds what you received.",
 	}, s.getIssueActivity)
 	mcp.AddTool(s.srv, &mcp.Tool{
 		Name:        "list_issue_commits",
@@ -76,8 +76,18 @@ func (s *Server) registerCollab() {
 	}, s.listIssueCommits)
 }
 
-func (s *Server) listComments(ctx context.Context, _ *mcp.CallToolRequest, a issueKeyArgs) (*mcp.CallToolResult, any, error) {
-	return result(s.c.get(ctx, "/issues/"+seg(a.Key)+"/comments", nil))
+// pagedIssueArgs addresses one issue and pages its sub-collection.
+type pagedIssueArgs struct {
+	Key    string `json:"key" jsonschema:"issue key, e.g. BUG-421"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"max results per page (default 100, max 200)"`
+	Offset int    `json:"offset,omitempty" jsonschema:"skip this many results — page using the response's total"`
+}
+
+func (s *Server) listComments(ctx context.Context, _ *mcp.CallToolRequest, a pagedIssueArgs) (*mcp.CallToolResult, any, error) {
+	q := query()
+	setInt(q, "limit", a.Limit)
+	setInt(q, "offset", a.Offset)
+	return result(s.c.get(ctx, "/issues/"+seg(a.Key)+"/comments", q))
 }
 
 type addCommentArgs struct {
@@ -139,8 +149,11 @@ func (s *Server) unwatchIssue(ctx context.Context, _ *mcp.CallToolRequest, a iss
 	return result(s.c.delete(ctx, "/issues/"+seg(a.Key)+"/watchers/me"))
 }
 
-func (s *Server) getIssueActivity(ctx context.Context, _ *mcp.CallToolRequest, a issueKeyArgs) (*mcp.CallToolResult, any, error) {
-	return result(s.c.get(ctx, "/issues/"+seg(a.Key)+"/activity", nil))
+func (s *Server) getIssueActivity(ctx context.Context, _ *mcp.CallToolRequest, a pagedIssueArgs) (*mcp.CallToolResult, any, error) {
+	q := query()
+	setInt(q, "limit", a.Limit)
+	setInt(q, "offset", a.Offset)
+	return result(s.c.get(ctx, "/issues/"+seg(a.Key)+"/activity", q))
 }
 
 func (s *Server) listIssueCommits(ctx context.Context, _ *mcp.CallToolRequest, a issueKeyArgs) (*mcp.CallToolResult, any, error) {

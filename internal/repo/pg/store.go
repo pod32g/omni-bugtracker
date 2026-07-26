@@ -363,8 +363,14 @@ func (s *Store) ListIssues(ctx context.Context, f service.IssueFilter) ([]domain
 		args = append(args, val)
 		where = append(where, fmt.Sprintf(cond, len(args)))
 	}
-	if f.Status != nil {
-		add("i.status = $%d", string(*f.Status))
+	if len(f.Statuses) > 0 {
+		// A set, not a single value — `is:open` covers every non-terminal status.
+		// Bound as text[] and cast, so one placeholder handles any set size.
+		statuses := make([]string, 0, len(f.Statuses))
+		for _, s := range f.Statuses {
+			statuses = append(statuses, string(s))
+		}
+		add("i.status = ANY($%d::issue_status[])", statuses)
 	}
 	if f.AssigneeID != nil {
 		add("i.assignee_id = $%d", *f.AssigneeID)
@@ -434,8 +440,14 @@ func (s *Store) TransitionIssue(ctx context.Context, id uuid.UUID, to domain.Iss
 		  closed_at   = CASE WHEN $2::text = 'closed' THEN now() ELSE closed_at END,
 		  updated_at  = now()
 		WHERE id = $1 AND deleted_at IS NULL`
-	if _, err := tx.Exec(ctx, upd, id, string(to)); err != nil {
+	tag, err := tx.Exec(ctx, upd, id, string(to))
+	if err != nil {
 		return domain.Issue{}, err
+	}
+	// No row means the issue was deleted between resolution and here. Bail before
+	// writing an activity entry and publishing an event for a write that never landed.
+	if tag.RowsAffected() == 0 {
+		return domain.Issue{}, pgx.ErrNoRows
 	}
 	if err := recordActivity(ctx, tx, id, actor, "issue.status_changed", "issue", id); err != nil {
 		return domain.Issue{}, err
@@ -448,7 +460,7 @@ func (s *Store) TransitionIssue(ctx context.Context, id uuid.UUID, to domain.Iss
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Issue{}, err
 	}
-	row := s.pool.QueryRow(ctx, selectIssue+` WHERE i.id = $1`, id)
+	row := s.pool.QueryRow(ctx, selectLiveIssue, id)
 	return scanIssue(row)
 }
 
@@ -466,8 +478,12 @@ func (s *Store) SetIssueArchived(ctx context.Context, id, actor uuid.UUID, archi
 	if archived {
 		set, verb = "archived_at = now()", "issue.archived"
 	}
-	if _, err := tx.Exec(ctx, `UPDATE issues SET `+set+`, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, id); err != nil {
+	tag, err := tx.Exec(ctx, `UPDATE issues SET `+set+`, updated_at = now() WHERE id = $1 AND deleted_at IS NULL`, id)
+	if err != nil {
 		return domain.Issue{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.Issue{}, pgx.ErrNoRows
 	}
 	if err := recordActivity(ctx, tx, id, actor, verb, "issue", id); err != nil {
 		return domain.Issue{}, err
@@ -480,7 +496,7 @@ func (s *Store) SetIssueArchived(ctx context.Context, id, actor uuid.UUID, archi
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Issue{}, err
 	}
-	return scanIssue(s.pool.QueryRow(ctx, selectIssue+` WHERE i.id = $1`, id))
+	return scanIssue(s.pool.QueryRow(ctx, selectLiveIssue, id))
 }
 
 // ArchiveStaleClosed archives every non-archived, non-deleted issue whose closed_at is
@@ -579,12 +595,16 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		                       ELSE $15::uuid END,
 		  updated_at       = now()
 		WHERE id = $1 AND deleted_at IS NULL`
-	if _, err := tx.Exec(ctx, q, id,
+	tag, err := tx.Exec(ctx, q, id,
 		in.Title, in.DescriptionMD, typePtr(in.Type), sevPtr(in.Severity), prioPtr(in.Priority),
 		in.AssigneeID, in.VersionAffected, in.VersionFixed,
 		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD,
-		in.MilestoneID, in.ReleaseID); err != nil {
+		in.MilestoneID, in.ReleaseID)
+	if err != nil {
 		return domain.Issue{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.Issue{}, pgx.ErrNoRows
 	}
 	if in.Labels != nil || in.Components != nil {
 		var projectID uuid.UUID
@@ -619,7 +639,7 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Issue{}, err
 	}
-	return scanIssue(s.pool.QueryRow(ctx, selectIssue+` WHERE i.id = $1`, id))
+	return scanIssue(s.pool.QueryRow(ctx, selectLiveIssue, id))
 }
 
 // MoveIssue re-homes an issue into another project in one transaction. Because an issue's
@@ -685,7 +705,7 @@ func (s *Store) MoveIssue(ctx context.Context, id, actor uuid.UUID, targetProjec
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Issue{}, err
 	}
-	return scanIssue(s.pool.QueryRow(ctx, selectIssue+` WHERE i.id = $1`, id))
+	return scanIssue(s.pool.QueryRow(ctx, selectLiveIssue, id))
 }
 
 // SoftDeleteIssue marks the issue deleted, records the timeline entry, and emits the event.
@@ -746,14 +766,22 @@ func (s *Store) AddComment(ctx context.Context, issueID, author uuid.UUID, body 
 	return c, nil
 }
 
-func (s *Store) ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, error) {
+// ListComments returns one page of an issue's comments plus the unpaged total, so
+// clients can page instead of silently seeing a truncated conversation.
+func (s *Store) ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, int, error) {
+	var total int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM comments WHERE issue_id = $1 AND deleted_at IS NULL`, issueID).
+		Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT c.id, c.issue_id, c.author_id, u.display_name, u.email, c.body_md, c.edited_at, c.created_at
 		 FROM comments c LEFT JOIN users u ON u.id = c.author_id
 		 WHERE c.issue_id = $1 AND c.deleted_at IS NULL
-		 ORDER BY c.created_at LIMIT $2 OFFSET $3`, issueID, clampLimit(limit), offset)
+		 ORDER BY c.created_at LIMIT $2 OFFSET $3`, issueID, clampLimit(limit), clampOffset(offset))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []domain.Comment
@@ -762,14 +790,14 @@ func (s *Store) ListComments(ctx context.Context, issueID uuid.UUID, limit, offs
 		var authorID *uuid.UUID
 		var displayName, email *string
 		if err := rows.Scan(&c.ID, &c.IssueID, &authorID, &displayName, &email, &c.BodyMD, &c.EditedAt, &c.CreatedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if authorID != nil {
 			c.Author = &domain.User{ID: *authorID, DisplayName: deref(displayName), Email: deref(email)}
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 // GetComment returns a live (non-deleted) comment, with the owning project's
@@ -842,7 +870,13 @@ func (s *Store) SoftDeleteComment(ctx context.Context, id, actor uuid.UUID) (boo
 	return true, tx.Commit(ctx)
 }
 
-func (s *Store) ListActivity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, error) {
+// ListActivity returns one page of an issue's timeline plus the unpaged total.
+func (s *Store) ListActivity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, int, error) {
+	var total int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM activity WHERE issue_id = $1`, issueID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT a.id, a.issue_id, a.actor_id, u.display_name, u.email, a.verb, a.entity_type,
 		        a.changes, a.occurred_at, p.key, i.number
@@ -851,12 +885,13 @@ func (s *Store) ListActivity(ctx context.Context, issueID uuid.UUID, limit, offs
 		 LEFT JOIN issues i ON i.id = a.issue_id
 		 LEFT JOIN projects p ON p.id = i.project_id
 		 WHERE a.issue_id = $1 ORDER BY a.occurred_at DESC LIMIT $2 OFFSET $3`,
-		issueID, clampLimit(limit), offset)
+		issueID, clampLimit(limit), clampOffset(offset))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	return scanActivityRows(rows)
+	acts, err := scanActivityRows(rows)
+	return acts, total, err
 }
 
 // scanActivityRows scans the standard activity+actor+issue-key column set.
@@ -891,7 +926,9 @@ func scanActivityRows(rows pgx.Rows) ([]domain.Activity, error) {
 
 // ── dashboard, activity feed, users ──
 
-func (s *Store) RecentActivity(ctx context.Context, limit int32) ([]domain.Activity, error) {
+// RecentActivity returns the newest timeline entries. An empty projectKey spans
+// every project; otherwise the feed is scoped to that project's issues.
+func (s *Store) RecentActivity(ctx context.Context, projectKey string, limit int32) ([]domain.Activity, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT a.id, a.issue_id, a.actor_id, u.display_name, u.email, a.verb, a.entity_type, a.changes, a.occurred_at,
 		        p.key, i.number
@@ -899,7 +936,8 @@ func (s *Store) RecentActivity(ctx context.Context, limit int32) ([]domain.Activ
 		 LEFT JOIN users u ON u.id = a.actor_id
 		 LEFT JOIN issues i ON i.id = a.issue_id
 		 LEFT JOIN projects p ON p.id = i.project_id
-		 ORDER BY a.occurred_at DESC LIMIT $1`, clampLimit(limit))
+		 WHERE $1 = '' OR p.key = $1
+		 ORDER BY a.occurred_at DESC LIMIT $2`, projectKey, clampLimit(limit))
 	if err != nil {
 		return nil, err
 	}
@@ -907,34 +945,43 @@ func (s *Store) RecentActivity(ctx context.Context, limit int32) ([]domain.Activ
 	return scanActivityRows(rows)
 }
 
-func (s *Store) Dashboard(ctx context.Context) (domain.Dashboard, error) {
+// Dashboard aggregates health metrics. An empty projectKey spans every project;
+// otherwise every figure is scoped to that one project — the UI labels this view
+// per-project, so an unscoped count would be quietly wrong on a multi-project
+// install. Archived issues are excluded throughout, matching lists and search.
+func (s *Store) Dashboard(ctx context.Context, projectKey string) (domain.Dashboard, error) {
 	d := domain.Dashboard{
+		ProjectKey:        projectKey,
 		IssuesByStatus:    map[string]int{},
 		IssuesByComponent: map[string]int{},
 		TeamWorkload:      map[string]int{},
 	}
 
+	// $1 = '' means "all projects"; the subquery resolves the scope once per query.
+	const scope = `i.deleted_at IS NULL AND i.archived_at IS NULL
+	               AND ($1 = '' OR i.project_id = (SELECT id FROM projects WHERE key = $1))`
+
 	if err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FILTER (WHERE status NOT IN ('resolved','closed')),
-		        count(*) FILTER (WHERE severity = 'critical' AND status NOT IN ('resolved','closed'))
-		 FROM issues WHERE deleted_at IS NULL`).Scan(&d.OpenIssues, &d.CriticalIssues); err != nil {
+		`SELECT count(*) FILTER (WHERE i.status NOT IN ('resolved','closed')),
+		        count(*) FILTER (WHERE i.severity = 'critical' AND i.status NOT IN ('resolved','closed'))
+		 FROM issues i WHERE `+scope, projectKey).Scan(&d.OpenIssues, &d.CriticalIssues); err != nil {
 		return d, err
 	}
 
 	if err := s.pool.QueryRow(ctx,
-		`SELECT COALESCE(EXTRACT(EPOCH FROM avg(resolved_at - created_at)) / 3600, 0),
-		        COALESCE(EXTRACT(EPOCH FROM avg(resolved_at - created_at)
-		                 FILTER (WHERE resolved_at > now() - interval '30 days')) / 3600, 0)
-		 FROM issues WHERE resolved_at IS NOT NULL AND deleted_at IS NULL`).
+		`SELECT COALESCE(EXTRACT(EPOCH FROM avg(i.resolved_at - i.created_at)) / 3600, 0),
+		        COALESCE(EXTRACT(EPOCH FROM avg(i.resolved_at - i.created_at)
+		                 FILTER (WHERE i.resolved_at > now() - interval '30 days')) / 3600, 0)
+		 FROM issues i WHERE i.resolved_at IS NOT NULL AND `+scope, projectKey).
 		Scan(&d.AvgResolutionHours, &d.MTTRHours); err != nil {
 		return d, err
 	}
 
 	var reopened, terminal int
 	if err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FILTER (WHERE status = 'reopened'),
-		        count(*) FILTER (WHERE status IN ('resolved','closed','reopened'))
-		 FROM issues WHERE deleted_at IS NULL`).Scan(&reopened, &terminal); err != nil {
+		`SELECT count(*) FILTER (WHERE i.status = 'reopened'),
+		        count(*) FILTER (WHERE i.status IN ('resolved','closed','reopened'))
+		 FROM issues i WHERE `+scope, projectKey).Scan(&reopened, &terminal); err != nil {
 		return d, err
 	}
 	if terminal > 0 {
@@ -942,25 +989,25 @@ func (s *Store) Dashboard(ctx context.Context) (domain.Dashboard, error) {
 	}
 
 	if err := scanCountMap(ctx, s, d.IssuesByStatus,
-		`SELECT status::text, count(*) FROM issues WHERE deleted_at IS NULL GROUP BY status`); err != nil {
+		`SELECT i.status::text, count(*) FROM issues i WHERE `+scope+` GROUP BY i.status`, projectKey); err != nil {
 		return d, err
 	}
 	if err := scanCountMap(ctx, s, d.IssuesByComponent,
 		`SELECT c.name, count(*) FROM issue_components ic
 		   JOIN components c ON c.id = ic.component_id
 		   JOIN issues i ON i.id = ic.issue_id
-		 WHERE i.deleted_at IS NULL GROUP BY c.name`); err != nil {
+		 WHERE `+scope+` GROUP BY c.name`, projectKey); err != nil {
 		return d, err
 	}
 	if err := scanCountMap(ctx, s, d.TeamWorkload,
 		`SELECT u.display_name, count(*) FROM issues i
 		   JOIN users u ON u.id = i.assignee_id
-		 WHERE i.deleted_at IS NULL AND i.status NOT IN ('resolved','closed')
-		 GROUP BY u.display_name`); err != nil {
+		 WHERE `+scope+` AND i.status NOT IN ('resolved','closed')
+		 GROUP BY u.display_name`, projectKey); err != nil {
 		return d, err
 	}
 
-	acts, err := s.RecentActivity(ctx, 12)
+	acts, err := s.RecentActivity(ctx, projectKey, 12)
 	if err != nil {
 		return d, err
 	}
@@ -997,8 +1044,8 @@ func (s *Store) UpdateUserRole(ctx context.Context, userID uuid.UUID, role domai
 	return u, err
 }
 
-func scanCountMap(ctx context.Context, s *Store, dst map[string]int, query string) error {
-	rows, err := s.pool.Query(ctx, query)
+func scanCountMap(ctx context.Context, s *Store, dst map[string]int, query string, args ...any) error {
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -1147,6 +1194,11 @@ const selectIssue = `
 	LEFT JOIN users au ON au.id = i.assignee_id
 	LEFT JOIN milestones m ON m.id = i.milestone_id
 	LEFT JOIN releases r ON r.id = i.release_id`
+
+// selectLiveIssue re-reads one issue by id after a write. The deleted_at guard
+// matters: every issue write is already conditioned on `deleted_at IS NULL`, so
+// reading back without it could return a stale row for a write that never landed.
+const selectLiveIssue = selectIssue + ` WHERE i.id = $1 AND i.deleted_at IS NULL`
 
 type scanner interface {
 	Scan(dest ...any) error

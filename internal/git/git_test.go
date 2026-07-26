@@ -92,3 +92,12 @@ func TestParseGitHubPRMerged(t *testing.T) {
 		t.Fatalf("pr parse %+v", ev.PR)
 	}
 }
+
+// With no verbs configured the alternation used to be empty — and an empty branch
+// matches the empty string, so every bare "KEY-123" became a live reference.
+func TestNewRefParserWithNoVerbsMatchesNothing(t *testing.T) {
+	p := NewRefParser(nil, nil)
+	if refs := p.Parse("fixes BUG-1 and also BUG-2"); len(refs) != 0 {
+		t.Fatalf("misconfigured parser should link nothing, got %v", refs)
+	}
+}

@@ -74,7 +74,12 @@ function Sidebar({ me, onSearch }: { me?: User; onSearch: () => void }) {
   const { theme, toggle } = useTheme();
   const canManage = CAN_MANAGE.has(me?.role ?? "");
   // Shares the ["dashboard"] cache with the Dashboard page — the open count is free here.
-  const overview = useQuery({ queryKey: ["dashboard"], queryFn: () => api.dashboard(), retry: false });
+  const overview = useQuery({
+    queryKey: ["dashboard", projectKey],
+    queryFn: () => api.dashboard(projectKey),
+    enabled: !!projectKey,
+    retry: false,
+  });
   const openCount = overview.data?.open_issues;
 
   return (

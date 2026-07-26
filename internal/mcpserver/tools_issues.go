@@ -16,7 +16,7 @@ func (s *Server) registerIssues() {
 	mcp.AddTool(s.srv, &mcp.Tool{
 		Name:        "list_issues",
 		Title:       "List issues",
-		Description: "List issues in a project with an optional GitHub-style filter. Filter terms: is:/status:<status> assignee:@me|<uuid> severity:<sev> type:<type> label:<name> component:<name> milestone:<uuid> release:<uuid>, plus bare words for full-text. Statuses: open, in_progress, blocked, ready_for_review, resolved, closed, reopened.",
+		Description: "List issues in a project with an optional GitHub-style filter. Terms: is:/status:<status> assignee:@me|<uuid> severity:<sev> type:<type> label:<name> component:<name> milestone:<uuid> release:<uuid>, plus bare words for full-text. Values with spaces must be quoted: label:\"needs triage\". `is:open` means every unfinished status (open, in_progress, blocked, ready_for_review, reopened) and `is:closed` means resolved or closed — name a status directly to match just that one. `is:archived` shows the archived set. Statuses: open, in_progress, blocked, ready_for_review, resolved, closed, reopened. An unknown value is rejected with a 400 naming the bad term.",
 	}, s.listIssues)
 
 	mcp.AddTool(s.srv, &mcp.Tool{

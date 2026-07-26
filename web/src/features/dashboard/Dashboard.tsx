@@ -40,8 +40,9 @@ function activityDot(verb: string): string {
 export function Dashboard() {
   const { projectKey } = useProject();
   const { data = empty, isError, isLoading } = useQuery({
-    queryKey: ["dashboard"],
-    queryFn: () => api.dashboard(),
+    queryKey: ["dashboard", projectKey],
+    queryFn: () => api.dashboard(projectKey),
+    enabled: !!projectKey,
   });
 
   const hours = (h: number) => (h > 0 ? `${h.toFixed(1)}h` : "—");

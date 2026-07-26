@@ -26,7 +26,7 @@ func (s *Server) registerMeta() {
 	mcp.AddTool(s.srv, &mcp.Tool{
 		Name:        "get_dashboard",
 		Title:       "Get dashboard overview",
-		Description: "Return the dashboard overview: open/critical counts, average resolution time, MTTR, regression rate, issues-by-status, team workload and recent activity.",
+		Description: "Return the dashboard overview: open/critical counts, average resolution time, MTTR, regression rate, issues-by-status, team workload and recent activity. Pass project_key to scope every figure to one project; omit it for the cross-project rollup.",
 	}, s.getDashboard)
 
 	mcp.AddTool(s.srv, &mcp.Tool{
@@ -86,8 +86,14 @@ func (s *Server) listUsersTool(ctx context.Context, _ *mcp.CallToolRequest, _ no
 	return result(s.c.get(ctx, "/users", nil))
 }
 
-func (s *Server) getDashboard(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, any, error) {
-	return result(s.c.get(ctx, "/dashboards/overview", nil))
+type dashboardArgs struct {
+	ProjectKey string `json:"project_key,omitempty" jsonschema:"scope the metrics to this project, e.g. BUG; omit for all projects"`
+}
+
+func (s *Server) getDashboard(ctx context.Context, _ *mcp.CallToolRequest, a dashboardArgs) (*mcp.CallToolResult, any, error) {
+	q := query()
+	setStr(q, "project", a.ProjectKey)
+	return result(s.c.get(ctx, "/dashboards/overview", q))
 }
 
 func (s *Server) getArchiveSettings(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, any, error) {

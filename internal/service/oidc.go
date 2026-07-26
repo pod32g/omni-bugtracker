@@ -49,6 +49,14 @@ func (o *OIDC) Router() http.Handler {
 	return r
 }
 
+// secure reports whether session cookies should carry the Secure attribute. It
+// follows the configured redirect URI rather than the request, because that is
+// the origin the browser will actually be on — and a plain-HTTP LAN deploy must
+// still be able to log in, so this can't be hardcoded to true.
+func (o *OIDC) secure() bool {
+	return strings.HasPrefix(strings.ToLower(o.cfg.RedirectURI), "https://")
+}
+
 // setSession writes the httpOnly access-token cookie (and refresh cookie when present).
 func (o *OIDC) setSession(w http.ResponseWriter, tok *tokenResp) {
 	maxAge := tok.ExpiresIn
@@ -57,12 +65,12 @@ func (o *OIDC) setSession(w http.ResponseWriter, tok *tokenResp) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: auth.SessionCookie, Value: tok.AccessToken, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: maxAge,
+		HttpOnly: true, Secure: o.secure(), SameSite: http.SameSiteLaxMode, MaxAge: maxAge,
 	})
 	if tok.RefreshToken != "" {
 		http.SetCookie(w, &http.Cookie{
 			Name: refreshCookie, Value: tok.RefreshToken, Path: "/auth",
-			HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: refreshMaxAge,
+			HttpOnly: true, Secure: o.secure(), SameSite: http.SameSiteLaxMode, MaxAge: refreshMaxAge,
 		})
 	}
 }
@@ -82,6 +90,7 @@ func (o *OIDC) login(w http.ResponseWriter, r *http.Request) {
 		Value:    base64.RawURLEncoding.EncodeToString(blob),
 		Path:     "/auth",
 		HttpOnly: true,
+		Secure:   o.secure(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
 	})
@@ -103,7 +112,7 @@ func (o *OIDC) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing login state — restart sign-in", http.StatusBadRequest)
 		return
 	}
-	clearCookie(w, oauthTmpCookie, "/auth")
+	o.clearCookie(w, oauthTmpCookie, "/auth")
 
 	blob, _ := base64.RawURLEncoding.DecodeString(c.Value)
 	var saved struct{ State, Verifier string }
@@ -146,8 +155,8 @@ func (o *OIDC) refresh(w http.ResponseWriter, r *http.Request) {
 	tok, err := o.refreshExchange(r.Context(), c.Value)
 	if err != nil {
 		// Refresh failed (expired/revoked) — clear cookies so the SPA shows sign-in.
-		clearCookie(w, auth.SessionCookie, "/")
-		clearCookie(w, refreshCookie, "/auth")
+		o.clearCookie(w, auth.SessionCookie, "/")
+		o.clearCookie(w, refreshCookie, "/auth")
 		http.Error(w, "refresh failed", http.StatusUnauthorized)
 		return
 	}
@@ -156,8 +165,8 @@ func (o *OIDC) refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (o *OIDC) logout(w http.ResponseWriter, r *http.Request) {
-	clearCookie(w, auth.SessionCookie, "/")
-	clearCookie(w, refreshCookie, "/auth")
+	o.clearCookie(w, auth.SessionCookie, "/")
+	o.clearCookie(w, refreshCookie, "/auth")
 	dest := o.cfg.PostLogoutURL
 	if dest == "" {
 		dest = "/"
@@ -262,8 +271,13 @@ func pkceChallenge(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-func clearCookie(w http.ResponseWriter, name, path string) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: path, HttpOnly: true, MaxAge: -1})
+// clearCookie must mirror the attributes the cookie was set with — a Secure
+// cookie is not overwritten by a non-Secure one of the same name.
+func (o *OIDC) clearCookie(w http.ResponseWriter, name, path string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: name, Value: "", Path: path,
+		HttpOnly: true, Secure: o.secure(), SameSite: http.SameSiteLaxMode, MaxAge: -1,
+	})
 }
 
 func itoa(n int) string {

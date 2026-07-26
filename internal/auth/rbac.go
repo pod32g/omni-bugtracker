@@ -51,10 +51,48 @@ func RoleCan(role domain.Role, perm Permission) bool {
 	return perms[perm]
 }
 
-// Can reports whether the principal may perform the permission (global role).
+// Can reports whether the principal may perform the permission: their global role
+// must grant it AND, for API tokens, the token's scopes must allow it. Scopes only
+// ever narrow — a token can never exceed its owner's role.
 func (p *Principal) Can(perm Permission) bool {
 	if p == nil {
 		return false
 	}
-	return RoleCan(p.Role, perm)
+	return RoleCan(p.Role, perm) && p.ScopeAllows(perm)
+}
+
+// ScopeAllows applies an API token's scope list. An empty scope list means
+// "unrestricted" (that is what every token issued before scopes were enforced
+// carries, and it keeps `create token` with no scopes meaning "acts as me").
+// A non-empty list is a whitelist: the permission itself, or the "admin:all"
+// wildcard, must appear in it.
+func (p *Principal) ScopeAllows(perm Permission) bool {
+	if !p.ViaToken || len(p.Scopes) == 0 {
+		return true
+	}
+	for _, s := range p.Scopes {
+		if s == string(perm) || s == string(PermAdmin) || s == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+// AllPermissions lists every permission a token may be scoped to.
+var AllPermissions = []Permission{
+	PermProjectManage, PermIssueCreate, PermIssueUpdate, PermIssueDelete,
+	PermIssueTransition, PermCommentCreate, PermAutomationEdit, PermWebhookEdit, PermAdmin,
+}
+
+// ValidScope reports whether a requested token scope names a real permission.
+func ValidScope(s string) bool {
+	if s == "*" {
+		return true
+	}
+	for _, p := range AllPermissions {
+		if string(p) == s {
+			return true
+		}
+	}
+	return false
 }

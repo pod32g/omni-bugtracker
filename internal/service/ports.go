@@ -153,13 +153,15 @@ type Repository interface {
 
 	// Comments & timeline
 	AddComment(ctx context.Context, issueID, author uuid.UUID, body string, publish PublishFn) (domain.Comment, error)
-	ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, error)
+	// ListComments / ListActivity return one page plus the unpaged total.
+	ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, int, error)
 	GetComment(ctx context.Context, id uuid.UUID) (domain.Comment, error)
 	UpdateComment(ctx context.Context, id, actor uuid.UUID, bodyMD string) (domain.Comment, error)
 	SoftDeleteComment(ctx context.Context, id, actor uuid.UUID) (bool, error)
-	ListActivity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, error)
-	RecentActivity(ctx context.Context, limit int32) ([]domain.Activity, error)
-	Dashboard(ctx context.Context) (domain.Dashboard, error)
+	ListActivity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, int, error)
+	RecentActivity(ctx context.Context, projectKey string, limit int32) ([]domain.Activity, error)
+	// Dashboard aggregates health metrics; an empty projectKey spans every project.
+	Dashboard(ctx context.Context, projectKey string) (domain.Dashboard, error)
 	ListUsers(ctx context.Context, limit int32) ([]domain.User, error)
 	UpdateUserRole(ctx context.Context, userID uuid.UUID, role domain.Role) (domain.User, error)
 
@@ -403,8 +405,11 @@ type UpdateIssueInput struct {
 }
 
 type IssueFilter struct {
-	ProjectKey  string
-	Status      *domain.IssueStatus
+	ProjectKey string
+	// Statuses is a set: the issue matches when its status is any of these. Empty
+	// means "no status constraint". `is:open` / `is:closed` expand to lifecycle
+	// sets rather than a single value, so this is never a lone status.
+	Statuses    []domain.IssueStatus
 	AssigneeID  *uuid.UUID
 	Type        *domain.IssueType
 	Severity    *domain.Severity

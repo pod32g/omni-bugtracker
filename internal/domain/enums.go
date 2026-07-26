@@ -95,3 +95,55 @@ func CanTransition(from, to IssueStatus) bool {
 	targets, ok := validTransitions[from]
 	return ok && targets[to]
 }
+
+// ClosedStatuses are the terminal statuses — an issue in one of these is finished.
+// OpenStatuses is the complement: everything still in flight. `is:open` means "not
+// finished", not "status == open", which is why these are sets and not single values.
+var (
+	ClosedStatuses = []IssueStatus{StatusResolved, StatusClosed}
+	OpenStatuses   = []IssueStatus{
+		StatusOpen, StatusInProgress, StatusBlocked, StatusReadyForReview, StatusReopened,
+	}
+)
+
+// AllStatuses lists every workflow status, in lifecycle order.
+var AllStatuses = []IssueStatus{
+	StatusOpen, StatusInProgress, StatusBlocked, StatusReadyForReview,
+	StatusResolved, StatusClosed, StatusReopened,
+}
+
+// ValidStatus / ValidSeverity / ValidType / ValidPriority guard values that are
+// about to be compared against a Postgres enum column — an unknown value there is
+// a query error, not an empty result, so callers must reject it up front.
+func ValidStatus(s IssueStatus) bool {
+	switch s {
+	case StatusOpen, StatusInProgress, StatusBlocked, StatusReadyForReview,
+		StatusResolved, StatusClosed, StatusReopened:
+		return true
+	}
+	return false
+}
+
+func ValidSeverity(s Severity) bool {
+	switch s {
+	case SeverityCritical, SeverityHigh, SeverityMedium, SeverityLow:
+		return true
+	}
+	return false
+}
+
+func ValidType(t IssueType) bool {
+	switch t {
+	case TypeBug, TypeTask, TypeFeature, TypeImprovement:
+		return true
+	}
+	return false
+}
+
+func ValidPriority(p Priority) bool {
+	switch p {
+	case P0, P1, P2, P3:
+		return true
+	}
+	return false
+}

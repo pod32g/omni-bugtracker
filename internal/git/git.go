@@ -65,6 +65,13 @@ func NewRefParser(closeVerbs, linkVerbs []string) *RefParser {
 			quoted = append(quoted, regexp.QuoteMeta(v))
 		}
 	}
+	// With no verbs configured the alternation would be empty — and an empty branch
+	// matches the empty string, turning every bare "KEY-123" into a reference. Use a
+	// pattern that can never match instead, so a misconfiguration links nothing
+	// rather than linking everything.
+	if len(quoted) == 0 {
+		return &RefParser{re: regexp.MustCompile(`$^`), closeVerbs: map[string]bool{}}
+	}
 	// verb  KEY-123   (project key is 2-10 chars; unknown keys are filtered at resolution)
 	pattern := `(?i)\b(` + strings.Join(quoted, "|") + `)\s+([A-Za-z][A-Za-z0-9]{1,9})-(\d+)\b`
 	cm := make(map[string]bool, len(closeVerbs))

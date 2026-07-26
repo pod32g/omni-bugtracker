@@ -160,7 +160,7 @@ func (s *Issues) Comment(ctx context.Context, issueID, author uuid.UUID, body st
 	})
 }
 
-// Activity returns the issue timeline.
-func (s *Issues) Activity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, error) {
+// Activity returns one page of the issue timeline plus the unpaged total.
+func (s *Issues) Activity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, int, error) {
 	return s.repo.ListActivity(ctx, issueID, limit, offset)
 }

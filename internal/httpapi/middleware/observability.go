@@ -6,6 +6,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/omni/bugtracker/internal/platform"
@@ -63,14 +64,18 @@ func Recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
+// chiRoutePattern returns the matched route template ("/api/v1/issues/{issueKey}"),
+// never the concrete path. A Prometheus label must have bounded cardinality: using
+// r.URL.Path would mint a new time series per issue key and UUID, so the registry
+// would grow without limit for as long as the process runs. Only valid after the
+// handler chain has run — chi fills the route context during routing.
 func chiRoutePattern(r *http.Request) string {
-	if rc := middleware.GetReqID(r.Context()); rc != "" {
-		_ = rc
+	if rctx := chi.RouteContext(r.Context()); rctx != nil {
+		if p := rctx.RoutePattern(); p != "" {
+			return p
+		}
 	}
-	if p := r.URL.Path; p != "" {
-		return p
-	}
-	return "unknown"
+	return "unmatched"
 }
 
 func statusClass(code int) string {

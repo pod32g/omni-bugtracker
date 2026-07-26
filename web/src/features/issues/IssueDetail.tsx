@@ -1,5 +1,5 @@
 import { useRef, useState, type DragEvent, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -22,9 +22,20 @@ import { IconBranch, IconChevronDown, IconCommit, IconEye, IconKebab, IconMilest
 import { EditIssueForm } from "./EditIssueForm";
 import { ComponentsSelect } from "./formFields";
 
-const TRANSITIONS: IssueStatus[] = [
-  "open", "in_progress", "blocked", "ready_for_review", "resolved", "closed", "reopened",
-];
+const COMMENT_PAGE_SIZE = 50;
+const ACTIVITY_PAGE_SIZE = 50;
+
+// Mirrors domain.validTransitions on the server. Offering statuses the workflow
+// rejects turns every mis-click into a 409, so the picker only lists legal targets.
+const ALLOWED_TRANSITIONS: Record<IssueStatus, IssueStatus[]> = {
+  open: ["in_progress", "blocked", "resolved", "closed"],
+  in_progress: ["blocked", "ready_for_review", "resolved", "open"],
+  blocked: ["in_progress", "open", "closed"],
+  ready_for_review: ["in_progress", "resolved", "closed"],
+  resolved: ["closed", "reopened"],
+  closed: ["reopened"],
+  reopened: ["in_progress", "resolved", "closed", "blocked"],
+};
 
 export function IssueDetail() {
   const { issueKey = "" } = useParams();
@@ -36,9 +47,27 @@ export function IssueDetail() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const issue = useQuery({ queryKey: ["issue", issueKey], queryFn: () => api.getIssue(issueKey) });
-  const comments = useQuery({ queryKey: ["comments", issueKey], queryFn: () => api.listComments(issueKey) });
+  // Comments and activity page rather than truncate: a long-running issue has more
+  // history than one request returns, and silently dropping the tail hides context.
+  const comments = useInfiniteQuery({
+    queryKey: ["comments", issueKey],
+    queryFn: ({ pageParam }) => api.listComments(issueKey, COMMENT_PAGE_SIZE, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, p) => n + p.items.length, 0);
+      return loaded < last.total ? loaded : undefined;
+    },
+  });
   const attachments = useQuery({ queryKey: ["attachments", issueKey], queryFn: () => api.listAttachments(issueKey) });
-  const activity = useQuery({ queryKey: ["activity", issueKey], queryFn: () => api.activity(issueKey) });
+  const activity = useInfiniteQuery({
+    queryKey: ["activity", issueKey],
+    queryFn: ({ pageParam }) => api.activity(issueKey, ACTIVITY_PAGE_SIZE, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, p) => n + p.items.length, 0);
+      return loaded < last.total ? loaded : undefined;
+    },
+  });
   const commits = useQuery({ queryKey: ["commits", issueKey], queryFn: () => api.commits(issueKey) });
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
@@ -112,6 +141,11 @@ export function IssueDetail() {
     return <div className="px-9 py-10 text-sm text-critical">{(issue.error as Error)?.message ?? "Not found"}</div>;
 
   const i = issue.data;
+  const commentItems = comments.data?.pages.flatMap((p) => p.items) ?? [];
+  const activityItems = activity.data?.pages.flatMap((p) => p.items) ?? [];
+  // Every rail control writes through these mutations; without a visible error a
+  // rejected write just snaps the control back to its old value with no explanation.
+  const railError = (transition.error ?? patch.error ?? move.error ?? archive.error) as Error | null;
 
   return (
     <div>
@@ -226,7 +260,18 @@ export function IssueDetail() {
           {/* Comments */}
           <div className="flex flex-col gap-4 border-t border-hairline pt-6">
             <MicroLabel>Comments</MicroLabel>
-            {comments.data?.map((c) => (
+            {comments.hasNextPage && (
+              <button
+                onClick={() => comments.fetchNextPage()}
+                disabled={comments.isFetchingNextPage}
+                className="self-start text-sm font-semibold text-blueprint transition hover:opacity-80 disabled:opacity-50"
+              >
+                {comments.isFetchingNextPage
+                  ? "Loading…"
+                  : `Load earlier comments (${(comments.data?.pages[0]?.total ?? 0) - commentItems.length} more)`}
+              </button>
+            )}
+            {commentItems.map((c) => (
               <CommentCard
                 key={c.id}
                 comment={c}
@@ -235,6 +280,9 @@ export function IssueDetail() {
                 issueKey={issueKey}
               />
             ))}
+            {addComment.isError && (
+              <p className="text-sm text-critical">{(addComment.error as Error).message}</p>
+            )}
 
             <div className="flex items-start gap-3">
               <Avatar user={i.reporter} size={28} />
@@ -269,6 +317,12 @@ export function IssueDetail() {
             <MicroLabel>Status</MicroLabel>
             <StatusControl status={i.status} onChange={(to) => transition.mutate(to)} pending={transition.isPending} />
           </div>
+
+          {railError && (
+            <p className="rounded-md border border-critical-border bg-critical-soft px-3 py-2 text-sm text-critical">
+              {railError.message}
+            </p>
+          )}
 
           <MetaRow label="Project">
             <ProjectControl
@@ -373,11 +427,11 @@ export function IssueDetail() {
             )}
           </div>
 
-          {activity.data && activity.data.length > 0 && (
+          {activityItems.length > 0 && (
             <div className="flex flex-col gap-2.5 border-t border-hairline pt-5">
               <MicroLabel>Activity</MicroLabel>
               <ul className="flex flex-col gap-2">
-                {activity.data.map((a) => (
+                {activityItems.map((a) => (
                   <li key={a.id} className="text-xs text-graphite">
                     <span className="font-medium text-ink">{a.actor?.display_name ?? "system"}</span>{" "}
                     {humanizeVerb(a.verb)}
@@ -385,6 +439,15 @@ export function IssueDetail() {
                   </li>
                 ))}
               </ul>
+              {activity.hasNextPage && (
+                <button
+                  onClick={() => activity.fetchNextPage()}
+                  disabled={activity.isFetchingNextPage}
+                  className="self-start text-xs font-semibold text-blueprint transition hover:opacity-80 disabled:opacity-50"
+                >
+                  {activity.isFetchingNextPage ? "Loading…" : "Show older activity"}
+                </button>
+              )}
             </div>
           )}
           </div>
@@ -751,6 +814,8 @@ function StatusControl({
   pending: boolean;
 }) {
   const t = statusTone[status];
+  // Only offer transitions the workflow actually permits from here.
+  const targets = [status, ...(ALLOWED_TRANSITIONS[status] ?? [])];
   return (
     <div className="relative">
       <div className={`flex h-[38px] items-center justify-between rounded-md border px-3 ${t.bg} ${t.border}`}>
@@ -766,7 +831,7 @@ function StatusControl({
         aria-label="Change status"
         className="absolute inset-0 cursor-pointer opacity-0"
       >
-        {TRANSITIONS.map((s) => (
+        {targets.map((s) => (
           <option key={s} value={s}>
             {statusLabel[s]}
           </option>

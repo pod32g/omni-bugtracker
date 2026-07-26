@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/omni/bugtracker/internal/auth"
 	"github.com/omni/bugtracker/internal/config"
@@ -149,7 +151,9 @@ func (h *httpHandlers) canOnProject(ctx context.Context, p *auth.Principal, proj
 	if err != nil || !ok {
 		return false
 	}
-	return auth.RoleCan(role, perm)
+	// Membership elevates the role but must not escape the token's scopes — otherwise
+	// a narrowly-scoped token would regain full rights inside any project it belongs to.
+	return auth.RoleCan(role, perm) && p.ScopeAllows(perm)
 }
 
 var projectKeyRe = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,9}$`)
@@ -189,6 +193,16 @@ func (h *httpHandlers) createToken(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(body.Name) == "" {
 		httpapi.WriteValidation(w, map[string]string{"name": "required"})
 		return
+	}
+	// Scopes narrow the token below the owner's role; an unknown scope would
+	// silently deny everything, so reject it up front. Empty = unrestricted.
+	for _, s := range body.Scopes {
+		if !auth.ValidScope(s) {
+			httpapi.WriteValidation(w, map[string]string{
+				"scopes": "unknown scope " + strconv.Quote(s) + " — expected one of " + strings.Join(scopeNames(), ", ") + `, or "*"`,
+			})
+			return
+		}
 	}
 	plaintext, hash, err := auth.GenerateAPIToken()
 	if err != nil {
@@ -337,6 +351,14 @@ func (h *httpHandlers) updateUserRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+func scopeNames() []string {
+	out := make([]string, 0, len(auth.AllPermissions))
+	for _, p := range auth.AllPermissions {
+		out = append(out, string(p))
+	}
+	return out
+}
+
 func validRole(role string) bool {
 	switch domain.Role(role) {
 	case domain.RoleOwner, domain.RoleAdmin, domain.RoleMaintainer, domain.RoleMember, domain.RoleReporter, domain.RoleBot:
@@ -388,8 +410,18 @@ func (h *httpHandlers) updateArchiveSettings(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{"auto_after_days": body.AutoAfterDays})
 }
 
+// dashboard aggregates health metrics. `?project=KEY` scopes every figure to one
+// project — the UI labels this view per-project, so without a scope the numbers
+// would silently span the whole install. No project = the cross-project rollup.
 func (h *httpHandlers) dashboard(w http.ResponseWriter, r *http.Request) {
-	d, err := h.repo.Dashboard(r.Context())
+	projectKey := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("project")))
+	if projectKey != "" {
+		if _, err := h.repo.GetProjectByKey(r.Context(), projectKey); err != nil {
+			httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project: "+projectKey)
+			return
+		}
+	}
+	d, err := h.repo.Dashboard(r.Context(), projectKey)
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "dashboard failed", err.Error())
 		return
@@ -541,7 +573,7 @@ func (h *httpHandlers) updateBoardColumn(w http.ResponseWriter, r *http.Request)
 	}
 	board, err := h.repo.UpdateBoardColumn(r.Context(), id, in)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such column")
+		writeNotFoundOrError(w, err, "column", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, board)
@@ -704,7 +736,7 @@ func (h *httpHandlers) updateAutomationRule(w http.ResponseWriter, r *http.Reque
 		Trigger: body.Trigger, Actions: body.Actions,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such rule")
+		writeNotFoundOrError(w, err, "rule", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, rule)
@@ -834,7 +866,7 @@ func (h *httpHandlers) updateWebhook(w http.ResponseWriter, r *http.Request) {
 		ID: id, URL: body.URL, Secret: body.Secret, Events: body.Events, IsActive: body.IsActive,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such webhook")
+		writeNotFoundOrError(w, err, "webhook", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, wh)
@@ -1270,7 +1302,7 @@ func (h *httpHandlers) updateComponent(w http.ResponseWriter, r *http.Request) {
 		ID: id, Name: body.Name, DescriptionMD: body.DescriptionMD, LeadID: body.LeadID,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusConflict, "update failed", err.Error())
+		writeNotFoundOrError(w, err, "component", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
@@ -1393,7 +1425,7 @@ func (h *httpHandlers) updateMilestone(w http.ResponseWriter, r *http.Request) {
 	}
 	m, err := h.repo.UpdateMilestone(r.Context(), in)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusConflict, "update failed", err.Error())
+		writeNotFoundOrError(w, err, "milestone", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, m)
@@ -1497,7 +1529,7 @@ func (h *httpHandlers) updateRelease(w http.ResponseWriter, r *http.Request) {
 		GitTag: body.GitTag, State: body.State,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusConflict, "update failed", err.Error())
+		writeNotFoundOrError(w, err, "release", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, rel)
@@ -1523,7 +1555,13 @@ func (h *httpHandlers) deleteRelease(w http.ResponseWriter, r *http.Request) {
 func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	key := chi.URLParam(r, "key")
-	f := ParseFilter(key, r.URL.Query().Get("filter"), p.UserID)
+	f, badTerms := ParseFilter(key, r.URL.Query().Get("filter"), p.UserID)
+	// A typo in the filter box is the caller's mistake, not a server fault: unknown
+	// enum values would otherwise reach Postgres and fail the whole query as a 500.
+	if len(badTerms) > 0 {
+		httpapi.WriteValidation(w, badTerms)
+		return
+	}
 	f.Sort = r.URL.Query().Get("sort")
 	f.Limit = int32(atoiDefault(r.URL.Query().Get("limit"), 50))
 	// Paging: `total` in the response is the unpaged count, so clients page with
@@ -1534,6 +1572,9 @@ func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
 		return
+	}
+	if items == nil {
+		items = []domain.Issue{} // an empty page is [], not null, like every other list
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
@@ -1593,13 +1634,13 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		IDs   []uuid.UUID `json:"ids"`
 		Patch *struct {
-			Priority    *domain.Priority   `json:"priority"`
-			Severity    *domain.Severity   `json:"severity"`
-			AssigneeID  *uuid.UUID         `json:"assignee_id"`
-			Labels      *[]string          `json:"labels"`
-			Components  *[]string          `json:"components"`
-			MilestoneID *uuid.UUID         `json:"milestone_id"`
-			ReleaseID   *uuid.UUID         `json:"release_id"`
+			Priority    *domain.Priority `json:"priority"`
+			Severity    *domain.Severity `json:"severity"`
+			AssigneeID  *uuid.UUID       `json:"assignee_id"`
+			Labels      *[]string        `json:"labels"`
+			Components  *[]string        `json:"components"`
+			MilestoneID *uuid.UUID       `json:"milestone_id"`
+			ReleaseID   *uuid.UUID       `json:"release_id"`
 		} `json:"patch"`
 		Status           *domain.IssueStatus `json:"status"`
 		TargetProjectKey *string             `json:"target_project_key"`
@@ -1631,11 +1672,15 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 		Key   string `json:"key"`
 		Error string `json:"error"`
 	}
-	updated := 0
+	updated, skipped := 0, 0
 	failed := []failure{}
 	fail := func(key, msg string) { failed = append(failed, failure{Key: key, Error: msg}) }
 
 	for _, id := range body.IDs {
+		// Tracks whether this issue was actually written to — asking for a status
+		// it already has, or a move to the project it's already in, is a no-op and
+		// must not be counted as an update.
+		changed := false
 		issue, err := h.repo.GetIssueByID(r.Context(), id)
 		if err != nil {
 			fail(id.String(), "not found")
@@ -1661,6 +1706,7 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 				fail(issue.Key, "update: "+err.Error())
 				continue
 			}
+			changed = true
 		}
 		if body.Status != nil && issue.Status != *body.Status {
 			if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueTransition) {
@@ -1671,6 +1717,7 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 				fail(issue.Key, "transition: "+err.Error())
 				continue
 			}
+			changed = true
 		}
 		if target != "" && target != issue.ProjectKey {
 			if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueUpdate) ||
@@ -1682,6 +1729,7 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 				fail(issue.Key, "move: "+err.Error())
 				continue
 			}
+			changed = true
 		}
 		if body.Archived != nil {
 			if !h.canOnProject(r.Context(), p, issue.ProjectKey, auth.PermIssueUpdate) {
@@ -1692,10 +1740,15 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 				fail(issue.Key, "archive: "+err.Error())
 				continue
 			}
+			changed = true
 		}
-		updated++
+		if changed {
+			updated++
+		} else {
+			skipped++
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"updated": updated, "failed": failed})
+	writeJSON(w, http.StatusOK, map[string]any{"updated": updated, "skipped": skipped, "failed": failed})
 }
 
 func (h *httpHandlers) getIssue(w http.ResponseWriter, r *http.Request) {
@@ -1812,8 +1865,12 @@ func (h *httpHandlers) moveIssue(w http.ResponseWriter, r *http.Request) {
 
 // archiveIssue / unarchiveIssue hide or restore an issue. Archived issues drop out of
 // default lists and search but keep their status and stay reachable by key.
-func (h *httpHandlers) archiveIssue(w http.ResponseWriter, r *http.Request)   { h.setArchived(w, r, true) }
-func (h *httpHandlers) unarchiveIssue(w http.ResponseWriter, r *http.Request) { h.setArchived(w, r, false) }
+func (h *httpHandlers) archiveIssue(w http.ResponseWriter, r *http.Request) {
+	h.setArchived(w, r, true)
+}
+func (h *httpHandlers) unarchiveIssue(w http.ResponseWriter, r *http.Request) {
+	h.setArchived(w, r, false)
+}
 
 func (h *httpHandlers) setArchived(w http.ResponseWriter, r *http.Request, archived bool) {
 	p := auth.FromContext(r.Context())
@@ -1894,12 +1951,19 @@ func (h *httpHandlers) listComments(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	comments, err := h.repo.ListComments(r.Context(), issue.ID, 200, 0)
+	limit := int32(atoiDefault(r.URL.Query().Get("limit"), 100))
+	offset := int32(atoiDefault(r.URL.Query().Get("offset"), 0))
+	comments, total, err := h.repo.ListComments(r.Context(), issue.ID, limit, offset)
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, comments)
+	if comments == nil {
+		comments = []domain.Comment{}
+	}
+	// `total` is the unpaged count so a long conversation pages instead of being
+	// silently cut off at the page size.
+	writeJSON(w, http.StatusOK, map[string]any{"items": comments, "total": total})
 }
 
 func (h *httpHandlers) addComment(w http.ResponseWriter, r *http.Request) {
@@ -1972,8 +2036,12 @@ func (h *httpHandlers) setWatchState(w http.ResponseWriter, r *http.Request, wat
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *httpHandlers) watchIssue(w http.ResponseWriter, r *http.Request)   { h.setWatchState(w, r, true) }
-func (h *httpHandlers) unwatchIssue(w http.ResponseWriter, r *http.Request) { h.setWatchState(w, r, false) }
+func (h *httpHandlers) watchIssue(w http.ResponseWriter, r *http.Request) {
+	h.setWatchState(w, r, true)
+}
+func (h *httpHandlers) unwatchIssue(w http.ResponseWriter, r *http.Request) {
+	h.setWatchState(w, r, false)
+}
 
 // ── issue relations ──
 
@@ -2142,12 +2210,17 @@ func (h *httpHandlers) activity(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	acts, err := h.issues.Activity(r.Context(), issue.ID, 100, 0)
+	limit := int32(atoiDefault(r.URL.Query().Get("limit"), 100))
+	offset := int32(atoiDefault(r.URL.Query().Get("offset"), 0))
+	acts, total, err := h.issues.Activity(r.Context(), issue.ID, limit, offset)
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "activity failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, acts)
+	if acts == nil {
+		acts = []domain.Activity{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": acts, "total": total})
 }
 
 func (h *httpHandlers) commits(w http.ResponseWriter, r *http.Request) {
@@ -2268,6 +2341,14 @@ func (h *httpHandlers) downloadAttachment(w http.ResponseWriter, r *http.Request
 	}
 	defer f.Close() //nolint:errcheck
 
+	// Content-Length must describe the bytes actually on disk, not what the metadata
+	// row claims: a short file would otherwise leave the client waiting on a read
+	// that never completes.
+	size := att.SizeBytes
+	if st, err := f.Stat(); err == nil {
+		size = st.Size()
+	}
+
 	// Serve user content defensively: images/PDF render inline, everything else
 	// downloads; HTML-ish types are neutralized to text/plain.
 	ct := att.ContentType
@@ -2280,7 +2361,7 @@ func (h *httpHandlers) downloadAttachment(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Length", strconv.FormatInt(att.SizeBytes, 10))
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, att.Filename))
 	_, _ = io.Copy(w, f)
 }
@@ -2349,6 +2430,17 @@ func atoiDefault(s string, def int) int {
 		return n
 	}
 	return def
+}
+
+// writeNotFoundOrError distinguishes "the row isn't there" from "the write failed".
+// Collapsing both into a 404 (or a 409) makes a real database fault indistinguishable
+// from a missing id, which is the difference between a client bug and an outage.
+func writeNotFoundOrError(w http.ResponseWriter, err error, entity, title string) {
+	if errors.Is(err, pgx.ErrNoRows) {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such "+entity)
+		return
+	}
+	httpapi.WriteProblem(w, http.StatusInternalServerError, title, err.Error())
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

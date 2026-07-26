@@ -41,7 +41,14 @@ export function IssueList() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me(), retry: false });
-  const overview = useQuery({ queryKey: ["dashboard"], queryFn: () => api.dashboard(), retry: false });
+  // Scoped to the selected project — the subtitle prints these next to the list,
+  // so an install-wide count here would contradict the rows on screen.
+  const overview = useQuery({
+    queryKey: ["dashboard", projectKey],
+    queryFn: () => api.dashboard(projectKey),
+    enabled: !!projectKey,
+    retry: false,
+  });
   // Paged: a project can have far more issues than one page (the API caps at 200 per
   // request), so "Load more" fetches the next offset and appends.
   const issues = useInfiniteQuery({
@@ -420,8 +427,10 @@ function BulkBar({ ids, projectKey, onDone }: { ids: string[]; projectKey: strin
       qc.invalidateQueries({ queryKey: ["issues"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       if (res.failed.length > 0)
-        window.alert(`${res.updated} updated, ${res.failed.length} failed:\n` +
-          res.failed.map((f) => `${f.key}: ${f.error}`).join("\n"));
+        window.alert(
+          `${res.updated} updated, ${res.skipped} unchanged, ${res.failed.length} failed:\n` +
+            res.failed.map((f) => `${f.key}: ${f.error}`).join("\n"),
+        );
       onDone();
     },
   });
@@ -500,7 +509,22 @@ function BulkBar({ ids, projectKey, onDone }: { ids: string[]; projectKey: strin
           ))}
       </select>
 
+      <button
+        onClick={() => {
+          if (window.confirm(`Archive ${ids.length} issue(s)? They drop out of default lists but stay recoverable.`))
+            run.mutate({ ids, archived: true });
+        }}
+        className="h-8 shrink-0 rounded-md border border-hairline px-3 text-sm text-graphite transition hover:border-graphite hover:text-ink"
+      >
+        Archive
+      </button>
+
       {run.isPending && <span className="font-mono text-xs text-graphite-soft">Applying…</span>}
+      {run.isError && (
+        <span className="max-w-[240px] truncate text-xs text-critical" title={(run.error as Error).message}>
+          {(run.error as Error).message}
+        </span>
+      )}
       <button onClick={onDone} className="text-sm text-graphite transition hover:text-ink">
         Clear
       </button>

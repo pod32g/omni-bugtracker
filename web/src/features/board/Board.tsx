@@ -1,5 +1,5 @@
-import { useMemo, useState, type DragEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, type Board as BoardConfig, type BoardColumn, type Issue, type IssueStatus } from "../../lib/api";
 import { useProject } from "../../lib/project";
@@ -10,6 +10,10 @@ const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
 const ALL_STATUSES: IssueStatus[] = [
   "open", "in_progress", "blocked", "ready_for_review", "resolved", "closed", "reopened",
 ];
+const BOARD_PAGE_SIZE = 200; // the API's per-request ceiling
+// Upper bound on how much a board will pull. Past this the view is unusable anyway;
+// the header says so explicitly rather than quietly rendering a partial board.
+const BOARD_MAX_ISSUES = 2000;
 
 export function Board() {
   const { projectKey } = useProject();
@@ -23,18 +27,33 @@ export function Board() {
     queryFn: () => api.getBoard(projectKey),
     enabled: !!projectKey,
   });
-  const issues = useQuery({
+  // A board must show the whole project: column contents and WIP warnings are
+  // computed from what's loaded, so a partial page renders a quietly wrong board.
+  // Pages until every issue is in hand (the API caps a single request at 200).
+  const issues = useInfiniteQuery({
     queryKey: ["issues", projectKey, "", "board"],
-    queryFn: () => api.listIssues(projectKey, "", ""),
+    queryFn: ({ pageParam }) => api.listIssues(projectKey, "", "", BOARD_PAGE_SIZE, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, p) => n + p.items.length, 0);
+      return loaded < Math.min(last.total, BOARD_MAX_ISSUES) ? loaded : undefined;
+    },
     enabled: !!projectKey,
   });
+
+  // Keep pulling pages until the project is fully loaded or the ceiling is hit.
+  useEffect(() => {
+    if (issues.hasNextPage && !issues.isFetchingNextPage) issues.fetchNextPage();
+  }, [issues.hasNextPage, issues.isFetchingNextPage, issues.fetchNextPage]);
 
   const transition = useMutation({
     mutationFn: ({ key, to }: { key: string; to: IssueStatus }) => api.transition(key, to),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["issues"] }),
   });
 
-  const items = issues.data?.items ?? [];
+  const items = issues.data?.pages.flatMap((p) => p.items) ?? [];
+  const total = issues.data?.pages[0]?.total ?? 0;
+  const truncated = items.length < total;
   const columns = board.data?.columns ?? [];
   const swimlane = board.data?.swimlane ?? "none";
 
@@ -64,7 +83,9 @@ export function Board() {
         <div className="flex flex-col gap-1.5">
           <h1 className="text-[30px] font-bold leading-none tracking-[-0.02em] text-ink">Board</h1>
           <p className="font-mono text-xs uppercase tracking-[0.06em] text-graphite">
-            {issues.isLoading ? "Loading…" : `Project ${projectKey || "—"} · ${items.length} issues`}
+            {issues.isLoading || issues.isFetchingNextPage
+              ? `Loading… ${items.length}/${total}`
+              : `Project ${projectKey || "—"} · ${items.length} issues`}
             {swimlane !== "none" && ` · lanes by ${swimlane}`}
           </p>
         </div>
@@ -88,6 +109,15 @@ export function Board() {
 
       {issues.isError && <div className="px-9 py-6 text-sm text-critical">{(issues.error as Error).message}</div>}
       {board.isError && <div className="px-9 py-6 text-sm text-critical">{(board.error as Error).message}</div>}
+      {transition.isError && (
+        <div className="px-9 py-3 text-sm text-critical">{(transition.error as Error).message}</div>
+      )}
+      {truncated && !issues.isFetchingNextPage && (
+        <div className="px-9 py-3 text-sm text-graphite">
+          Showing {items.length} of {total} issues — this board is capped at {BOARD_MAX_ISSUES}. Use the
+          issue list with a filter to narrow it down.
+        </div>
+      )}
 
       <div className="flex flex-col gap-6 px-9 py-6">
         {lanes.map((lane) => (

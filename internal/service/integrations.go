@@ -36,6 +36,9 @@ func (h *IntegrationHandlers) GitEvents(w http.ResponseWriter, r *http.Request) 
 		httpapi.WriteProblem(w, http.StatusNotImplemented, "git integration disabled", "")
 		return
 	}
+	if !requireSecret(w, "git", h.cfg.Git.WebhookSecret) {
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody))
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "read body", err.Error())
@@ -79,6 +82,9 @@ func (h *IntegrationHandlers) ObsAlertsHandler(source string) http.HandlerFunc {
 		}
 		if !inbound.Enabled {
 			httpapi.WriteProblem(w, http.StatusNotImplemented, source+" ingestion disabled", "")
+			return
+		}
+		if !requireSecret(w, source, inbound.WebhookSecret) {
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody))
@@ -129,11 +135,16 @@ func (h *IntegrationHandlers) ObsAlertsHandler(source string) http.HandlerFunc {
 	}
 }
 
-// validSignature verifies the GitHub-style HMAC-SHA256 signature. If no secret is
-// configured, verification is skipped (dev/trusted-network mode).
+// validSignature verifies the GitHub-style HMAC-SHA256 signature.
+//
+// An unset secret fails closed. These endpoints sit outside bearer auth and can
+// create issues and drive status transitions, so "no secret configured" has to
+// mean "refuse everything", not "accept anything" — otherwise shipping the default
+// config leaves them open to anonymous writes. Operators who genuinely want an
+// unauthenticated endpoint on a trusted network disable the integration instead.
 func validSignature(r *http.Request, body []byte, secret string) bool {
 	if secret == "" {
-		return true
+		return false
 	}
 	sig := r.Header.Get("X-Hub-Signature-256")
 	if sig == "" {
@@ -142,14 +153,32 @@ func validSignature(r *http.Request, body []byte, secret string) bool {
 	if sig == "" {
 		sig = r.Header.Get("X-OBT-Signature")
 	}
-	sig = strings.TrimPrefix(sig, "sha256=")
+	sig = strings.TrimPrefix(strings.TrimSpace(sig), "sha256=")
 	if sig == "" {
+		return false
+	}
+	// Compare decoded bytes so hex casing doesn't matter and the comparison stays
+	// constant-time over a fixed length.
+	got, err := hex.DecodeString(sig)
+	if err != nil {
 		return false
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
-	expected := hex.EncodeToString(mac.Sum(nil))
-	return hmac.Equal([]byte(sig), []byte(expected))
+	return hmac.Equal(got, mac.Sum(nil))
+}
+
+// requireSecret reports whether an inbound integration is usable, writing a clear
+// operator-facing error when it is enabled but has no signing secret. Without this
+// the misconfiguration surfaces as a bare 401 on every delivery.
+func requireSecret(w http.ResponseWriter, kind, secret string) bool {
+	if secret != "" {
+		return true
+	}
+	httpapi.WriteProblem(w, http.StatusServiceUnavailable, "webhook secret not configured",
+		"set integrations."+kind+".webhook_secret (OMNI_BT_INTEGRATIONS__"+
+			strings.ToUpper(kind)+"__WEBHOOK_SECRET) before sending deliveries, or disable the integration")
+	return false
 }
 
 func gitEventKind(r *http.Request) string {

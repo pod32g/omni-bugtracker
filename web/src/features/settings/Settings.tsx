@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type User } from "../../lib/api";
+import { api, TOKEN_SCOPES, type AutomationRule, type User } from "../../lib/api";
 import { timeAgo } from "../../lib/activity";
 import { Avatar } from "../../components/Badges";
 import { IconPlus } from "../../components/icons";
@@ -11,6 +11,7 @@ export function Settings() {
   const qc = useQueryClient();
   const tokens = useQuery({ queryKey: ["tokens"], queryFn: () => api.listTokens() });
   const [name, setName] = useState("");
+  const [scopes, setScopes] = useState<string[]>([]); // empty = inherit the full role
   const [created, setCreated] = useState<string | null>(null); // plaintext, shown once
   const [copied, setCopied] = useState(false);
 
@@ -23,10 +24,11 @@ export function Settings() {
   });
 
   const create = useMutation({
-    mutationFn: () => api.createToken(name.trim()),
+    mutationFn: () => api.createToken(name.trim(), scopes),
     onSuccess: (t) => {
       setCreated(t.token);
       setName("");
+      setScopes([]);
       qc.invalidateQueries({ queryKey: ["tokens"] });
     },
   });
@@ -59,7 +61,8 @@ export function Settings() {
             <p className="text-sm leading-relaxed text-graphite">
               Call the API with a token as{" "}
               <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-ink">Authorization: Bearer obt_…</code>.
-              A token authenticates as your account and inherits your role.
+              A token authenticates as your account. Leave the scopes empty and it inherits your role in
+              full; tick scopes to restrict it — scopes can only narrow what your role already allows.
             </p>
           </div>
 
@@ -109,6 +112,29 @@ export function Settings() {
               {create.isPending ? "Creating…" : "Create token"}
             </button>
           </div>
+          <div className="flex flex-col gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+              Scopes {scopes.length === 0 && "· none selected (full access as you)"}
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {TOKEN_SCOPES.map((sc) => {
+                const on = scopes.includes(sc);
+                return (
+                  <button
+                    key={sc}
+                    onClick={() => setScopes((cur) => (on ? cur.filter((v) => v !== sc) : [...cur, sc]))}
+                    className={`rounded-full border px-2.5 py-1 font-mono text-[11px] transition ${
+                      on
+                        ? "border-blueprint bg-blueprint-soft text-blueprint"
+                        : "border-hairline text-graphite-soft hover:border-graphite hover:text-graphite"
+                    }`}
+                  >
+                    {sc}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           {create.isError && <p className="text-sm text-critical">{(create.error as Error).message}</p>}
 
           <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
@@ -122,7 +148,8 @@ export function Settings() {
                   <div className="text-sm font-medium text-ink">{t.name}</div>
                   <div className="font-mono text-xs text-graphite-soft">
                     created {timeAgo(t.created_at)} ·{" "}
-                    {t.last_used_at ? `last used ${timeAgo(t.last_used_at)}` : "never used"}
+                    {t.last_used_at ? `last used ${timeAgo(t.last_used_at)}` : "never used"} ·{" "}
+                    {t.scopes?.length ? t.scopes.join(" ") : "full access"}
                   </div>
                 </div>
                 <button
@@ -480,8 +507,17 @@ export function AutomationSection() {
     mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) => api.updateAutomationRule(id, { is_active }),
     onSuccess: invalidate,
   });
+  const edit = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Parameters<typeof api.updateAutomationRule>[1] }) =>
+      api.updateAutomationRule(id, patch),
+    onSuccess: () => {
+      setEditingId(null);
+      invalidate();
+    },
+  });
   const del = useMutation({ mutationFn: (id: string) => api.deleteAutomationRule(id), onSuccess: invalidate });
 
+  const [editingId, setEditingId] = useState<string | null>(null);
   const items = rules.data?.items ?? [];
   const kindMeta = ACTION_KINDS.find((k) => k.kind === actionKind)!;
   const inputClass =
@@ -547,32 +583,49 @@ export function AutomationSection() {
       <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
         {rules.isSuccess && items.length === 0 && <div className="p-4 text-sm text-graphite-soft">No rules yet.</div>}
         {items.map((r) => (
-          <div key={r.id} className="flex items-center gap-3 p-3.5">
-            <span className={`h-2 w-2 shrink-0 rounded-full ${r.is_active ? "bg-resolved" : "bg-hairline"}`} />
-            <div className="min-w-0 grow">
-              <div className="text-sm font-medium text-ink">{r.name}</div>
-              <div className="truncate font-mono text-xs text-graphite-soft">
-                when {r.trigger.event}
-                {r.trigger.conditions && Object.entries(r.trigger.conditions).map(([k, v]) => ` · ${k}=${v}`)}
-                {" → "}
-                {r.actions.map((a) => `${a.kind}:${a.value}`).join(", ")}
-                {r.project_key ? ` · ${r.project_key}` : " · all projects"}
+          <div key={r.id} className="flex flex-col">
+            <div className="flex items-center gap-3 p-3.5">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${r.is_active ? "bg-resolved" : "bg-hairline"}`} />
+              <div className="min-w-0 grow">
+                <div className="text-sm font-medium text-ink">{r.name}</div>
+                <div className="truncate font-mono text-xs text-graphite-soft">
+                  when {r.trigger.event}
+                  {r.trigger.conditions && Object.entries(r.trigger.conditions).map(([k, v]) => ` · ${k}=${v}`)}
+                  {" → "}
+                  {r.actions.map((a) => `${a.kind}:${a.value}`).join(", ")}
+                  {r.project_key ? ` · ${r.project_key}` : " · all projects"}
+                </div>
               </div>
+              <button
+                onClick={() => setEditingId(editingId === r.id ? null : r.id)}
+                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink"
+              >
+                {editingId === r.id ? "Close" : "Edit"}
+              </button>
+              <button
+                onClick={() => toggle.mutate({ id: r.id, is_active: !r.is_active })}
+                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink"
+              >
+                {r.is_active ? "Disable" : "Enable"}
+              </button>
+              <button
+                onClick={() => {
+                  if (window.confirm(`Delete rule “${r.name}”?`)) del.mutate(r.id);
+                }}
+                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-critical transition hover:border-critical"
+              >
+                Delete
+              </button>
             </div>
-            <button
-              onClick={() => toggle.mutate({ id: r.id, is_active: !r.is_active })}
-              className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink"
-            >
-              {r.is_active ? "Disable" : "Enable"}
-            </button>
-            <button
-              onClick={() => {
-                if (window.confirm(`Delete rule “${r.name}”?`)) del.mutate(r.id);
-              }}
-              className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-critical transition hover:border-critical"
-            >
-              Delete
-            </button>
+            {editingId === r.id && (
+              <RuleEditor
+                rule={r}
+                pending={edit.isPending}
+                error={edit.error as Error | null}
+                onSave={(patch) => edit.mutate({ id: r.id, patch })}
+                onCancel={() => setEditingId(null)}
+              />
+            )}
           </div>
         ))}
       </div>
@@ -595,5 +648,92 @@ export function AutomationSection() {
         </div>
       )}
     </section>
+  );
+}
+
+// RuleEditor edits a rule's actual logic — name, trigger event, severity condition
+// and its action. Without it the UI could only toggle a rule on and off, so fixing a
+// mistyped rule meant deleting and recreating it.
+function RuleEditor({
+  rule,
+  pending,
+  error,
+  onSave,
+  onCancel,
+}: {
+  rule: AutomationRule;
+  pending: boolean;
+  error: Error | null;
+  onSave: (patch: Parameters<typeof api.updateAutomationRule>[1]) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(rule.name);
+  const [event, setEvent] = useState(rule.trigger.event);
+  const [severity, setSeverity] = useState(rule.trigger.conditions?.severity ?? "");
+  const [kind, setKind] = useState(rule.actions[0]?.kind ?? "set_priority");
+  const [value, setValue] = useState(rule.actions[0]?.value ?? "");
+
+  const meta = ACTION_KINDS.find((k) => k.kind === kind) ?? ACTION_KINDS[0];
+  const inputClass =
+    "rounded-md border border-hairline bg-paper px-2.5 py-2 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint";
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-hairline bg-panel/50 p-3.5">
+      <div className="flex flex-wrap items-end gap-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Rule name" className={`${inputClass} w-40`} />
+        <span className="pb-2 text-sm text-graphite-soft">when</span>
+        <select value={event} onChange={(e) => setEvent(e.target.value)} className={inputClass}>
+          {RULE_EVENTS.map((ev) => (
+            <option key={ev} value={ev}>{ev === "*" ? "any event" : ev}</option>
+          ))}
+        </select>
+        <select value={severity} onChange={(e) => setSeverity(e.target.value)} className={inputClass}>
+          <option value="">any severity</option>
+          {["critical", "high", "medium", "low"].map((sv) => (
+            <option key={sv} value={sv}>severity {sv}</option>
+          ))}
+        </select>
+        <span className="pb-2 text-sm text-graphite-soft">then</span>
+        <select
+          value={kind}
+          onChange={(e) => {
+            const m = ACTION_KINDS.find((k) => k.kind === e.target.value)!;
+            setKind(e.target.value);
+            setValue(m.values ? m.values[0] : "");
+          }}
+          className={inputClass}
+        >
+          {ACTION_KINDS.map((k) => (
+            <option key={k.kind} value={k.kind}>{k.label}</option>
+          ))}
+        </select>
+        {meta.values ? (
+          <select value={value} onChange={(e) => setValue(e.target.value)} className={inputClass}>
+            {meta.values.map((v) => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+        ) : (
+          <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="value…" className={`${inputClass} w-36`} />
+        )}
+        <button
+          disabled={!name.trim() || !value.trim() || pending}
+          onClick={() =>
+            onSave({
+              name: name.trim(),
+              trigger: { event, conditions: severity ? { severity } : undefined },
+              actions: [{ kind, value: value.trim() }],
+            })
+          }
+          className="h-[38px] rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+        >
+          {pending ? "Saving…" : "Save rule"}
+        </button>
+        <button onClick={onCancel} className="h-[38px] px-3 text-sm text-graphite transition hover:text-ink">
+          Cancel
+        </button>
+      </div>
+      {error && <p className="text-sm text-critical">{error.message}</p>}
+    </div>
   );
 }

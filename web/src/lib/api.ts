@@ -33,6 +33,19 @@ export interface ProjectMember {
   created_at: string;
 }
 
+// Permissions an API token can be scoped to; mirrors auth.AllPermissions on the server.
+export const TOKEN_SCOPES = [
+  "issue:create",
+  "issue:update",
+  "issue:transition",
+  "issue:delete",
+  "comment:create",
+  "project:manage",
+  "automation:edit",
+  "webhook:edit",
+  "admin:all",
+] as const;
+
 export interface ApiToken {
   id: string;
   name: string;
@@ -256,6 +269,7 @@ export interface SearchHit {
 }
 
 export interface DashboardOverview {
+  project_key?: string; // scope these figures were computed over ("" = all projects)
   open_issues: number;
   critical_issues: number;
   avg_resolution_hours: number;
@@ -339,7 +353,12 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ auto_after_days: autoAfterDays }),
     }),
-  dashboard: () => request<DashboardOverview>("/dashboards/overview"),
+  // Scoped to one project when a key is given — the overview is labelled per-project
+  // in the UI, so an unscoped call would show install-wide numbers under a project name.
+  dashboard: (projectKey?: string) =>
+    request<DashboardOverview>(
+      `/dashboards/overview${projectKey ? `?project=${encodeURIComponent(projectKey)}` : ""}`,
+    ),
   search: (q: string, limit = 20) =>
     request<{ items: SearchHit[]; total: number; source: string }>(
       `/search?q=${encodeURIComponent(q)}&limit=${limit}`,
@@ -356,6 +375,8 @@ export const api = {
     request<Project>(`/projects/${key}/rename-key`, { method: "POST", body: JSON.stringify({ new_key: newKey }) }),
   archiveProject: (key: string) => request<void>(`/projects/${key}`, { method: "DELETE" }),
   listTokens: () => request<{ items: ApiToken[] }>("/me/tokens"),
+  // An empty `scopes` means the token inherits the owner's role unrestricted; a
+  // non-empty list narrows it to those permissions.
   createToken: (name: string, scopes: string[] = []) =>
     request<ApiToken & { token: string }>("/me/tokens", { method: "POST", body: JSON.stringify({ name, scopes }) }),
   revokeToken: (id: string) => request<void>(`/me/tokens/${id}`, { method: "DELETE" }),
@@ -422,7 +443,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ target_project_key: targetProjectKey }),
     }),
-  listComments: (issueKey: string) => request<Comment[]>(`/issues/${issueKey}/comments`),
+  // `total` is the unpaged count — page with offset until you've collected `total`.
+  listComments: (issueKey: string, limit = 100, offset = 0) =>
+    request<{ items: Comment[]; total: number }>(
+      `/issues/${issueKey}/comments?limit=${limit}&offset=${offset}`,
+    ),
   addComment: (issueKey: string, body_md: string) =>
     request<Comment>(`/issues/${issueKey}/comments`, {
       method: "POST",
@@ -447,8 +472,16 @@ export const api = {
     trigger: { event: string; conditions?: Record<string, string> };
     actions: { kind: string; value: string }[];
   }) => request<AutomationRule>("/automation/rules", { method: "POST", body: JSON.stringify(body) }),
-  updateAutomationRule: (id: string, patch: { name?: string; is_active?: boolean; priority?: number }) =>
-    request<AutomationRule>(`/automation/rules/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  updateAutomationRule: (
+    id: string,
+    patch: {
+      name?: string;
+      is_active?: boolean;
+      priority?: number;
+      trigger?: { event: string; conditions?: Record<string, string> };
+      actions?: { kind: string; value: string }[];
+    },
+  ) => request<AutomationRule>(`/automation/rules/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteAutomationRule: (id: string) => request<void>(`/automation/rules/${id}`, { method: "DELETE" }),
   listAutomationRuns: () => request<{ items: AutomationRun[] }>("/automation/runs"),
   listWebhooks: () => request<{ items: Webhook[] }>("/webhooks"),
@@ -474,8 +507,9 @@ export const api = {
     };
     status?: IssueStatus;
     target_project_key?: string;
+    archived?: boolean;
   }) =>
-    request<{ updated: number; failed: { key: string; error: string }[] }>("/issues/bulk", {
+    request<{ updated: number; skipped: number; failed: { key: string; error: string }[] }>("/issues/bulk", {
       method: "POST",
       body: JSON.stringify(body),
     }),
@@ -497,7 +531,10 @@ export const api = {
   updateComment: (id: string, body_md: string) =>
     request<Comment>(`/comments/${id}`, { method: "PATCH", body: JSON.stringify({ body_md }) }),
   deleteComment: (id: string) => request<void>(`/comments/${id}`, { method: "DELETE" }),
-  activity: (issueKey: string) => request<Activity[]>(`/issues/${issueKey}/activity`),
+  activity: (issueKey: string, limit = 100, offset = 0) =>
+    request<{ items: Activity[]; total: number }>(
+      `/issues/${issueKey}/activity?limit=${limit}&offset=${offset}`,
+    ),
   commits: (issueKey: string) => request<LinkedCommit[]>(`/issues/${issueKey}/commits`),
   listAttachments: (issueKey: string) => request<{ items: Attachment[] }>(`/issues/${issueKey}/attachments`),
   // Multipart upload — bypasses request() because the browser must set the

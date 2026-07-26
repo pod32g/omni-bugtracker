@@ -591,8 +591,14 @@ paths:
     get:
       tags: [issues]
       operationId: listIssueActivity
+      description: >
+        One page of the issue timeline. `total` is the unpaged count — page with
+        `offset` until you have collected `total` entries.
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
       responses:
-        "200": { description: timeline, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Activity" } } } } }
+        "200": { description: timeline, content: { application/json: { schema: { $ref: "#/components/schemas/ActivityList" } } } }
 
   /issues/{issueKey}/commits:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
@@ -608,8 +614,14 @@ paths:
     get:
       tags: [comments]
       operationId: listComments
+      description: >
+        One page of an issue's comments. `total` is the unpaged count — page with
+        `offset` until you have collected `total` comments.
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
       responses:
-        "200": { description: comments, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Comment" } } } } }
+        "200": { description: comments, content: { application/json: { schema: { $ref: "#/components/schemas/CommentList" } } } }
     post:
       tags: [comments]
       operationId: createComment
@@ -1036,6 +1048,7 @@ paths:
           schema: { type: string }
         - name: range
           in: query
+          description: "Reserved; not yet implemented — every figure is all-time except mttr_hours (30d)."
           schema: { type: string, default: "30d" }
       responses:
         "200": { description: metrics, content: { application/json: { schema: { $ref: "#/components/schemas/DashboardOverview" } } } }
@@ -1050,6 +1063,10 @@ components:
       name: limit
       in: query
       schema: { type: integer, default: 50, maximum: 200 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, default: 0, minimum: 0 }
     Cursor:
       name: cursor
       in: query
@@ -1207,6 +1224,16 @@ components:
         items: { type: array, items: { $ref: "#/components/schemas/Issue" } }
         next_cursor: { type: string, nullable: true }
         total: { type: integer }
+    CommentList:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Comment" } }
+        total: { type: integer, description: unpaged count }
+    ActivityList:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Activity" } }
+        total: { type: integer, description: unpaged count }
     CreateIssue:
       type: object
       required: [title]
@@ -1457,6 +1484,7 @@ components:
     DashboardOverview:
       type: object
       properties:
+        project_key: { type: string, description: "scope of these figures; absent = all projects" }
         open_issues: { type: integer }
         critical_issues: { type: integer }
         avg_resolution_hours: { type: number }
