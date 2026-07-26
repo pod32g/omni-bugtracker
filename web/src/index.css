@@ -109,6 +109,11 @@ body {
 .markdown pre code {
   @apply border-0 bg-transparent p-0 text-terminal-ink;
 }
+/* @mentions: visible as a mention without pretending to be a link — there is no user
+   page to open, and a dead anchor is worse than a highlight. */
+.markdown .mention {
+  @apply rounded bg-blueprint-soft px-1 py-0.5 text-[0.95em] font-medium text-blueprint;
+}
 .markdown blockquote {
   @apply my-2 border-l-2 border-hairline pl-3 text-graphite;
 }

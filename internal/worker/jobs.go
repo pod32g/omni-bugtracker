@@ -50,6 +50,9 @@ func (w *eventWorker) Work(ctx context.Context, job *river.Job[events.DomainEven
 		}, nil); err != nil {
 			return err
 		}
+		if err := w.fanOutMentions(ctx, client, ev); err != nil {
+			return err
+		}
 	}
 	// Fan out to subscribed webhooks: active hooks whose event filter matches
 	// (empty filter = everything) and whose project scope covers the issue.
@@ -59,6 +62,31 @@ func (w *eventWorker) Work(ctx context.Context, job *river.Job[events.DomainEven
 		}
 	}
 	return nil
+}
+
+// fanOutMentions turns newly recorded @mentions into their own notification, separate
+// from the watcher fan-out above. Being named is a different signal from "something
+// happened on an issue you follow", and collapsing the two is how a mention becomes
+// just more noise.
+//
+// Claiming is what makes it exactly-once: the same write produces several events
+// (issue.updated and comment.created both fire), and every one of them runs this.
+func (w *eventWorker) fanOutMentions(ctx context.Context, client *river.Client[pgx.Tx], ev events.DomainEventArgs) error {
+	issueID, err := uuid.Parse(ev.IssueID)
+	if err != nil {
+		return nil //nolint:nilerr
+	}
+	recipients, err := w.d.Store.ClaimPendingMentions(ctx, issueID)
+	if err != nil || len(recipients) == 0 {
+		return err
+	}
+	_, err = client.Insert(ctx, events.NotifyJobArgs{
+		EventType:  events.UserMentioned,
+		IssueID:    ev.IssueID,
+		ActorID:    ev.ActorID,
+		Recipients: recipients,
+	}, nil)
+	return err
 }
 
 func (w *eventWorker) fanOutWebhooks(ctx context.Context, client *river.Client[pgx.Tx], ev events.DomainEventArgs) error {
@@ -140,11 +168,16 @@ func (w *notifyWorker) Work(ctx context.Context, job *river.Job[events.NotifyJob
 	// Recipients = watchers minus the actor (people don't need to hear about
 	// their own edits). Included as labels so Omni-Notify routes/templates can
 	// use them; concrete delivery channels are configured in Omni-Notify.
-	var recipients []string
-	if watchers, err := w.d.Store.ListWatchers(ctx, issue.ID); err == nil {
-		for _, u := range watchers {
-			if u.ID.String() != job.Args.ActorID {
-				recipients = append(recipients, u.Email)
+	//
+	// An explicit list on the job wins: a mention is addressed to the people named,
+	// not to everyone watching. The field existed unused until mentions needed it.
+	recipients := job.Args.Recipients
+	if len(recipients) == 0 {
+		if watchers, err := w.d.Store.ListWatchers(ctx, issue.ID); err == nil {
+			for _, u := range watchers {
+				if u.ID.String() != job.Args.ActorID {
+					recipients = append(recipients, u.Email)
+				}
 			}
 		}
 	}
@@ -206,6 +239,8 @@ func humanEventSummary(eventType string, issue domain.Issue) string {
 		return issue.Key + " was closed"
 	case events.IssueReopened:
 		return issue.Key + " was reopened"
+	case events.UserMentioned:
+		return "You were mentioned on " + issue.Key
 	case events.IssueCommented:
 		return "New comment on " + issue.Key
 	case events.IssueStatusChanged:

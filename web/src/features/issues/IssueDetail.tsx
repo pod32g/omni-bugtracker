@@ -18,6 +18,7 @@ import {
 } from "../../lib/api";
 import { describeActivity, timeAgo } from "../../lib/activity";
 import { remarkIssueKeys } from "../../lib/issueRefs";
+import { matchUsers, mentionQuery, preferredHandle, remarkMentions } from "../../lib/mentions";
 import { Avatar, LabelChip, PriorityText, SeverityMark, SeverityPill, StatusPill, statusLabel, statusTone } from "../../components/Badges";
 import { IconBranch, IconChevronDown, IconCommit, IconEye, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
 import { EditIssueForm } from "./EditIssueForm";
@@ -287,15 +288,10 @@ export function IssueDetail() {
 
             <div className="flex items-start gap-3">
               <Avatar user={i.reporter} size={28} />
-              <textarea
-                ref={composerRef}
+              <MentionTextarea
+                textareaRef={composerRef}
                 value={comment}
-                onChange={(e) => {
-                  setComment(e.target.value);
-                  const t = e.currentTarget;
-                  t.style.height = "auto";
-                  t.style.height = `${Math.min(t.scrollHeight, 176)}px`; // grow with content, cap at ~176px
-                }}
+                onChange={setComment}
                 placeholder="Leave a comment… (Markdown supported)"
                 rows={2}
                 className="max-h-44 grow resize-none overflow-y-auto rounded-md border border-hairline bg-paper px-3.5 py-2.5 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
@@ -581,6 +577,123 @@ function LinkedIssues({ issueKey }: { issueKey: string }) {
   );
 }
 
+/**
+ * MentionTextarea is the comment composer with @-autocomplete.
+ *
+ * Keyboard-first: ↑/↓ move, Enter or Tab accept, Escape dismisses. Those keys only get
+ * intercepted while the picker is open, so Enter still means newline the rest of the
+ * time — the alternative is a composer that eats your paragraph breaks.
+ */
+function MentionTextarea({
+  textareaRef,
+  value,
+  onChange,
+  placeholder,
+  rows,
+  className,
+}: {
+  textareaRef: React.RefObject<HTMLTextAreaElement>;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  rows?: number;
+  className?: string;
+}) {
+  const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+  const [active, setActive] = useState(0);
+
+  const candidates = mention ? matchUsers(users.data?.items ?? [], mention.query) : [];
+  const open = mention !== null && candidates.length > 0;
+
+  const refresh = (el: HTMLTextAreaElement) => {
+    setMention(mentionQuery(el.value, el.selectionStart ?? el.value.length));
+    setActive(0);
+  };
+
+  const accept = (index: number) => {
+    const user = candidates[index];
+    if (!user || !mention) return;
+    const el = textareaRef.current;
+    const caret = el?.selectionStart ?? value.length;
+    const handle = preferredHandle(user);
+    const next = `${value.slice(0, mention.start)}@${handle} ${value.slice(caret)}`;
+    onChange(next);
+    setMention(null);
+    // Put the caret after the inserted handle rather than at the end of the body —
+    // mentioning someone mid-sentence must not jump you to the bottom of it.
+    const at = mention.start + handle.length + 2;
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(at, at);
+    });
+  };
+
+  return (
+    <div className="relative grow">
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          refresh(e.currentTarget);
+          const t = e.currentTarget;
+          t.style.height = "auto";
+          t.style.height = `${Math.min(t.scrollHeight, 176)}px`; // grow with content, cap at ~176px
+        }}
+        onClick={(e) => refresh(e.currentTarget)}
+        onKeyUp={(e) => {
+          if (e.key === "ArrowLeft" || e.key === "ArrowRight") refresh(e.currentTarget);
+        }}
+        onKeyDown={(e) => {
+          if (!open) return;
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setActive((i) => (i + 1) % candidates.length);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActive((i) => (i - 1 + candidates.length) % candidates.length);
+          } else if (e.key === "Enter" || e.key === "Tab") {
+            e.preventDefault();
+            accept(active);
+          } else if (e.key === "Escape") {
+            setMention(null);
+          }
+        }}
+        onBlur={() => setMention(null)}
+        placeholder={placeholder}
+        rows={rows}
+        className={`w-full ${className ?? ""}`}
+      />
+      {open && (
+        <ul className="absolute bottom-full left-0 z-20 mb-1 w-64 overflow-hidden rounded-md border border-hairline bg-paper shadow-lg">
+          {candidates.map((u, index) => (
+            <li key={u.id}>
+              <button
+                type="button"
+                // onMouseDown, not onClick: blur fires first and would close the list
+                // before the click ever lands.
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  accept(index);
+                }}
+                onMouseEnter={() => setActive(index)}
+                className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm ${
+                  index === active ? "bg-blueprint-soft text-ink" : "text-graphite"
+                }`}
+              >
+                <Avatar user={u} size={18} />
+                <span className="truncate">{u.display_name}</span>
+                <span className="truncate font-mono text-[11px] text-graphite-soft">@{preferredHandle(u)}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ReferencedBy lists issues whose prose mentions this one. Read-only by design: a
 // reference is derived from the text, so the way to remove one is to edit the sentence
 // that made it, not to click an ✕ here and have it reappear on the next save.
@@ -805,7 +918,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 // MARKDOWN_PLUGINS and MarkdownLink are shared by every body on the page: descriptions,
 // bug narrative callouts and comments. Centralised so a new call site cannot quietly opt
 // out of issue-key linkification.
-const MARKDOWN_PLUGINS = [remarkGfm, remarkIssueKeys];
+const MARKDOWN_PLUGINS = [remarkGfm, remarkIssueKeys, remarkMentions];
 
 /** Keeps in-app links inside the SPA; anything external opens safely in a new tab. */
 function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {

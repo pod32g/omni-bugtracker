@@ -344,10 +344,13 @@ func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, pu
 			return domain.Issue{}, err
 		}
 	}
-	if err := syncReferences(ctx, tx, issue.ID, nil, issue.Key, in.ReporterID,
-		strings.Join([]string{in.DescriptionMD, in.ReproStepsMD, in.ExpectedMD,
-			in.ActualMD, in.EnvironmentMD}, "\n")); err != nil {
+	body := strings.Join([]string{in.DescriptionMD, in.ReproStepsMD, in.ExpectedMD,
+		in.ActualMD, in.EnvironmentMD}, "\n")
+	if err := syncReferences(ctx, tx, issue.ID, nil, issue.Key, in.ReporterID, body); err != nil {
 		return domain.Issue{}, fmt.Errorf("sync references: %w", err)
+	}
+	if err := syncMentions(ctx, tx, issue.ID, nil, in.ReporterID, body); err != nil {
+		return domain.Issue{}, fmt.Errorf("sync mentions: %w", err)
 	}
 	// Auto-watch: the reporter and initial assignee follow their issue.
 	if err := addWatcher(ctx, tx, issue.ID, in.ReporterID); err != nil {
@@ -656,12 +659,15 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		return domain.Issue{}, err
 	}
 	// The patch is partial, so the post-update prose is the only reliable source.
-	key, prose, err := issueProse(ctx, tx, id)
+	key, body, err := issueProse(ctx, tx, id)
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	if err := syncReferences(ctx, tx, id, nil, key, actor, prose); err != nil {
+	if err := syncReferences(ctx, tx, id, nil, key, actor, body); err != nil {
 		return domain.Issue{}, fmt.Errorf("sync references: %w", err)
+	}
+	if err := syncMentions(ctx, tx, id, nil, actor, body); err != nil {
+		return domain.Issue{}, fmt.Errorf("sync mentions: %w", err)
 	}
 	// Auto-watch: a newly assigned user follows the issue.
 	if in.AssigneeID != nil && *in.AssigneeID != uuid.Nil {
@@ -800,6 +806,9 @@ func (s *Store) AddComment(ctx context.Context, issueID, author uuid.UUID, body 
 	if err := syncReferences(ctx, tx, issueID, &c.ID, key, author, body); err != nil {
 		return domain.Comment{}, fmt.Errorf("sync references: %w", err)
 	}
+	if err := syncMentions(ctx, tx, issueID, &c.ID, author, body); err != nil {
+		return domain.Comment{}, fmt.Errorf("sync mentions: %w", err)
+	}
 	if publish != nil {
 		if err := publish(tx); err != nil {
 			return domain.Comment{}, err
@@ -891,6 +900,9 @@ func (s *Store) UpdateComment(ctx context.Context, id, actor uuid.UUID, bodyMD s
 	}
 	if err := syncReferences(ctx, tx, issueID, &id, key, actor, bodyMD); err != nil {
 		return domain.Comment{}, fmt.Errorf("sync references: %w", err)
+	}
+	if err := syncMentions(ctx, tx, issueID, &id, actor, bodyMD); err != nil {
+		return domain.Comment{}, fmt.Errorf("sync mentions: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Comment{}, err

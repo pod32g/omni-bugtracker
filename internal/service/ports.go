@@ -138,6 +138,10 @@ type Repository interface {
 
 	// Issue relations (blocks / duplicates / relates / caused_by)
 	ListRelations(ctx context.Context, issueID uuid.UUID) ([]domain.IssueRelation, error)
+	// ClaimPendingMentions stamps and returns the email addresses of everyone newly
+	// @mentioned on an issue. The claim is the stamp, so a mention notifies exactly
+	// once however many events fire for the issue.
+	ClaimPendingMentions(ctx context.Context, issueID uuid.UUID) ([]string, error)
 	// ListReferencedBy returns the issues whose prose mentions this one. Derived from
 	// the text on every write, unlike relations, which are created deliberately.
 	ListReferencedBy(ctx context.Context, issueID uuid.UUID) ([]domain.IssueReference, error)

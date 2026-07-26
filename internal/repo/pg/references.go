@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/omni/bugtracker/internal/domain"
-	"github.com/omni/bugtracker/internal/git"
+	"github.com/omni/bugtracker/internal/prose"
 )
 
 // syncReferences recomputes the cross-references carried by one piece of prose.
@@ -25,7 +25,7 @@ func syncReferences(
 	sourceIssueID uuid.UUID, sourceCommentID *uuid.UUID, sourceKey string,
 	actor uuid.UUID, text string,
 ) error {
-	targets, err := resolveKeys(ctx, tx, git.ParseKeys(text))
+	targets, err := resolveKeys(ctx, tx, prose.ParseKeys(text))
 	if err != nil {
 		return err
 	}
@@ -69,7 +69,7 @@ func syncReferences(
 // issueProse returns an issue's key and every narrative field concatenated — the text
 // a cross-reference can be written in. Used where the caller holds a partial patch and
 // so cannot know what the body says after the update.
-func issueProse(ctx context.Context, tx pgx.Tx, issueID uuid.UUID) (key, prose string, err error) {
+func issueProse(ctx context.Context, tx pgx.Tx, issueID uuid.UUID) (key, text string, err error) {
 	var projectKey string
 	var number int32
 	err = tx.QueryRow(ctx,
@@ -77,16 +77,16 @@ func issueProse(ctx context.Context, tx pgx.Tx, issueID uuid.UUID) (key, prose s
 		        concat_ws(E'\n', i.description_md, i.repro_steps_md, i.expected_md,
 		                  i.actual_md, i.environment_md)
 		   FROM issues i JOIN projects p ON p.id = i.project_id
-		  WHERE i.id = $1`, issueID).Scan(&projectKey, &number, &prose)
+		  WHERE i.id = $1`, issueID).Scan(&projectKey, &number, &text)
 	if err != nil {
 		return "", "", err
 	}
-	return domain.IssueKey(projectKey, number), prose, nil
+	return domain.IssueKey(projectKey, number), text, nil
 }
 
 // resolveKeys turns parsed keys into issue ids, dropping the ones that name no issue —
 // "RFC-2119" in a sentence costs one lookup and links nothing.
-func resolveKeys(ctx context.Context, tx pgx.Tx, keys []git.Key) ([]uuid.UUID, error) {
+func resolveKeys(ctx context.Context, tx pgx.Tx, keys []prose.Key) ([]uuid.UUID, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	}
