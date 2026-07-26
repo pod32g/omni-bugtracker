@@ -107,6 +107,10 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/projects/{key}/issues/export", h.exportIssues)
 	r.Get("/projects/{key}/issues/similar", h.similarIssues)
 	r.Post("/issues/bulk", h.bulkUpdateIssues)
+	// Project-less list: the same filter grammar across every project the caller can
+	// see. Registered before the {issueKey} route for readability; chi matches the
+	// static path either way.
+	r.Get("/issues", h.listAllIssues)
 	r.Get("/issues/{issueKey}", h.getIssue)
 	r.Patch("/issues/{issueKey}", h.updateIssue)
 	r.Delete("/issues/{issueKey}", h.deleteIssue)
@@ -1562,9 +1566,19 @@ func (h *httpHandlers) deleteRelease(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// listAllIssues is listIssues without a project scope, for the cross-project queue.
+// People have one attention span across many projects; the tracker having one page that
+// matches is the difference between a system of record and somewhere you start the day.
+func (h *httpHandlers) listAllIssues(w http.ResponseWriter, r *http.Request) {
+	h.issueList(w, r, "")
+}
+
 func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
+	h.issueList(w, r, chi.URLParam(r, "key"))
+}
+
+func (h *httpHandlers) issueList(w http.ResponseWriter, r *http.Request, key string) {
 	p := auth.FromContext(r.Context())
-	key := chi.URLParam(r, "key")
 	f, badTerms := ParseFilter(key, r.URL.Query().Get("filter"), p.UserID)
 	// A typo in the filter box is the caller's mistake, not a server fault: unknown
 	// enum values would otherwise reach Postgres and fail the whole query as a 500.

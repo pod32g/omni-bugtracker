@@ -200,3 +200,36 @@ func TestParseFilterSnoozedIsOrthogonalToStatus(t *testing.T) {
 		t.Error("is:snoozed is not is:archived")
 	}
 }
+
+// The cross-project queue is built from these: "things I have a stake in", which is a
+// different question from "things in this project".
+func TestParseFilterStakeTerms(t *testing.T) {
+	me := uuid.New()
+	f, bad := ParseFilter("", "is:watching is:mentioned reporter:@me", me.String())
+	if len(bad) != 0 {
+		t.Fatalf("unexpected errors: %v", bad)
+	}
+	if !f.Watching || !f.Mentioned {
+		t.Errorf("watching=%v mentioned=%v, want both true", f.Watching, f.Mentioned)
+	}
+	if f.ReporterID == nil || *f.ReporterID != me {
+		t.Errorf("reporter = %v, want %v", f.ReporterID, me)
+	}
+	if f.ProjectKey != "" {
+		t.Errorf("an empty project key must survive as empty, got %q", f.ProjectKey)
+	}
+}
+
+// Fail closed, exactly as assignee does: matching every issue in every project because
+// @me could not be resolved is the worst possible answer.
+func TestParseFilterStakeTermsFailClosed(t *testing.T) {
+	for _, raw := range []string{"is:watching", "is:mentioned", "reporter:@me"} {
+		f, bad := ParseFilter("", raw, "not-a-uuid")
+		if len(bad) == 0 {
+			t.Errorf("%q with an unresolvable user should be a validation error", raw)
+		}
+		if f.Watching || f.Mentioned || f.ReporterID != nil {
+			t.Errorf("%q must not set a filter it could not resolve", raw)
+		}
+	}
+}

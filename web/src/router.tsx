@@ -1,4 +1,5 @@
 import { Inbox } from "./features/inbox/Inbox";
+import { MyWork } from "./features/mywork/MyWork";
 import { createBrowserRouter } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./features/dashboard/Dashboard";
@@ -17,6 +18,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Dashboard /> },
       { path: "board", element: <Board /> },
+      { path: "my", element: <MyWork /> },
       { path: "inbox", element: <Inbox /> },
       { path: "issues", element: <IssueList /> },
       { path: "issues/:issueKey", element: <IssueDetail /> },

@@ -441,7 +441,9 @@ func (s *Store) EachIssue(ctx context.Context, f service.IssueFilter, fn func(do
 // issueWhere builds the shared filter predicate and its arguments. Kept in one place so
 // an export can never disagree with the list it was launched from.
 func issueWhere(f service.IssueFilter) (string, []any) {
-	where := []string{"i.deleted_at IS NULL", "p.key = $1"}
+	// An empty project key means every project, which is what the cross-project
+	// queue asks for; the dashboard's scope clause already worked this way.
+	where := []string{"i.deleted_at IS NULL", "($1 = '' OR p.key = $1)"}
 	// Archived issues are hidden from the default list; `is:archived` shows only them.
 	if f.ShowArchived {
 		where = append(where, "i.archived_at IS NOT NULL")
@@ -473,6 +475,15 @@ func issueWhere(f service.IssueFilter) (string, []any) {
 	}
 	if f.AssigneeID != nil {
 		add("i.assignee_id = $%d", *f.AssigneeID)
+	}
+	if f.ReporterID != nil {
+		add("i.reporter_id = $%d", *f.ReporterID)
+	}
+	if f.Watching && f.MeUserID != nil {
+		add("EXISTS (SELECT 1 FROM issue_watchers w WHERE w.issue_id = i.id AND w.user_id = $%d)", *f.MeUserID)
+	}
+	if f.Mentioned && f.MeUserID != nil {
+		add("EXISTS (SELECT 1 FROM issue_mentions m WHERE m.issue_id = i.id AND m.user_id = $%d)", *f.MeUserID)
 	}
 	if f.Type != nil {
 		add("i.type = $%d", string(*f.Type))

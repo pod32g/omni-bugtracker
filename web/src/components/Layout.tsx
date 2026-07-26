@@ -42,7 +42,7 @@ export function Layout() {
   useEffect(() => setNavOpen(false), [location.pathname]);
 
   // g-then-key jumps between the main views, the way every keyboard-driven tracker does.
-  useChord("g", { i: "/issues", b: "/board", d: "/", m: "/milestones", r: "/releases", s: "/settings", n: "/inbox" }, navigate);
+  useChord("g", { i: "/issues", b: "/board", d: "/", m: "/milestones", r: "/releases", s: "/settings", n: "/inbox", w: "/my" }, navigate);
 
   useShortcut((e) => {
     if (e.key === "?") {
@@ -219,6 +219,10 @@ function Sidebar({ me, onSearch, open }: { me?: User; onSearch: () => void; open
         <div className="px-2 pb-2 font-mono text-[10px] font-medium uppercase tracking-caps text-graphite-soft">
           Workspace
         </div>
+        {/* Above Dashboard: what is mine comes before how the project is doing. Left as
+            its own route rather than replacing "/" — swapping somebody's home page out
+            from under them is their call, and it is a one-line change. */}
+        <NavItem to="/my" icon={<IconTarget size={17} />} label="My work" />
         <NavItem to="/" end icon={<IconDashboard size={17} />} label="Dashboard" />
         <NavItem
           to="/inbox"
@@ -472,7 +476,7 @@ const SHORTCUTS: { keys: string; what: string }[] = [
   { keys: "⌘K", what: "Search issues" },
   { keys: "/", what: "Focus the filter (or search)" },
   { keys: "c", what: "New issue" },
-  { keys: "g then i / b / d / m / r / s / n", what: "Go to Issues, Board, Dashboard, Milestones, Releases, Settings, iNbox" },
+  { keys: "g then w / i / b / d / m / r / s / n", what: "Go to My work, Issues, Board, Dashboard, Milestones, Releases, Settings, iNbox" },
   { keys: "j / k", what: "Move down / up the issue list" },
   { keys: "Enter", what: "Open the focused issue" },
   { keys: "x", what: "Select the focused issue for a bulk action" },

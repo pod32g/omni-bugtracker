@@ -20,6 +20,11 @@ import (
 // instead of matching nothing.
 func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]string) {
 	f := IssueFilter{ProjectKey: projectKey}
+	// Resolved once: the "issues I have a stake in" terms all key off it, and an
+	// unresolvable @me must narrow to nothing rather than widen to everything.
+	if me, err := uuid.Parse(meUserID); err == nil {
+		f.MeUserID = &me
+	}
 	fields := map[string]string{}
 	var freeText []string
 
@@ -41,6 +46,18 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 				f.ShowArchived = true
 			case strings.EqualFold(val, "snoozed"):
 				f.ShowSnoozed = true
+			case strings.EqualFold(val, "watching"), strings.EqualFold(val, "watched"):
+				if f.MeUserID == nil {
+					fields[key] = "is:watching is unavailable — could not resolve the current user"
+					continue
+				}
+				f.Watching = true
+			case strings.EqualFold(val, "mentioned"):
+				if f.MeUserID == nil {
+					fields[key] = "is:mentioned is unavailable — could not resolve the current user"
+					continue
+				}
+				f.Mentioned = true
 			case strings.EqualFold(val, "open"):
 				f.Statuses = append(f.Statuses, domain.OpenStatuses...)
 			case strings.EqualFold(val, "closed"):
@@ -49,7 +66,8 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 				s := domain.IssueStatus(strings.ToLower(val))
 				if !domain.ValidStatus(s) {
 					fields[key] = "unknown value " + quoted(val) +
-						" — expected open, closed, archived, snoozed, or a status name (" + joinStatuses() + ")"
+						" — expected open, closed, archived, snoozed, watching, mentioned, " +
+						"or a status name (" + joinStatuses() + ")"
 					continue
 				}
 				f.Statuses = append(f.Statuses, s)
@@ -64,6 +82,23 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 				continue
 			}
 			f.Statuses = append(f.Statuses, s)
+		case "reporter":
+			// Same fail-closed rule as assignee: an unresolvable reporter must not
+			// quietly widen the result set to the whole project.
+			target := val
+			if val == "@me" {
+				target = meUserID
+			}
+			id, err := uuid.Parse(target)
+			if err != nil {
+				if val == "@me" {
+					fields[key] = "@me is unavailable — could not resolve the current user"
+				} else {
+					fields[key] = "expected @me or a user uuid, got " + quoted(val)
+				}
+				continue
+			}
+			f.ReporterID = &id
 		case "assignee":
 			// Fail closed: an unresolvable assignee must not widen the result set
 			// to every issue in the project.

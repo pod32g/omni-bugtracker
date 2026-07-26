@@ -429,6 +429,8 @@ type UpdateIssueInput struct {
 }
 
 type IssueFilter struct {
+	// ProjectKey scopes the list to one project. Empty means every project the
+	// caller can see — the cross-project "My work" queue relies on this.
 	ProjectKey string
 	// Statuses is a set: the issue matches when its status is any of these. Empty
 	// means "no status constraint". `is:open` / `is:closed` expand to lifecycle
@@ -446,7 +448,15 @@ type IssueFilter struct {
 	// issues; set via the `is:archived` filter term.
 	ShowArchived bool
 	ShowSnoozed  bool
-	Sort         string
-	Limit        int32
-	Offset       int32
+	// ReporterID narrows to issues somebody filed (`reporter:@me`).
+	ReporterID *uuid.UUID
+	// Watching / Mentioned are "issues I have a stake in", resolved against MeUserID.
+	// Both are no-ops when MeUserID is nil, so an unresolvable @me matches nothing
+	// rather than everything.
+	Watching  bool
+	Mentioned bool
+	MeUserID  *uuid.UUID
+	Sort      string
+	Limit     int32
+	Offset    int32
 }

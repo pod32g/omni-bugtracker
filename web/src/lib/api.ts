@@ -591,6 +591,11 @@ export const api = {
       body: JSON.stringify({ ids }),
     }),
   markIssueRead: (issueKey: string) => request<void>(`/issues/${issueKey}/read`, { method: "POST" }),
+  /** The same filter grammar across every project the caller can see. */
+  listAllIssues: (filter: string, sort = "", limit = 20) =>
+    request<{ items: Issue[]; total: number }>(
+      `/issues?filter=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}&limit=${limit}`,
+    ),
   similarIssues: (projectKey: string, title: string, excludeKey = "") =>
     request<{ items: SimilarIssue[] }>(
       `/projects/${encodeURIComponent(projectKey)}/issues/similar?title=${encodeURIComponent(title)}` +
