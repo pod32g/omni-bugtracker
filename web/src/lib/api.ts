@@ -238,6 +238,13 @@ export interface SavedSearch {
   id: string;
   name: string;
   query: string;
+  description?: string;
+  sort?: string;
+  is_shared: boolean;
+  is_default: boolean;
+  project_key?: string;
+  position: number;
+  author?: User;
   created_at: string;
 }
 
@@ -597,6 +604,22 @@ export const api = {
    * ranks — the ordering scheme stays server-side, so a stale tab cannot write a rank
    * that contradicts the column.
    */
+  listProjectViews: (projectKey: string) =>
+    request<{ items: SavedSearch[] }>(`/projects/${encodeURIComponent(projectKey)}/views`),
+  createProjectView: (projectKey: string, body: { name: string; query: string; description?: string }) =>
+    request<SavedSearch>(`/projects/${encodeURIComponent(projectKey)}/views`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateProjectView: (id: string, patch: { name?: string; query?: string; position?: number; is_default?: boolean }) =>
+    request<SavedSearch>(`/views/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteProjectView: (id: string) => request<void>(`/views/${id}`, { method: "DELETE" }),
+  /** Promote one of your personal views into a project's shared list. */
+  shareSavedSearch: (id: string, projectKey: string) =>
+    request<SavedSearch>(`/me/saved-searches/${id}/share`, {
+      method: "POST",
+      body: JSON.stringify({ project_key: projectKey }),
+    }),
   rankIssue: (issueKey: string, after: string, before: string) =>
     request<{ key: string; rank: string }>(`/issues/${issueKey}/rank`, {
       method: "POST",

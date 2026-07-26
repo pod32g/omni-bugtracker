@@ -143,6 +143,14 @@ type Repository interface {
 
 	// Saved searches (personal named filters)
 	ListSavedSearches(ctx context.Context, userID uuid.UUID) ([]domain.SavedSearch, error)
+	// Shared views are project-scoped saved searches: the same rows, owned by a
+	// project rather than a person.
+	ListProjectViews(ctx context.Context, projectKey string) ([]domain.SavedSearch, error)
+	CreateProjectView(ctx context.Context, in ProjectViewInput) (domain.SavedSearch, error)
+	UpdateProjectView(ctx context.Context, in UpdateProjectViewInput) (domain.SavedSearch, error)
+	DeleteProjectView(ctx context.Context, id uuid.UUID) (bool, error)
+	GetViewProjectKey(ctx context.Context, id uuid.UUID) (string, error)
+	ShareSavedSearch(ctx context.Context, userID, id uuid.UUID, projectKey string) (domain.SavedSearch, error)
 	UpsertSavedSearch(ctx context.Context, userID uuid.UUID, name, query string) (domain.SavedSearch, error)
 	DeleteSavedSearch(ctx context.Context, userID, id uuid.UUID) (bool, error)
 
@@ -410,6 +418,27 @@ type CreateIssueInput struct {
 	EnvironmentMD   string
 	Source          domain.IssueSource
 	DedupeKey       *string
+}
+
+// ProjectViewInput creates a shared view.
+type ProjectViewInput struct {
+	ProjectKey  string
+	AuthorID    uuid.UUID
+	Name        string
+	Query       string
+	Description string
+	Sort        string
+}
+
+// UpdateProjectViewInput is a partial edit; nil fields are left unchanged.
+type UpdateProjectViewInput struct {
+	ID          uuid.UUID
+	Name        *string
+	Query       *string
+	Description *string
+	Sort        *string
+	Position    *int
+	IsDefault   *bool
 }
 
 // UpdateIssueInput is a partial update: nil fields are left unchanged.

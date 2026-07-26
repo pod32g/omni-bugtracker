@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { api, type Issue, type IssueStatus, type Priority } from "../../lib/api";
+import { api, type Issue, type IssueStatus, type Priority, type SavedSearch } from "../../lib/api";
 import { useProject } from "../../lib/project";
 import { useShortcut } from "../../lib/shortcuts";
 import { timeAgo } from "../../lib/activity";
@@ -35,6 +35,9 @@ const shortAgo = (iso: string) => timeAgo(iso).replace(" ago", "");
 export function IssueList() {
   const { projects, projectKey } = useProject();
   const [searchParams, setSearchParams] = useSearchParams();
+  // Applied at most once per project: after that the filter is the user's, and
+  // re-applying a default over what somebody typed would be maddening.
+  const appliedDefaultFor = useRef<string | null>(null);
   // Initial filter can be deep-linked from the dashboard gadgets (e.g. ?filter=assignee:@me).
   const [filter, setFilter] = useState(() => searchParams.get("filter") ?? "is:open");
   const [sort, setSort] = useState("");
@@ -127,6 +130,25 @@ export function IssueList() {
   // A new filter renders a different list, so the old position means nothing.
   useEffect(() => setCursor(-1), [filter, sort, projectKey]);
 
+  // A project's default view is what the list opens with when no filter was asked for.
+  // Only on arrival with no ?filter — never over an explicit link, and never twice.
+  const projectViews = useQuery({
+    queryKey: ["project-views", projectKey],
+    queryFn: () => api.listProjectViews(projectKey),
+    enabled: !!projectKey,
+  });
+  useEffect(() => {
+    if (!projectKey || searchParams.get("filter") || appliedDefaultFor.current === projectKey) return;
+    const items = projectViews.data?.items;
+    if (!items) return;
+    appliedDefaultFor.current = projectKey;
+    const fallback = items.find((v) => v.is_default);
+    if (fallback) {
+      setFilter(fallback.query);
+      if (fallback.sort) setSort(fallback.sort);
+    }
+  }, [projectKey, projectViews.data, searchParams]);
+
   // "c" navigates to /issues?new=1; when we are already here that is a param change,
   // not a mount, so the initial state above never runs.
   useEffect(() => {
@@ -217,7 +239,8 @@ export function IssueList() {
                 <IconLabelLines size={13} />
                 <span className="font-mono text-xs">label:</span>
               </button>
-              <SavedSearches filter={filter} onApply={setFilter} />
+              <SharedViews projectKey={projectKey} filter={filter} canManage={canManage} onApply={setFilter} />
+              <SavedSearches filter={filter} projectKey={projectKey} canManage={canManage} onApply={setFilter} />
             </div>
             <div className="flex items-center gap-3 md:gap-4">
               <span className="font-mono text-xs text-graphite">
@@ -462,13 +485,158 @@ function SortSelect({ value, onChange }: { value: string; onChange: (v: string) 
 
 // Saved searches: personal named filters rendered as chips next to the quick
 // filters. Saving upserts by name; the × on an active chip deletes it.
-function SavedSearches({ filter, onApply }: { filter: string; onApply: (f: string) => void }) {
+/**
+ * SharedViews renders a project's agreed queues. Visually distinct from personal ones —
+ * a chip that everybody sees and only maintainers can change is a different kind of
+ * thing from one you made for yourself, and they sit next to each other.
+ */
+function SharedViews({
+  projectKey,
+  filter,
+  canManage,
+  onApply,
+}: {
+  projectKey: string;
+  filter: string;
+  canManage: boolean;
+  onApply: (f: string) => void;
+}) {
+  const qc = useQueryClient();
+  const views = useQuery({
+    queryKey: ["project-views", projectKey],
+    queryFn: () => api.listProjectViews(projectKey),
+    enabled: !!projectKey,
+  });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["project-views", projectKey] });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteProjectView(id), onSuccess: invalidate });
+  const setDefault = useMutation({
+    mutationFn: (id: string) => api.updateProjectView(id, { is_default: true }),
+    onSuccess: invalidate,
+  });
+
+  return (
+    <>
+      {(views.data?.items ?? []).map((v) => {
+        const active = filter === v.query;
+        return (
+          <span key={v.id} className="group relative inline-flex">
+            <button
+              onClick={() => onApply(v.query)}
+              title={`${v.query}${v.description ? ` — ${v.description}` : ""}${
+                v.author ? ` (shared by ${v.author.display_name})` : ""
+              }`}
+              className={`flex h-[30px] items-center gap-1.5 rounded-full px-3.5 text-sm transition ${
+                canManage ? "pr-6" : ""
+              } ${
+                active
+                  ? "bg-blueprint font-semibold text-paper"
+                  : "border border-blueprint/40 bg-blueprint-soft/40 font-medium text-blueprint hover:border-blueprint"
+              }`}
+            >
+              {v.is_default && <span title="Opens by default">★</span>}
+              {v.name}
+            </button>
+            {canManage && (
+              <ViewMenu
+                view={v}
+                projectKey={projectKey}
+                active={active}
+                onSetDefault={() => setDefault.mutate(v.id)}
+                onDelete={() => del.mutate(v.id)}
+              />
+            )}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * ViewMenu is a real menu rather than stacked confirm() dialogs. Chaining two confirms
+ * means cancelling "make this the default" immediately asks about deleting it, which is
+ * how somebody loses a view they only meant to leave alone.
+ */
+function ViewMenu({
+  view,
+  projectKey,
+  active,
+  onSetDefault,
+  onDelete,
+}: {
+  view: SavedSearch;
+  projectKey: string;
+  active: boolean;
+  onSetDefault: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-label={`Manage shared view ${view.name}`}
+        className={`absolute right-2 top-1/2 -translate-y-1/2 text-xs transition ${
+          open ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+        } ${active ? "text-paper" : "text-blueprint/70 hover:text-blueprint"}`}
+      >
+        ⋯
+      </button>
+      {open && (
+        <>
+          <button className="fixed inset-0 z-10 cursor-default" aria-hidden onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-[34px] z-20 w-52 rounded-md border border-hairline bg-paper py-1 text-left shadow-lg shadow-ink/5">
+            {!view.is_default && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onSetDefault();
+                }}
+                className="block w-full px-3 py-2 text-left text-sm text-ink transition hover:bg-panel"
+              >
+                Open by default in {projectKey}
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setOpen(false);
+                if (window.confirm(`Delete the shared view “${view.name}”? Everyone on ${projectKey} loses it.`)) {
+                  onDelete();
+                }
+              }}
+              className="block w-full px-3 py-2 text-left text-sm text-critical transition hover:bg-critical-soft"
+            >
+              Delete for everyone
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function SavedSearches({
+  filter,
+  projectKey,
+  canManage,
+  onApply,
+}: {
+  filter: string;
+  projectKey: string;
+  canManage: boolean;
+  onApply: (f: string) => void;
+}) {
   const qc = useQueryClient();
   const saved = useQuery({ queryKey: ["saved-searches"], queryFn: () => api.listSavedSearches() });
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["saved-searches"] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["saved-searches"] });
+    qc.invalidateQueries({ queryKey: ["project-views", projectKey] });
+  };
+  // Promoting keeps the same row, so the author and creation date survive.
+  const share = useMutation({ mutationFn: (id: string) => api.shareSavedSearch(id, projectKey), onSuccess: invalidate });
   const save = useMutation({
     mutationFn: () => api.saveSavedSearch(name.trim(), filter),
     onSuccess: () => {
@@ -490,7 +658,7 @@ function SavedSearches({ filter, onApply }: { filter: string; onApply: (f: strin
             <button
               onClick={() => onApply(s.query)}
               title={s.query}
-              className={`flex h-[30px] items-center rounded-full px-3.5 pr-6 text-sm transition ${
+              className={`flex h-[30px] items-center rounded-full px-3.5 pr-9 text-sm transition ${
                 active
                   ? "bg-blueprint font-semibold text-paper"
                   : "border border-hairline font-medium text-graphite hover:border-graphite hover:text-ink"
@@ -509,6 +677,22 @@ function SavedSearches({ filter, onApply }: { filter: string; onApply: (f: strin
             >
               ×
             </button>
+            {canManage && projectKey && (
+              <button
+                onClick={() => {
+                  if (window.confirm(`Share “${s.name}” with everyone on ${projectKey}? It becomes the project's view, not yours.`)) {
+                    share.mutate(s.id);
+                  }
+                }}
+                title={`Share with everyone on ${projectKey}`}
+                aria-label={`Share saved search ${s.name} with the project`}
+                className={`absolute right-5 top-1/2 -translate-y-1/2 text-xs opacity-0 transition group-hover:opacity-100 ${
+                  active ? "text-paper" : "text-graphite-soft hover:text-blueprint"
+                }`}
+              >
+                ↑
+              </button>
+            )}
           </span>
         );
       })}

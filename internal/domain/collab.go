@@ -137,11 +137,20 @@ type Notification struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
-// SavedSearch is a personal, named filter-grammar string.
+// SavedSearch is a named filter-grammar string. Personal by default; a shared one
+// belongs to a project and is visible to every member of it.
 type SavedSearch struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Query     string    `json:"query"`
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Query       string    `json:"query"`
+	Description string    `json:"description,omitempty"`
+	Sort        string    `json:"sort,omitempty"`
+	IsShared    bool      `json:"is_shared"`
+	IsDefault   bool      `json:"is_default"`
+	ProjectKey  string    `json:"project_key,omitempty"`
+	Position    int       `json:"position"`
+	// Author is who created a shared view — worth knowing before you rely on it.
+	Author    *User     `json:"author,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
