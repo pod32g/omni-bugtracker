@@ -595,5 +595,11 @@ export const api = {
     a.click();
     URL.revokeObjectURL(url);
   },
+  /**
+   * Direct URL for an attachment, for <img src>. Works on the deployed app because the
+   * session cookie is first-party; a localStorage bearer token cannot ride an <img>
+   * request, so inline images do not render in that mode.
+   */
+  attachmentSrc: (id: string) => `${BASE}/attachments/${id}`,
   deleteAttachment: (id: string) => request<void>(`/attachments/${id}`, { method: "DELETE" }),
 };

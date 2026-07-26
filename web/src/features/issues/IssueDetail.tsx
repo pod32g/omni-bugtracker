@@ -292,6 +292,7 @@ export function IssueDetail() {
               <Avatar user={i.reporter} size={28} />
               <MentionTextarea
                 textareaRef={composerRef}
+                issueKey={issueKey}
                 value={comment}
                 onChange={setComment}
                 placeholder="Leave a comment… (Markdown supported)"
@@ -580,6 +581,89 @@ function LinkedIssues({ issueKey }: { issueKey: string }) {
 }
 
 /**
+ * useAttachInsert uploads images pasted or dropped into a text field and writes the
+ * markdown reference at the caret.
+ *
+ * Screenshots are the highest-information part of most bug reports and were the most
+ * annoying thing to include: the attachment panel took a drop, but a screenshot in the
+ * clipboard had to be saved to a file first, and the result was a filename in a list
+ * rather than a picture in the text.
+ *
+ * A placeholder goes in immediately and is replaced by key, not by offset — so typing
+ * during a slow upload cannot land the URL in the middle of a word, and a failed upload
+ * leaves a visible comment rather than silently eating the paragraph.
+ */
+function useAttachInsert(
+  issueKey: string | undefined,
+  value: string,
+  onChange: (v: string) => void,
+  textareaRef: React.RefObject<HTMLTextAreaElement>,
+) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  // The latest text, so an upload that resolves later edits what is on screen now
+  // rather than the snapshot it started from.
+  const latest = useRef(value);
+  latest.current = value;
+
+  const upload = async (files: File[]) => {
+    if (!issueKey) return;
+    setError(null);
+    for (const file of files) {
+      const token = `![uploading ${file.name}…]()`;
+      const el = textareaRef.current;
+      const caret = el?.selectionStart ?? latest.current.length;
+      const withToken = `${latest.current.slice(0, caret)}${token}${latest.current.slice(caret)}`;
+      latest.current = withToken;
+      onChange(withToken);
+
+      try {
+        const a = await api.uploadAttachment(issueKey, file);
+        latest.current = latest.current.replace(token, `![${a.filename}](${api.attachmentSrc(a.id)})`);
+        qc.invalidateQueries({ queryKey: ["attachments", issueKey] });
+      } catch (e) {
+        latest.current = latest.current.replace(token, `<!-- upload failed: ${file.name} -->`);
+        setError((e as Error).message);
+      }
+      onChange(latest.current);
+    }
+  };
+
+  const imagesFrom = (list: FileList | null | undefined, items?: DataTransferItemList) => {
+    if (items) {
+      return Array.from(items)
+        .filter((i) => i.kind === "file" && i.type.startsWith("image/"))
+        .map((i) => i.getAsFile())
+        .filter((f): f is File => f !== null);
+    }
+    return Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
+  };
+
+  return {
+    error,
+    onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!issueKey) return;
+      const images = imagesFrom(null, e.clipboardData?.items);
+      if (images.length === 0) return; // plain text paste — leave it alone
+      e.preventDefault();
+      void upload(images);
+    },
+    onDrop: (e: DragEvent) => {
+      if (!issueKey) return;
+      const images = imagesFrom(e.dataTransfer?.files);
+      if (images.length === 0) return;
+      e.preventDefault();
+      void upload(images);
+    },
+    onDragOver: (e: DragEvent) => {
+      // Without this the browser navigates to the dropped file instead of letting the
+      // drop handler run.
+      if (issueKey) e.preventDefault();
+    },
+  };
+}
+
+/**
  * MentionTextarea is the comment composer with @-autocomplete.
  *
  * Keyboard-first: ↑/↓ move, Enter or Tab accept, Escape dismisses. Those keys only get
@@ -593,6 +677,7 @@ function MentionTextarea({
   placeholder,
   rows,
   className,
+  issueKey,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement>;
   value: string;
@@ -600,8 +685,11 @@ function MentionTextarea({
   placeholder?: string;
   rows?: number;
   className?: string;
+  /** When set, pasted or dropped images upload to this issue and insert as markdown. */
+  issueKey?: string;
 }) {
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
+  const attach = useAttachInsert(issueKey, value, onChange, textareaRef);
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
   const [active, setActive] = useState(0);
 
@@ -663,10 +751,14 @@ function MentionTextarea({
           }
         }}
         onBlur={() => setMention(null)}
+        onPaste={attach.onPaste}
+        onDrop={attach.onDrop}
+        onDragOver={attach.onDragOver}
         placeholder={placeholder}
         rows={rows}
         className={`w-full ${className ?? ""}`}
       />
+      {attach.error && <p className="mt-1 text-xs text-critical">{attach.error}</p>}
       {open && (
         <ul className="absolute bottom-full left-0 z-20 mb-1 w-64 overflow-hidden rounded-md border border-hairline bg-paper shadow-lg">
           {candidates.map((u, index) => (
@@ -876,6 +968,15 @@ function AttachmentsSection({ issueKey, items }: { issueKey: string; items: impo
       )}
       {items.map((a) => (
         <div key={a.id} className="flex items-center gap-3">
+          {a.content_type.startsWith("image/") && (
+            <a href={api.attachmentSrc(a.id)} target="_blank" rel="noreferrer noopener" className="shrink-0">
+              <img
+                src={api.attachmentSrc(a.id)}
+                alt={a.filename}
+                className="h-9 w-9 rounded border border-hairline object-cover"
+              />
+            </a>
+          )}
           <button
             onClick={() => api.downloadAttachment(a.id, a.filename)}
             className="truncate font-mono text-sm font-medium text-blueprint hover:underline"
@@ -938,10 +1039,21 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
   );
 }
 
+/** Inline images are capped and open full size in a new tab; a screenshot should
+ *  illustrate the paragraph, not push it off the screen. */
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+  if (!src) return null;
+  return (
+    <a href={src} target="_blank" rel="noreferrer noopener">
+      <img src={src} alt={alt ?? ""} className="my-2 max-h-96 max-w-full rounded-md border border-hairline" />
+    </a>
+  );
+}
+
 function Markdown({ body, className = "markdown" }: { body?: string; className?: string }) {
   return (
     <div className={className}>
-      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={{ a: MarkdownLink }}>
+      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={{ a: MarkdownLink, img: MarkdownImage }}>
         {body || "_No content_"}
       </ReactMarkdown>
     </div>
