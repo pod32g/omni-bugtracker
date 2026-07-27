@@ -55,6 +55,11 @@ services:
       # Omni-Notify ingest (host-published behind its netviz sidecar). Token in .env.
       OMNI_BT_INTEGRATIONS__NOTIFY__BASE_URL: ${OMNI_BT_NOTIFY_URL:-http://omni-notify:8080}
       OMNI_BT_INTEGRATIONS__NOTIFY__API_TOKEN: ${OMNI_BT_NOTIFY_TOKEN:-}
+      # Ship our own logs to Omni-Logging as well as stdout. Stays off unless both
+      # are set in .env, so a deploy without them behaves exactly as before.
+      OMNI_BT_LOG__SHIP__ENABLED: ${OMNI_BT_LOGSHIP_ENABLED:-false}
+      OMNI_BT_LOG__SHIP__ENDPOINT: ${OMNI_BT_LOGSHIP_URL:-http://omni-logging:8080/api/v1/ingest}
+      OMNI_BT_LOG__SHIP__API_KEY: ${OMNI_BT_LOGSHIP_KEY:-}
     volumes: ["attachments:/app/data/attachments"]
     # Published host port is overridable so prod avoids conflicts (default dev 8080).
     ports: ["${OMNI_BT_API_PORT:-8080}:8080"]
@@ -71,6 +76,9 @@ services:
       OMNI_BT_REDIS__ADDR: redis:6379
       OMNI_BT_INTEGRATIONS__NOTIFY__BASE_URL: ${OMNI_BT_NOTIFY_URL:-http://omni-notify:8080}
       OMNI_BT_INTEGRATIONS__NOTIFY__API_TOKEN: ${OMNI_BT_NOTIFY_TOKEN:-}
+      OMNI_BT_LOG__SHIP__ENABLED: ${OMNI_BT_LOGSHIP_ENABLED:-false}
+      OMNI_BT_LOG__SHIP__ENDPOINT: ${OMNI_BT_LOGSHIP_URL:-http://omni-logging:8080/api/v1/ingest}
+      OMNI_BT_LOG__SHIP__API_KEY: ${OMNI_BT_LOGSHIP_KEY:-}
     depends_on:
       postgres: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }

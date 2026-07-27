@@ -7,8 +7,12 @@ import (
 	"github.com/omni/bugtracker/internal/config"
 )
 
-// NewLogger builds a structured slog logger. JSON output ships cleanly to Omni-Logging.
-func NewLogger(cfg config.Log) *slog.Logger {
+// NewLogger builds a structured slog logger writing JSON to stdout.
+//
+// When log shipping is configured it also fans every record into a batched POST to
+// Omni-Logging; the returned shipper must be Closed at shutdown to flush. A nil
+// shipper (shipping disabled) is safe to Close.
+func NewLogger(cfg config.Log) (*slog.Logger, *LogShipper) {
 	level := slog.LevelInfo
 	switch cfg.Level {
 	case "debug":
@@ -26,7 +30,20 @@ func NewLogger(cfg config.Log) *slog.Logger {
 	} else {
 		handler = slog.NewJSONHandler(os.Stdout, opts)
 	}
+
+	// Shipping is additive: stdout keeps working exactly as before, which is what
+	// you need when the log server is the thing that has broken.
+	shipper := newLogShipper(cfg.Ship)
+	if shipper != nil {
+		handler = fanoutHandler{handlers: []slog.Handler{
+			handler,
+			// Always JSON for the wire, whatever stdout is set to — Omni-Logging
+			// parses structured events, and text format would arrive as opaque raw.
+			slog.NewJSONHandler(shipper, opts),
+		}}
+	}
+
 	logger := slog.New(handler).With("service", "omni-bugtracker")
 	slog.SetDefault(logger)
-	return logger
+	return logger, shipper
 }

@@ -25,7 +25,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	logger := platform.NewLogger(cfg.Log)
+	logger, logShipper := platform.NewLogger(cfg.Log)
+	// Flushes whatever is still queued; a no-op when shipping is off.
+	defer logShipper.Close()
 	metrics := platform.NewMetrics()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -84,6 +84,15 @@ archive:
 log:
   level: "info"
   format: "json"
+  # Forward this service's own logs to Omni-Logging, in addition to stdout (never
+  # instead of it). Off by default: the api_key belongs in the environment, and a
+  # tracker that will not start because the log server moved is a bad trade.
+  #   OMNI_BT_LOG__SHIP__ENABLED / __ENDPOINT / __API_KEY
+  ship:
+    enabled: false
+    endpoint: "http://omni-logging:8080/api/v1/ingest"
+    api_key: ""
+    timeout: "5s"
 
 observability:
   metrics_enabled: true

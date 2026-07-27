@@ -151,8 +151,19 @@ type Git struct {
 }
 
 type Log struct {
-	Level  string `koanf:"level"`
-	Format string `koanf:"format"`
+	Level  string  `koanf:"level"`
+	Format string  `koanf:"format"`
+	Ship   LogShip `koanf:"ship"`
+}
+
+// LogShip configures forwarding this service's own logs to Omni-Logging. Disabled by
+// default: a tracker that cannot start because the log server moved would be a poor
+// trade for structured log search.
+type LogShip struct {
+	Enabled  bool          `koanf:"enabled"`
+	Endpoint string        `koanf:"endpoint"` // full URL, e.g. http://host:8080/api/v1/ingest
+	APIKey   string        `koanf:"api_key"`  // X-Api-Key; set via the environment, never committed
+	Timeout  time.Duration `koanf:"timeout"`
 }
 
 type Observability struct {
