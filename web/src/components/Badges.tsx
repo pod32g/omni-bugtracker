@@ -37,6 +37,20 @@ export function StatusPill({ status }: { status: IssueStatus }) {
   );
 }
 
+/**
+ * StatusDot is StatusPill's compact form: the same colour, no label, the name in a
+ * tooltip. For dense lists where the title has to win the fight for horizontal space.
+ */
+export function StatusDot({ status }: { status: IssueStatus }) {
+  return (
+    <span
+      title={statusLabel[status]}
+      aria-label={statusLabel[status]}
+      className={`h-2 w-2 shrink-0 rounded-full ${statusTone[status].dot}`}
+    />
+  );
+}
+
 // ── Severity ──────────────────────────────────────────────────────────────
 // The colored marker (dot + left rail bar) reads severity; the label stays ink.
 const severityColor: Record<Severity, string> = {

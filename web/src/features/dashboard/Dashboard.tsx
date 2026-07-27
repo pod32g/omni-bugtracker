@@ -5,7 +5,7 @@ import { api, type DashboardOverview, type Issue } from "../../lib/api";
 import { useProject } from "../../lib/project";
 import { describeActivity, timeAgo } from "../../lib/activity";
 import { formatMinutes } from "../../lib/duration";
-import { Avatar, PriorityText, StatusPill } from "../../components/Badges";
+import { Avatar, PriorityText, StatusDot, StatusPill } from "../../components/Badges";
 
 const empty: DashboardOverview = {
   open_issues: 0,
@@ -18,6 +18,12 @@ const empty: DashboardOverview = {
   team_workload: {},
   recent_activity: [],
 };
+
+// Row caps for the two list-shaped widgets. Past this a card stops being scannable and
+// the issue list is the better tool — but both state what they hid rather than just
+// stopping, so a truncated card never reads as a complete one.
+const GADGET_ROWS = 6;
+const BAR_ROWS = 8;
 
 const STATUS_ORDER = ["open", "in_progress", "blocked", "ready_for_review", "resolved", "closed", "reopened"];
 
@@ -78,8 +84,13 @@ export function Dashboard() {
 
         <CommitmentsBand data={data} />
 
-        {/* Gadgets */}
-        <div className="grid gap-4 lg:grid-cols-2">
+        {/* Gadgets. Three columns from xl, with the activity feed pinned to the last
+            one and spanning the rows. The feed is the tallest thing here — a dozen
+            rows against two or three bars — so stacking it underneath made the page
+            the *sum* of the two; side by side it is the taller of them. Two columns
+            below xl, because at tablet width a third column leaves a bar chart with
+            about 10px of track. */}
+        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
           <IssueGadget
             title="Assigned to me"
             projectKey={projectKey}
@@ -102,18 +113,23 @@ export function Dashboard() {
             />
           </Card>
 
-          <Card title="Team workload · open">
-            <BarList
-              entries={sortedEntries(data.team_workload)}
-              renderLabel={(name) => (
-                <span className="flex items-center gap-2.5">
-                  <Avatar user={{ id: name, email: name, display_name: name }} size={24} />
-                  <span className="w-16 truncate text-ink">{name}</span>
-                </span>
-              )}
-              color={() => "bg-blueprint"}
-            />
-          </Card>
+          {/* Hidden when nobody has open work, matching the effort and component
+              cards below. A card whose only content is "No data yet." teaches people
+              to skim past that whole region of the page. */}
+          {Object.keys(data.team_workload).length > 0 && (
+            <Card title="Team workload · open">
+              <BarList
+                entries={sortedEntries(data.team_workload)}
+                renderLabel={(name) => (
+                  <span className="flex items-center gap-2.5">
+                    <Avatar user={{ id: name, email: name, display_name: name }} size={24} />
+                    <span className="w-16 truncate text-ink">{name}</span>
+                  </span>
+                )}
+                color={() => "bg-blueprint"}
+              />
+            </Card>
+          )}
 
           {/* Effort and issue count are two different questions, so they get two
               charts rather than one bar carrying both. Only rendered when anything
@@ -140,11 +156,18 @@ export function Dashboard() {
             </Card>
           )}
 
-          <Card title="Recent activity" className={components.length > 0 ? "lg:col-span-2" : ""}>
+          {/* Placed explicitly rather than left to auto-flow. The old span was
+              conditioned on a components card existing, which is only the right answer
+              by coincidence: without components this sat alone in the left column with
+              the entire right half of its row — 470x450px — empty. */}
+          <Card
+            title="Recent activity"
+            className="lg:col-span-2 xl:col-span-1 xl:col-start-3 xl:row-start-1 xl:row-span-3"
+          >
             {data.recent_activity.length === 0 ? (
               <p className="text-sm text-graphite-soft">No activity yet.</p>
             ) : (
-              <ul className="flex flex-col gap-3">
+              <ul className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto xl:max-h-[360px]">
                 {data.recent_activity.map((a) => (
                   <li key={a.id} className="flex items-center gap-3">
                     <span className={`h-[7px] w-[7px] shrink-0 rounded-full ${activityDot(a.verb)}`} />
@@ -187,7 +210,10 @@ function IssueGadget({
 }) {
   const issues = useQuery({
     queryKey: ["issues", projectKey, filter, ""],
-    queryFn: () => api.listIssues(projectKey, filter),
+    // Fetch what is rendered. This asked for the default page of 50 to display six,
+    // which on a 300-issue project pulls 100 rows across the two gadgets per visit.
+    // `total` below is the unpaged count, so "+N more" stays right regardless.
+    queryFn: () => api.listIssues(projectKey, filter, "", GADGET_ROWS),
     enabled: !!projectKey,
   });
   const items = issues.data?.items ?? [];
@@ -205,7 +231,7 @@ function IssueGadget({
         <p className="text-sm text-graphite-soft">{emptyText}</p>
       ) : (
         <ul className="-my-1 flex flex-col">
-          {items.slice(0, 6).map((i: Issue) => (
+          {items.map((i: Issue) => (
             <li key={i.id}>
               <Link
                 to={`/issues/${i.key}`}
@@ -216,14 +242,21 @@ function IssueGadget({
                 <span className="hidden shrink-0 sm:block">
                   <PriorityText priority={i.priority} />
                 </span>
-                <span className="shrink-0">
+                {/* The title is the only thing here you cannot get from anywhere
+                    else, so the trimmings give way first: at three columns these
+                    cards are a third of their old width, and a full status pill left
+                    the title rendering as "regre…". */}
+                <span className="hidden shrink-0 lg:block xl:hidden">
                   <StatusPill status={i.status} />
+                </span>
+                <span className="shrink-0 lg:hidden xl:block">
+                  <StatusDot status={i.status} />
                 </span>
               </Link>
             </li>
           ))}
-          {total > 6 && (
-            <li className="px-2 pt-2 font-mono text-xs text-graphite-soft">+{total - 6} more</li>
+          {total > GADGET_ROWS && (
+            <li className="px-2 pt-2 font-mono text-xs text-graphite-soft">+{total - GADGET_ROWS} more</li>
           )}
         </ul>
       )}
@@ -327,6 +360,7 @@ function BarList({
   color,
   labelWidth,
   formatValue,
+  maxRows = BAR_ROWS,
 }: {
   entries: [string, number][];
   renderLabel: (key: string) => ReactNode;
@@ -334,22 +368,31 @@ function BarList({
   labelWidth?: string;
   /** Renders the trailing value; defaults to the raw count. */
   formatValue?: (value: number) => string;
+  /** Rows before the tail collapses into a "+N more" line. */
+  maxRows?: number;
 }) {
   if (entries.length === 0) return <p className="text-sm text-graphite-soft">No data yet.</p>;
-  const max = Math.max(...entries.map(([, v]) => v), 1);
+  // Scaled to the peak across *every* entry, not just the visible ones, so hiding the
+  // tail never silently rescales the bars that stay.
+  const peak = Math.max(...entries.map(([, v]) => v), 1);
+  const shown = entries.slice(0, maxRows);
+  const hidden = entries.length - shown.length;
   return (
     <div className="flex flex-col gap-3">
-      {entries.map(([key, value]) => (
+      {shown.map(([key, value]) => (
         <div key={key} className="flex items-center gap-3.5">
           <span className={`shrink-0 text-sm text-graphite ${labelWidth ?? ""}`}>{renderLabel(key)}</span>
           <div className="h-2 grow overflow-hidden rounded-[4px] bg-panel">
-            <div className={`h-full rounded-[4px] ${color(key)}`} style={{ width: `${Math.round((value / max) * 100)}%` }} />
+            <div className={`h-full rounded-[4px] ${color(key)}`} style={{ width: `${Math.round((value / peak) * 100)}%` }} />
           </div>
           <span className="w-10 shrink-0 text-right font-mono text-sm font-semibold text-ink">
             {formatValue ? formatValue(value) : value}
           </span>
         </div>
       ))}
+      {/* Never a silent truncation: a card that quietly drops half a project's
+          components reads as though those components have no issues. */}
+      {hidden > 0 && <p className="font-mono text-xs text-graphite-soft">+{hidden} more not shown</p>}
     </div>
   );
 }
