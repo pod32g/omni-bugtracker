@@ -36,13 +36,43 @@ make web          # frontend dev server (another terminal)
 
 ```
 api/            OpenAPI 3.1 spec + codegen config (source of truth for the HTTP contract)
-cmd/            server · worker · migrate entrypoints
+cmd/            server · worker · migrate · obt (CLI) entrypoints
 internal/       config · platform · httpapi · domain · service · repo · events · worker
                 · integrations · auth · search
 db/             goose migrations + sqlc query files
 web/            React + Vite + Tailwind SPA
 deploy/         docker-compose · Dockerfiles · Helm chart
 docs/           ARCHITECTURE.md
+```
+
+## `obt` — the terminal client
+
+```
+make obt                                # builds ./bin/obt
+obt ls "is:open assignee:@me"           # any filter the UI understands
+obt show BUG-42                         # or just `obt show` on a bug-42-… branch
+obt new -t bug -T "Sign-in 500s"        # $EDITOR for the body
+obt mv in_progress                      # key inferred from the branch
+obt comment "fixed by the retry change"
+obt spend 90m -m "chasing the retry loop"
+obt --json ls "is:open sla:breached" | jq -r '.items[].key'
+```
+
+The issue key defaults to the one named by the current branch (`bug-42-fix-paging` →
+`BUG-42`), and the project to `-p`, then the config, then the git remote. Every command
+takes `--json`. Exit codes are distinct so CI can gate on them: `2` usage, `4` not found,
+`5` forbidden, `6` rejected, `7` server or transport.
+
+Config lives at `~/.config/obt/config.toml` (or `$OBT_CONFIG`); `$OBT_SERVER` and
+`$OBT_TOKEN` override it, which is how it should be used in CI.
+
+```toml
+default = "prod"
+
+[hosts.prod]
+server  = "http://tracker.example:8092"
+token   = "obt_…"
+project = "BUG"
 ```
 
 ## API docs
