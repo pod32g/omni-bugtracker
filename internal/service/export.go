@@ -22,7 +22,8 @@ var exportColumns = []string{
 	"key", "project", "number", "type", "title", "status", "severity", "priority",
 	"assignee", "reporter", "labels", "components", "milestone", "release",
 	"version_affected", "version_fixed", "open_blockers", "created_at", "updated_at",
-	"archived_at", "due_at", "first_response_at", "resolved_at", "sla_state", "description",
+	"archived_at", "due_at", "first_response_at", "resolved_at", "sla_state",
+	"estimate_minutes", "spent_minutes", "description",
 }
 
 // slaStateString renders an absent SLA as empty rather than "ok": a project with no
@@ -32,6 +33,15 @@ func slaStateString(s *domain.IssueSLA) string {
 		return ""
 	}
 	return s.State
+}
+
+// minutesString renders an unestimated issue as empty rather than 0 — a spreadsheet
+// that averages the estimate column must not count "not estimated" as "zero work".
+func minutesString(m *int) string {
+	if m == nil {
+		return ""
+	}
+	return strconv.Itoa(*m)
 }
 
 func exportRow(i domain.Issue) []string {
@@ -44,7 +54,8 @@ func exportRow(i domain.Issue) []string {
 		strconv.Itoa(i.OpenBlockers),
 		i.CreatedAt.UTC().Format(time.RFC3339), i.UpdatedAt.UTC().Format(time.RFC3339),
 		timeString(i.ArchivedAt), timeString(i.DueAt), timeString(i.FirstResponseAt),
-		timeString(i.ResolvedAt), slaStateString(i.SLA), i.DescriptionMD,
+		timeString(i.ResolvedAt), slaStateString(i.SLA),
+		minutesString(i.EstimateMinutes), strconv.Itoa(i.SpentMinutes), i.DescriptionMD,
 	}
 }
 

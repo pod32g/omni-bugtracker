@@ -138,6 +138,9 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Delete("/issues/{issueKey}/mute", h.unmuteIssue)
 	r.Post("/issues/{issueKey}/snooze", h.snoozeIssue)
 	r.Delete("/issues/{issueKey}/snooze", h.wakeIssue)
+	r.Get("/issues/{issueKey}/time", h.listTimeEntries)
+	r.Post("/issues/{issueKey}/time", h.logTime)
+	r.Delete("/time-entries/{id}", h.deleteTimeEntry)
 	r.Get("/issues/{issueKey}/comments", h.listComments)
 	r.Post("/issues/{issueKey}/comments", h.addComment)
 	r.Patch("/comments/{id}", h.updateComment)
@@ -1300,6 +1303,13 @@ func (h *httpHandlers) listComponents(w http.ResponseWriter, r *http.Request) {
 	if components == nil {
 		components = []domain.Component{}
 	}
+	if effort, err := h.repo.ComponentEffort(r.Context(), chi.URLParam(r, "key")); err == nil {
+		for i := range components {
+			components[i].Effort = effort[components[i].ID]
+		}
+	} else {
+		h.log.Warn("component effort rollup failed", "err", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": components})
 }
 
@@ -1405,6 +1415,17 @@ func (h *httpHandlers) listMilestones(w http.ResponseWriter, r *http.Request) {
 	}
 	if milestones == nil {
 		milestones = []domain.Milestone{}
+	}
+	// Rollups are attached here rather than joined into the list query: one grouped
+	// query for the whole page, and the milestone SQL stays about milestones.
+	// A rollup failure degrades to zeroes rather than failing the list — planning
+	// numbers are useful, but not at the price of the page not loading.
+	if effort, err := h.repo.MilestoneEffort(r.Context(), chi.URLParam(r, "key")); err == nil {
+		for i := range milestones {
+			milestones[i].Effort = effort[milestones[i].ID]
+		}
+	} else {
+		h.log.Warn("milestone effort rollup failed", "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": milestones})
 }
@@ -1516,6 +1537,13 @@ func (h *httpHandlers) listReleases(w http.ResponseWriter, r *http.Request) {
 	}
 	if releases == nil {
 		releases = []domain.Release{}
+	}
+	if effort, err := h.repo.ReleaseEffort(r.Context(), chi.URLParam(r, "key")); err == nil {
+		for i := range releases {
+			releases[i].Effort = effort[releases[i].ID]
+		}
+	} else {
+		h.log.Warn("release effort rollup failed", "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": releases})
 }
@@ -1644,7 +1672,14 @@ func (h *httpHandlers) issueList(w http.ResponseWriter, r *http.Request, key str
 	if items == nil {
 		items = []domain.Issue{} // an empty page is [], not null, like every other list
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
+	// Effort covers the whole filtered set, not the page — "3 days estimated" that
+	// silently meant "on this screen" would be worse than no number at all. Degrades
+	// to zeroes rather than failing the list.
+	effort, err := h.repo.EffortForIssues(r.Context(), f)
+	if err != nil {
+		h.log.Warn("issue effort rollup failed", "err", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "effort": effort})
 }
 
 func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
@@ -1668,6 +1703,7 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		ActualMD        string           `json:"actual_md"`
 		EnvironmentMD   string           `json:"environment_md"`
 		DueAt           string           `json:"due_at"`
+		Estimate        string           `json:"estimate"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -1682,6 +1718,11 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteValidation(w, map[string]string{"due_at": err.Error()})
 		return
 	}
+	estimate, err := parseEstimate(body.Estimate)
+	if err != nil {
+		httpapi.WriteValidation(w, map[string]string{"estimate": err.Error()})
+		return
+	}
 	reporter, _ := uuid.Parse(p.UserID)
 	issue, err := h.issues.Create(r.Context(), CreateIssueInput{
 		ProjectKey: chi.URLParam(r, "key"), Type: body.Type, Title: body.Title,
@@ -1690,7 +1731,7 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		Components: body.Components, VersionAffected: body.VersionAffected,
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
 		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD,
-		Source: domain.SourceHuman, DueAt: dueAt,
+		Source: domain.SourceHuman, DueAt: dueAt, EstimateMinutes: estimate,
 	})
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
@@ -1869,6 +1910,8 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		// Pointer-to-string so the three cases stay distinguishable: absent leaves the
 		// due date alone, "" clears it, a timestamp sets it.
 		DueAt *string `json:"due_at"`
+		// Same three cases for the estimate: absent, "" clears, "2d" sets.
+		Estimate *string `json:"estimate"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -1892,6 +1935,20 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 			dueAt = parsed
 		}
 	}
+	var estimate *int
+	if body.Estimate != nil {
+		parsed, err := parseEstimate(*body.Estimate)
+		if err != nil {
+			httpapi.WriteValidation(w, map[string]string{"estimate": err.Error()})
+			return
+		}
+		if parsed == nil {
+			// The store reads zero as "clear it" — see UpdateIssue.
+			zero := 0
+			parsed = &zero
+		}
+		estimate = parsed
+	}
 	actor, _ := uuid.Parse(p.UserID)
 	updated, err := h.issues.Update(r.Context(), issue.ID, actor, UpdateIssueInput{
 		Title: body.Title, DescriptionMD: body.DescriptionMD, Type: body.Type,
@@ -1900,7 +1957,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
 		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD, Labels: body.Labels,
 		Components: body.Components, MilestoneID: body.MilestoneID, ReleaseID: body.ReleaseID,
-		DueAt: dueAt,
+		DueAt: dueAt, EstimateMinutes: estimate,
 	})
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
@@ -2167,6 +2224,17 @@ func (h *httpHandlers) addComment(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "comment failed", err.Error())
 		return
+	}
+	// `/spend 90m yesterday chasing the retry loop` logs time from the comment it was
+	// written in. Applied after the comment lands, and never fatal: a rejected entry
+	// must not swallow what somebody wrote, and the comment is still the record of it.
+	for _, cmd := range ParseSpendCommands(body.BodyMD, time.Now()) {
+		if _, err := h.repo.LogTime(r.Context(), TimeEntryInput{
+			IssueID: issue.ID, UserID: author, Minutes: cmd.Minutes,
+			SpentOn: cmd.SpentOn, Note: cmd.Note,
+		}); err != nil {
+			h.log.Warn("spend command failed", "issue", issue.Key, "err", err)
+		}
 	}
 	writeJSON(w, http.StatusCreated, c)
 }

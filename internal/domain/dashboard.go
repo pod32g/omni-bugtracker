@@ -20,7 +20,11 @@ type Dashboard struct {
 	IssuesByStatus    map[string]int `json:"issues_by_status"`
 	IssuesByComponent map[string]int `json:"issues_by_component"`
 	TeamWorkload      map[string]int `json:"team_workload"`
-	RecentActivity    []Activity     `json:"recent_activity"`
+	// RemainingByAssignee is open *estimated* work per person, in minutes. Distinct
+	// from TeamWorkload, which counts issues: four one-hour issues and one two-week
+	// issue are the same workload by count and nothing alike by effort.
+	RemainingByAssignee map[string]int `json:"remaining_by_assignee"`
+	RecentActivity      []Activity     `json:"recent_activity"`
 }
 
 // Report is the trend view the dashboard cannot give: the dashboard is entirely

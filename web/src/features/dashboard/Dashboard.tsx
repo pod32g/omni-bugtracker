@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { api, type DashboardOverview, type Issue } from "../../lib/api";
 import { useProject } from "../../lib/project";
 import { describeActivity, timeAgo } from "../../lib/activity";
+import { formatMinutes } from "../../lib/duration";
 import { Avatar, PriorityText, StatusPill } from "../../components/Badges";
 
 const empty: DashboardOverview = {
@@ -113,6 +114,25 @@ export function Dashboard() {
               color={() => "bg-blueprint"}
             />
           </Card>
+
+          {/* Effort and issue count are two different questions, so they get two
+              charts rather than one bar carrying both. Only rendered when anything
+              is estimated — an empty card would just teach people to ignore it. */}
+          {Object.keys(data.remaining_by_assignee ?? {}).length > 0 && (
+            <Card title="Remaining effort · open">
+              <BarList
+                entries={sortedEntries(data.remaining_by_assignee ?? {})}
+                renderLabel={(name) => (
+                  <span className="flex items-center gap-2.5">
+                    <Avatar user={{ id: name, email: name, display_name: name }} size={24} />
+                    <span className="w-16 truncate text-ink">{name}</span>
+                  </span>
+                )}
+                color={() => "bg-medium"}
+                formatValue={formatMinutes}
+              />
+            </Card>
+          )}
 
           {components.length > 0 && (
             <Card title="Issues by component">
@@ -306,11 +326,14 @@ function BarList({
   renderLabel,
   color,
   labelWidth,
+  formatValue,
 }: {
   entries: [string, number][];
   renderLabel: (key: string) => ReactNode;
   color: (key: string) => string;
   labelWidth?: string;
+  /** Renders the trailing value; defaults to the raw count. */
+  formatValue?: (value: number) => string;
 }) {
   if (entries.length === 0) return <p className="text-sm text-graphite-soft">No data yet.</p>;
   const max = Math.max(...entries.map(([, v]) => v), 1);
@@ -322,7 +345,9 @@ function BarList({
           <div className="h-2 grow overflow-hidden rounded-[4px] bg-panel">
             <div className={`h-full rounded-[4px] ${color(key)}`} style={{ width: `${Math.round((value / max) * 100)}%` }} />
           </div>
-          <span className="w-6 shrink-0 text-right font-mono text-sm font-semibold text-ink">{value}</span>
+          <span className="w-10 shrink-0 text-right font-mono text-sm font-semibold text-ink">
+            {formatValue ? formatValue(value) : value}
+          </span>
         </div>
       ))}
     </div>

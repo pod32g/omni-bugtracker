@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, type Milestone } from "../../lib/api";
 import { useProject } from "../../lib/project";
+import { EffortNote } from "../../components/Badges";
 import { IconPlus } from "../../components/icons";
 
 const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
@@ -177,6 +178,9 @@ function MilestoneCard({
         </div>
         <span className="shrink-0 font-mono text-xs text-graphite-soft">
           {m.closed_issues}/{total} done · {pct}%
+        </span>
+        <span className="shrink-0 font-mono text-xs text-graphite-soft">
+          <EffortNote effort={m.effort} />
         </span>
       </div>
     </div>

@@ -20,11 +20,13 @@ import {
   type User,
 } from "../../lib/api";
 import { describeActivity, timeAgo } from "../../lib/activity";
+import { formatMinutes, parseDuration } from "../../lib/duration";
 import { remarkIssueKeys } from "../../lib/issueRefs";
 import { matchUsers, mentionQuery, preferredHandle, remarkMentions } from "../../lib/mentions";
 import {
   Avatar,
   DueChip,
+  EffortBar,
   LabelChip,
   PriorityText,
   relativeDue,
@@ -438,6 +440,8 @@ export function IssueDetail() {
               onChange={(due_at) => patch.mutate({ due_at })}
             />
           </MetaRow>
+
+          <EffortControl issue={i} onEstimate={(estimate) => patch.mutate({ estimate })} />
 
           {(i.version_fixed || i.version_affected) && (
             <MetaRow label="Version">
@@ -1364,6 +1368,182 @@ function SLALine({ label, due, state }: { label: string; due?: string; state: st
       <span className={`font-medium ${tone}`} title={new Date(due).toLocaleString()}>
         {state === "met" ? "met" : relativeDue(due)}
       </span>
+    </div>
+  );
+}
+
+/**
+ * EffortControl edits the estimate and logs time against it.
+ *
+ * Estimate and spent sit together because the only useful reading of either is
+ * against the other; the entries list underneath is what makes a corrected total
+ * explainable rather than mysterious.
+ */
+function EffortControl({ issue, onEstimate }: { issue: Issue; onEstimate: (v: string) => void }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [duration, setDuration] = useState("");
+  const [note, setNote] = useState("");
+  const [showLog, setShowLog] = useState(false);
+
+  const entries = useQuery({
+    queryKey: ["time", issue.key],
+    queryFn: () => api.listTimeEntries(issue.key),
+  });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["time", issue.key] });
+    qc.invalidateQueries({ queryKey: ["issue", issue.key] });
+    qc.invalidateQueries({ queryKey: ["issues"] });
+  };
+  const log = useMutation({
+    mutationFn: () => api.logTime(issue.key, { duration, note }),
+    onSuccess: () => {
+      setDuration("");
+      setNote("");
+      setShowLog(false);
+      invalidate();
+    },
+  });
+  const removeEntry = useMutation({
+    mutationFn: (id: string) => api.deleteTimeEntry(id),
+    onSuccess: invalidate,
+  });
+
+  const items = entries.data?.items ?? [];
+  // Validated here as well as on the server so a typo does not cost a round trip and
+  // an error message where a number should be.
+  const durationOK = parseDuration(duration) !== null;
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-hairline pt-5">
+      <div className="flex items-center justify-between">
+        <MicroLabel>Effort</MicroLabel>
+        <button
+          onClick={() => {
+            setDraft(issue.estimate_minutes ? formatMinutes(issue.estimate_minutes) : "");
+            setEditing((e) => !e);
+          }}
+          className="text-xs font-semibold text-blueprint transition hover:opacity-80"
+        >
+          {editing ? "Cancel" : issue.estimate_minutes ? "Change estimate" : "Estimate…"}
+        </button>
+      </div>
+
+      {editing ? (
+        <div className="flex items-center gap-2">
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                onEstimate(draft.trim());
+                setEditing(false);
+              }
+            }}
+            placeholder="2d, 4h, 90m"
+            className="h-[30px] w-24 rounded-md border border-hairline bg-paper px-2 text-sm text-ink outline-none focus:border-blueprint"
+          />
+          <button
+            onClick={() => {
+              onEstimate(draft.trim());
+              setEditing(false);
+            }}
+            className="text-xs font-semibold text-blueprint transition hover:opacity-80"
+          >
+            Save
+          </button>
+          {issue.estimate_minutes != null && (
+            <button
+              onClick={() => {
+                onEstimate("");
+                setEditing(false);
+              }}
+              className="text-xs font-semibold text-graphite transition hover:text-critical"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      ) : (
+        <EffortBar estimateMinutes={issue.estimate_minutes} spentMinutes={issue.spent_minutes} />
+      )}
+      {!editing && !issue.estimate_minutes && !issue.spent_minutes && (
+        <p className="text-xs text-graphite-soft">Not estimated, no time logged.</p>
+      )}
+
+      <div className="flex items-center justify-between">
+        <button
+          onClick={() => setShowLog((s) => !s)}
+          className="text-xs font-semibold text-blueprint transition hover:opacity-80"
+        >
+          {showLog ? "Cancel" : "Log time…"}
+        </button>
+        {items.length > 0 && (
+          <span className="font-mono text-xs text-graphite-soft">
+            {items.length} {items.length === 1 ? "entry" : "entries"}
+          </span>
+        )}
+      </div>
+
+      {showLog && (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <input
+              autoFocus
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+              placeholder="90m"
+              className="h-[30px] w-20 rounded-md border border-hairline bg-paper px-2 text-sm text-ink outline-none focus:border-blueprint"
+            />
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && durationOK) log.mutate();
+              }}
+              placeholder="what you did"
+              className="h-[30px] min-w-0 grow rounded-md border border-hairline bg-paper px-2 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
+            />
+            <button
+              disabled={!durationOK || log.isPending}
+              onClick={() => log.mutate()}
+              className="h-[30px] shrink-0 rounded-md bg-blueprint px-3 text-xs font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+            >
+              Log
+            </button>
+          </div>
+          <p className="text-xs text-graphite-soft">
+            Or write <code className="font-mono text-ink">/spend 90m yesterday …</code> in a comment.
+          </p>
+          {log.isError && <p className="text-xs text-critical">{(log.error as Error).message}</p>}
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {items.slice(0, 6).map((e) => (
+            <li key={e.id} className="group flex items-baseline gap-2 text-xs">
+              <span className="font-mono font-medium text-ink">{formatMinutes(e.minutes)}</span>
+              <span className="min-w-0 grow truncate text-graphite">
+                {e.note || <span className="text-graphite-soft">no note</span>}
+              </span>
+              <span className="shrink-0 text-graphite-soft">{e.spent_on.slice(5)}</span>
+              <button
+                onClick={() => removeEntry.mutate(e.id)}
+                title="Delete this entry"
+                className="shrink-0 text-graphite-soft opacity-0 transition hover:text-critical group-hover:opacity-100"
+              >
+                ×
+              </button>
+            </li>
+          ))}
+          {items.length > 6 && (
+            <li className="text-xs text-graphite-soft">+{items.length - 6} older</li>
+          )}
+        </ul>
+      )}
     </div>
   );
 }

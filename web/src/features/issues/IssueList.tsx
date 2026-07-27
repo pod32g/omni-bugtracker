@@ -1,13 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { api, type Issue, type IssueStatus, type Priority, type SavedSearch } from "../../lib/api";
+import {
+  api,
+  type EffortRollup,
+  type Issue,
+  type IssueStatus,
+  type Priority,
+  type SavedSearch,
+} from "../../lib/api";
 import { useProject } from "../../lib/project";
 import { useShortcut } from "../../lib/shortcuts";
 import { timeAgo } from "../../lib/activity";
+import { sameUnit } from "../../lib/duration";
 import {
   Avatar,
   DueChip,
+  EstimateChip,
   LabelChip,
   PriorityText,
   SeverityBar,
@@ -29,6 +38,7 @@ const QUICK_FILTERS = [
   { label: "Archived", filter: "is:archived" },
   { label: "Snoozed", filter: "is:snoozed" },
   { label: "Overdue", filter: "is:open due:overdue" },
+  { label: "Over budget", filter: "is:open over-budget:true" },
 ];
 
 const SORTS = [
@@ -39,6 +49,7 @@ const SORTS = [
   { value: "severity", label: "Severity" },
   { value: "due", label: "Due date" },
 ];
+
 
 // Compact relative time for the dense list ("2h", "5h", "1d", "just now").
 const shortAgo = (iso: string) => timeAgo(iso).replace(" ago", "");
@@ -170,6 +181,8 @@ export function IssueList() {
   const hasProjects = projects.length > 0;
   const items = issues.data?.pages.flatMap((p) => p.items) ?? [];
   const total = issues.data?.pages[0]?.total ?? 0;
+  // The rollup covers the whole filtered set, not the loaded pages — see the API.
+  const effort = issues.data?.pages[0]?.effort;
 
   const subtitle =
     overview.data && projectKey
@@ -257,6 +270,7 @@ export function IssueList() {
               <span className="font-mono text-xs text-graphite">
                 {total} {total === 1 ? "issue" : "issues"}
               </span>
+              <EffortSummary effort={effort} />
               <ExportMenu projectKey={projectKey} filter={filter} sort={sort} disabled={total === 0} />
               <SortSelect value={sort} onChange={setSort} />
             </div>
@@ -401,6 +415,7 @@ function IssueRow({
               more width than it is worth. */}
           <SLAPill sla={issue.sla} />
           <DueChip dueAt={issue.due_at} resolved={!!issue.resolved_at} />
+          <EstimateChip minutes={issue.estimate_minutes} />
           <span className="font-mono text-xs text-graphite-soft">#{issue.number}</span>
         </div>
       </div>
@@ -471,6 +486,38 @@ function ExportMenu({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * EffortSummary states how much of the current queue is even estimated before it
+ * states how big it is. "3w estimated" over a set where two issues out of forty carry
+ * a number is not a plan, and the coverage is the part that says so.
+ */
+function EffortSummary({ effort }: { effort?: EffortRollup }) {
+  if (!effort || effort.estimated === 0) return null;
+  const partial = effort.estimated < effort.issues;
+  // Both numbers in one unit — "2d est · 270m spent" makes the reader convert
+  // before they can tell whether it is a problem.
+  const fmt = sameUnit(effort.estimate_minutes, effort.spent_minutes);
+  return (
+    <span
+      title={
+        partial
+          ? `${effort.estimated} of ${effort.issues} issues are estimated`
+          : "every issue in this queue is estimated"
+      }
+      className="hidden font-mono text-xs text-graphite sm:inline"
+    >
+      {fmt(effort.estimate_minutes)} est
+      {effort.spent_minutes > 0 && ` · ${fmt(effort.spent_minutes)} spent`}
+      {partial && (
+        <span className="text-graphite-soft">
+          {" "}
+          ({effort.estimated}/{effort.issues})
+        </span>
+      )}
+    </span>
   );
 }
 

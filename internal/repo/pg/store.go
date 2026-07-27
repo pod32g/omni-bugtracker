@@ -300,8 +300,9 @@ func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, pu
 		INSERT INTO issues (
 			project_id, number, type, title, description_md, status, severity, priority,
 			reporter_id, assignee_id, version_affected,
-			repro_steps_md, expected_md, actual_md, environment_md, source, dedupe_key, due_at
-		) VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+			repro_steps_md, expected_md, actual_md, environment_md, source, dedupe_key, due_at,
+			estimate_minutes
+		) VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		RETURNING id, created_at, updated_at`
 	issue := domain.Issue{
 		ProjectKey: in.ProjectKey, Number: number, Type: in.Type, Title: in.Title,
@@ -309,11 +310,12 @@ func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, pu
 		Priority: in.Priority, VersionAffected: in.VersionAffected, ReproStepsMD: in.ReproStepsMD,
 		ExpectedMD: in.ExpectedMD, ActualMD: in.ActualMD, EnvironmentMD: in.EnvironmentMD,
 		Source: in.Source, Labels: in.Labels, Components: in.Components, DueAt: in.DueAt,
+		EstimateMinutes: in.EstimateMinutes,
 	}
 	err = tx.QueryRow(ctx, insert,
 		projectID, number, in.Type, in.Title, in.DescriptionMD, sevPtr(in.Severity), in.Priority,
 		in.ReporterID, in.AssigneeID, in.VersionAffected,
-		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD, in.Source, in.DedupeKey, in.DueAt,
+		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD, in.Source, in.DedupeKey, in.DueAt, in.EstimateMinutes,
 	).Scan(&issue.ID, &issue.CreatedAt, &issue.UpdatedAt)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("insert issue: %w", err)
@@ -532,6 +534,28 @@ func issueWhere(f service.IssueFilter) (string, []any) {
 	if f.DueAfter != nil {
 		add("(i.due_at IS NOT NULL AND i.due_at >= $%d)", *f.DueAfter)
 	}
+	if f.EstimateNone {
+		where = append(where, "i.estimate_minutes IS NULL")
+	}
+	if f.EstimateAny {
+		where = append(where, "i.estimate_minutes IS NOT NULL")
+	}
+	if f.SpentOver != nil {
+		add("COALESCE((SELECT tt.spent_minutes FROM issue_time tt WHERE tt.issue_id = i.id), 0) > $%d", *f.SpentOver)
+	}
+	if f.SpentUnder != nil {
+		add("COALESCE((SELECT tt.spent_minutes FROM issue_time tt WHERE tt.issue_id = i.id), 0) < $%d", *f.SpentUnder)
+	}
+	if f.OverBudget != nil {
+		// Only an estimated issue can be over budget. An unestimated one is unplanned,
+		// which is a different problem and must not be swept in with `over-budget:false`.
+		cond := `(i.estimate_minutes IS NOT NULL AND
+		          COALESCE((SELECT tt.spent_minutes FROM issue_time tt WHERE tt.issue_id = i.id), 0) > i.estimate_minutes)`
+		if !*f.OverBudget {
+			cond = "NOT " + cond
+		}
+		where = append(where, cond)
+	}
 	if f.SLANone {
 		where = append(where, "NOT EXISTS (SELECT 1 FROM issue_sla v WHERE v.issue_id = i.id)")
 	}
@@ -720,13 +744,19 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		                       WHEN $16::timestamptz IS NULL THEN due_at
 		                       WHEN $16::timestamptz = '0001-01-01 00:00:00+00'::timestamptz THEN NULL
 		                       ELSE $16::timestamptz END,
+		  -- Same three-way convention again: nil unchanged, 0 clears, >0 sets. An
+		  -- estimate of zero is not a real estimate, so it is free to mean "remove".
+		  estimate_minutes = CASE
+		                       WHEN $17::int IS NULL THEN estimate_minutes
+		                       WHEN $17::int = 0 THEN NULL
+		                       ELSE $17::int END,
 		  updated_at       = now()
 		WHERE id = $1 AND deleted_at IS NULL`
 	tag, err := tx.Exec(ctx, q, id,
 		in.Title, in.DescriptionMD, typePtr(in.Type), sevPtr(in.Severity), prioPtr(in.Priority),
 		in.AssigneeID, in.VersionAffected, in.VersionFixed,
 		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD,
-		in.MilestoneID, in.ReleaseID, in.DueAt)
+		in.MilestoneID, in.ReleaseID, in.DueAt, in.EstimateMinutes)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -1131,10 +1161,11 @@ func (s *Store) RecentActivity(ctx context.Context, projectKey string, limit int
 // install. Archived issues are excluded throughout, matching lists and search.
 func (s *Store) Dashboard(ctx context.Context, projectKey string) (domain.Dashboard, error) {
 	d := domain.Dashboard{
-		ProjectKey:        projectKey,
-		IssuesByStatus:    map[string]int{},
-		IssuesByComponent: map[string]int{},
-		TeamWorkload:      map[string]int{},
+		ProjectKey:          projectKey,
+		IssuesByStatus:      map[string]int{},
+		IssuesByComponent:   map[string]int{},
+		TeamWorkload:        map[string]int{},
+		RemainingByAssignee: map[string]int{},
 	}
 
 	// $1 = '' means "all projects"; the subquery resolves the scope once per query.
@@ -1200,6 +1231,11 @@ func (s *Store) Dashboard(ctx context.Context, projectKey string) (domain.Dashbo
 		 GROUP BY u.display_name`, projectKey); err != nil {
 		return d, err
 	}
+	remaining, err := s.RemainingByAssignee(ctx, projectKey)
+	if err != nil {
+		return d, err
+	}
+	d.RemainingByAssignee = remaining
 
 	acts, err := s.RecentActivity(ctx, projectKey, 12)
 	if err != nil {
@@ -1376,6 +1412,7 @@ const selectIssue = `
 	       COALESCE(i.rank, ''),
 	       i.due_at, i.first_response_at, i.resolved_at,
 	       sla.response_due, sla.resolution_due, sla.response_state, sla.resolution_state,
+	       i.estimate_minutes, COALESCE(tm.spent_minutes, 0),
 	       ru.id, ru.display_name, ru.email,
 	       au.id, au.display_name, au.email,
 	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
@@ -1391,7 +1428,8 @@ const selectIssue = `
 	LEFT JOIN users au ON au.id = i.assignee_id
 	LEFT JOIN milestones m ON m.id = i.milestone_id
 	LEFT JOIN releases r ON r.id = i.release_id
-	LEFT JOIN issue_sla sla ON sla.issue_id = i.id`
+	LEFT JOIN issue_sla sla ON sla.issue_id = i.id
+	LEFT JOIN issue_time tm ON tm.issue_id = i.id`
 
 // selectLiveIssue re-reads one issue by id after a write. The deleted_at guard
 // matters: every issue write is already conditioned on `deleted_at IS NULL`, so
@@ -1416,6 +1454,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 		&i.CreatedAt, &i.UpdatedAt, &i.ArchivedAt, &i.SnoozedUntil, &i.SnoozeNote, &i.Rank,
 		&i.DueAt, &i.FirstResponseAt, &i.ResolvedAt,
 		&respDue, &resoDue, &respState, &resoState,
+		&i.EstimateMinutes, &i.SpentMinutes,
 		&reporterID, &reporterName, &reporterEmail,
 		&assigneeID, &assigneeName, &assigneeEmail,
 		&i.Labels, &i.Components,

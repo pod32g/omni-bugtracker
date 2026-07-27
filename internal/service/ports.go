@@ -88,6 +88,20 @@ type Repository interface {
 	SetIssueRank(ctx context.Context, id uuid.UUID, rank string) error
 	// NeighbourRanks resolves the ranks either side of a drop position.
 	NeighbourRanks(ctx context.Context, projectKey, beforeKey, afterKey string) (string, string, error)
+	// Time tracking
+	ListTimeEntries(ctx context.Context, issueID uuid.UUID) ([]domain.TimeEntry, error)
+	LogTime(ctx context.Context, in TimeEntryInput) (domain.TimeEntry, error)
+	// DeleteTimeEntry removes an entry; force lets a project maintainer delete
+	// somebody else's, which is checked at the HTTP layer.
+	DeleteTimeEntry(ctx context.Context, id, userID uuid.UUID, force bool) (bool, error)
+	// EffortForIssues rolls up estimate-vs-spent over any filter the list can express.
+	EffortForIssues(ctx context.Context, f IssueFilter) (domain.EffortRollup, error)
+	MilestoneEffort(ctx context.Context, projectKey string) (map[uuid.UUID]domain.EffortRollup, error)
+	ReleaseEffort(ctx context.Context, projectKey string) (map[uuid.UUID]domain.EffortRollup, error)
+	ComponentEffort(ctx context.Context, projectKey string) (map[uuid.UUID]domain.EffortRollup, error)
+	// RemainingByAssignee is open estimated work per person, in minutes.
+	RemainingByAssignee(ctx context.Context, projectKey string) (map[string]int, error)
+
 	// SLA policies (project-scoped response/resolution budgets)
 	ListSLAPolicies(ctx context.Context, projectKey string) ([]domain.SLAPolicy, error)
 	CreateSLAPolicy(ctx context.Context, in SLAPolicyInput) (domain.SLAPolicy, error)
@@ -447,6 +461,7 @@ type CreateIssueInput struct {
 	Source          domain.IssueSource
 	DedupeKey       *string
 	DueAt           *time.Time
+	EstimateMinutes *int
 }
 
 // ProjectViewInput creates a shared view.
@@ -468,6 +483,15 @@ type UpdateProjectViewInput struct {
 	Sort        *string
 	Position    *int
 	IsDefault   *bool
+}
+
+// TimeEntryInput logs one stretch of work. An empty SpentOn means today.
+type TimeEntryInput struct {
+	IssueID uuid.UUID
+	UserID  uuid.UUID
+	Minutes int
+	SpentOn string // YYYY-MM-DD, empty = today
+	Note    string
 }
 
 // SLAPolicyInput creates a project SLA policy. A nil Severity or Type means "any".
@@ -514,6 +538,8 @@ type UpdateIssueInput struct {
 	ReleaseID       *uuid.UUID // nil = unchanged; zero UUID clears; must belong to the issue's project
 	// DueAt follows the same convention: nil = unchanged, the zero time clears it.
 	DueAt *time.Time
+	// EstimateMinutes: nil = unchanged, 0 clears, >0 sets.
+	EstimateMinutes *int
 }
 
 type IssueFilter struct {
@@ -556,7 +582,13 @@ type IssueFilter struct {
 	// issues no policy applies to, which is not the same as "meeting its targets".
 	SLAStates []string
 	SLANone   bool
-	Sort      string
-	Limit     int32
-	Offset    int32
+	// Effort predicates from `estimate:`, `spent:` and `over-budget:`.
+	EstimateNone bool
+	EstimateAny  bool
+	SpentOver    *int // minutes
+	SpentUnder   *int // minutes
+	OverBudget   *bool
+	Sort         string
+	Limit        int32
+	Offset       int32
 }

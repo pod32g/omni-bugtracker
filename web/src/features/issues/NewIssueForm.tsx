@@ -110,6 +110,7 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
       // An empty string on create would be sent as "clear the due date" — harmless
       // but confusing in the request; drop it so an unset field is simply absent.
       if (!body.due_at) delete body.due_at;
+      if (!body.estimate) delete body.estimate;
       const issue = await api.createIssue(projectKey, body);
       // Filing a duplicate on purpose is legitimate — it just has to be recorded, so
       // whoever triages it does not have to rediscover the connection.
@@ -143,6 +144,13 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
         )}
         <Field label="Assignee">
           <AssigneeSelect value={form.assignee_id ?? ""} onChange={(v) => set("assignee_id", v)} />
+        </Field>
+        <Field label="Estimate (optional)">
+          <TextInput
+            value={form.estimate ?? ""}
+            onChange={(v) => set("estimate", v)}
+            placeholder="2d, 4h, 90m"
+          />
         </Field>
         <Field label="Due date (optional)">
           {/* A date input, not a datetime one: people commit to a day. The API

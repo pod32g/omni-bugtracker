@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api, type Release } from "../../lib/api";
 import { useProject } from "../../lib/project";
 import { timeAgo } from "../../lib/activity";
+import { EffortNote } from "../../components/Badges";
 import { IconPlus, IconTag } from "../../components/icons";
 
 const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
@@ -204,6 +205,7 @@ function ReleaseCard({
         <span>
           {r.done_issues} done · {r.open_issues} open
         </span>
+        <EffortNote effort={r.effort} />
         {r.git_tag && <span>tag {r.git_tag}</span>}
         {published && r.released_at && <span>released {timeAgo(r.released_at)}</span>}
       </div>

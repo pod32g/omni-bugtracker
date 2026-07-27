@@ -1,4 +1,5 @@
 import type { IssueStatus, Priority, Severity, User } from "../lib/api";
+import { formatMinutes, formatMinutesLong, formatPair, sameUnit } from "../lib/duration";
 
 // ── Status ────────────────────────────────────────────────────────────────
 export const statusLabel: Record<IssueStatus, string> = {
@@ -194,6 +195,98 @@ export function SLAPill({ sla }: { sla?: { state: string } }) {
       }`}
     >
       SLA {breached ? "breached" : "at risk"}
+    </span>
+  );
+}
+
+// ── Effort ────────────────────────────────────────────────────────────────
+
+/**
+ * EffortBar shows estimate vs spent as one bar rather than two numbers.
+ *
+ * The bar is the estimate; the fill is what has been spent against it. Over-run
+ * turns the fill critical and clamps at full width instead of overflowing — a bar
+ * that runs off its own track is a rendering bug, not a signal.
+ */
+export function EffortBar({
+  estimateMinutes,
+  spentMinutes,
+  className = "",
+}: {
+  estimateMinutes?: number | null;
+  spentMinutes?: number;
+  className?: string;
+}) {
+  const estimate = estimateMinutes ?? 0;
+  const spent = spentMinutes ?? 0;
+  if (!estimate && !spent) return null;
+
+  // Unestimated but with time logged: there is no denominator, so show the number
+  // rather than a bar that would imply a budget nobody set.
+  if (!estimate) {
+    return (
+      <span className={`text-xs font-medium text-graphite ${className}`}>
+        {formatMinutes(spent)} spent · no estimate
+      </span>
+    );
+  }
+  const ratio = Math.min(spent / estimate, 1);
+  const over = spent > estimate;
+  return (
+    <span className={`flex flex-col gap-1 ${className}`}>
+      <span className="flex items-baseline justify-between gap-2 text-xs">
+        <span
+          className={`font-medium ${over ? "text-critical" : "text-graphite"}`}
+          title={`${formatMinutesLong(spent)} spent against ${formatMinutesLong(estimate)} estimated`}
+        >
+          {formatPair(spent, estimate)}
+        </span>
+        {over && <span className="font-semibold text-critical">over</span>}
+      </span>
+      <span className="h-1.5 w-full overflow-hidden rounded-full bg-panel">
+        <span
+          className={`block h-full rounded-full ${over ? "bg-critical" : "bg-blueprint"}`}
+          style={{ width: `${ratio * 100}%` }}
+        />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * EffortNote is the one-line rollup for a milestone/release/component row.
+ *
+ * It leads with coverage when the set is only partly estimated, because "3w
+ * estimated" over eight of forty issues describes a fifth of the work and reads
+ * like all of it.
+ */
+export function EffortNote({ effort }: { effort?: { issues: number; estimated: number; estimate_minutes: number; spent_minutes: number } }) {
+  if (!effort || (effort.estimated === 0 && effort.spent_minutes === 0)) return null;
+  const partial = effort.estimated > 0 && effort.estimated < effort.issues;
+  const fmt = sameUnit(effort.estimate_minutes, effort.spent_minutes);
+  return (
+    <span title={`${effort.estimated} of ${effort.issues} issues estimated`}>
+      {effort.estimated > 0 && <>{fmt(effort.estimate_minutes)} est</>}
+      {partial && <span className="text-graphite-soft"> ({effort.estimated}/{effort.issues})</span>}
+      {effort.spent_minutes > 0 && (
+        <>
+          {effort.estimated > 0 && " · "}
+          {fmt(effort.spent_minutes)} spent
+        </>
+      )}
+    </span>
+  );
+}
+
+/** EstimateChip is the compact list-row form: just the estimate, muted. */
+export function EstimateChip({ minutes }: { minutes?: number | null }) {
+  if (!minutes) return null;
+  return (
+    <span
+      title={`Estimated ${formatMinutesLong(minutes)}`}
+      className="rounded-full border border-hairline bg-panel px-2 py-px font-mono text-xs text-graphite"
+    >
+      {formatMinutes(minutes)}
     </span>
   );
 }

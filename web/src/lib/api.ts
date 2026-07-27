@@ -67,6 +67,7 @@ export interface Component {
   description_md: string;
   lead_id?: string | null;
   open_issues: number;
+  effort?: EffortRollup;
   created_at: string;
 }
 
@@ -78,6 +79,7 @@ export interface Milestone {
   state: "open" | "closed";
   open_issues: number;
   closed_issues: number;
+  effort?: EffortRollup;
   created_at: string;
 }
 
@@ -91,6 +93,7 @@ export interface Release {
   released_at?: string | null;
   open_issues: number;
   done_issues: number;
+  effort?: EffortRollup;
   created_at: string;
 }
 
@@ -111,6 +114,8 @@ export interface NewIssue {
   environment_md?: string;
   /** "YYYY-MM-DD" or RFC 3339. On PATCH, "" clears it; omitting it leaves it alone. */
   due_at?: string;
+  /** A duration like "2d" or "90m". On PATCH, "" clears it. */
+  estimate?: string;
 }
 
 // Sentinel assignee_id meaning "clear the assignee" on PATCH.
@@ -154,6 +159,28 @@ export interface Issue {
   resolved_at?: string | null;
   /** Absent when no policy in the project matches this issue — most issues. */
   sla?: IssueSLA;
+  /** Absent means unestimated, which is a different statement from zero. */
+  estimate_minutes?: number;
+  spent_minutes?: number;
+}
+
+export interface TimeEntry {
+  id: string;
+  issue_id: string;
+  user?: User;
+  minutes: number;
+  spent_on: string; // YYYY-MM-DD
+  note?: string;
+  created_at: string;
+}
+
+export interface EffortRollup {
+  issues: number;
+  /** How many of them carry an estimate — "2 of 40" and "40 of 40" are different plans. */
+  estimated: number;
+  estimate_minutes: number;
+  spent_minutes: number;
+  remaining_minutes: number;
 }
 
 export type SLAState = "met" | "ok" | "at_risk" | "breached";
@@ -404,6 +431,8 @@ export interface DashboardOverview {
   issues_by_status: Record<string, number>;
   issues_by_component: Record<string, number>;
   team_workload: Record<string, number>;
+  /** Open estimated work per person, in minutes — effort, not issue count. */
+  remaining_by_assignee?: Record<string, number>;
   recent_activity: Activity[];
 }
 
@@ -549,7 +578,9 @@ export const api = {
     const q = new URLSearchParams({ filter, sort });
     if (limit != null) q.set("limit", String(limit));
     if (offset) q.set("offset", String(offset));
-    return request<{ items: Issue[]; total: number }>(`/projects/${projectKey}/issues?${q}`);
+    return request<{ items: Issue[]; total: number; effort?: EffortRollup }>(
+      `/projects/${projectKey}/issues?${q}`,
+    );
   },
   getIssue: (issueKey: string) => request<Issue>(`/issues/${issueKey}`),
   createIssue: (projectKey: string, body: NewIssue) =>
@@ -830,5 +861,13 @@ export const api = {
     body: { response_minutes?: number; resolution_minutes?: number; is_active?: boolean },
   ) => request<SLAPolicy>(`/sla-policies/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteSLAPolicy: (id: string) => request<void>(`/sla-policies/${id}`, { method: "DELETE" }),
+
+  listTimeEntries: (issueKey: string) =>
+    request<{ items: TimeEntry[]; spent_minutes: number; estimate_minutes?: number }>(
+      `/issues/${issueKey}/time`,
+    ),
+  logTime: (issueKey: string, body: { duration: string; spent_on?: string; note?: string }) =>
+    request<TimeEntry>(`/issues/${issueKey}/time`, { method: "POST", body: JSON.stringify(body) }),
+  deleteTimeEntry: (id: string) => request<void>(`/time-entries/${id}`, { method: "DELETE" }),
   deleteAttachment: (id: string) => request<void>(`/attachments/${id}`, { method: "DELETE" }),
 };

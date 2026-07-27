@@ -49,39 +49,42 @@ type ProjectMember struct {
 
 // Milestone is a project-scoped goalpost issues can be grouped under.
 type Milestone struct {
-	ID            uuid.UUID  `json:"id"`
-	Title         string     `json:"title"`
-	DescriptionMD string     `json:"description_md"`
-	DueOn         *time.Time `json:"due_on,omitempty"`
-	State         string     `json:"state"` // open | closed
-	OpenIssues    int        `json:"open_issues"`
-	ClosedIssues  int        `json:"closed_issues"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID            uuid.UUID    `json:"id"`
+	Title         string       `json:"title"`
+	DescriptionMD string       `json:"description_md"`
+	DueOn         *time.Time   `json:"due_on,omitempty"`
+	State         string       `json:"state"` // open | closed
+	OpenIssues    int          `json:"open_issues"`
+	ClosedIssues  int          `json:"closed_issues"`
+	Effort        EffortRollup `json:"effort"`
+	CreatedAt     time.Time    `json:"created_at"`
 }
 
 // Release is a project-scoped shippable version issues can be targeted at.
 type Release struct {
-	ID         uuid.UUID  `json:"id"`
-	ProjectKey string     `json:"project_key"`
-	Version    string     `json:"version"` // e.g. "2.1.0"
-	Name       string     `json:"name"`
-	NotesMD    string     `json:"notes_md"`
-	State      string     `json:"state"` // draft | published
-	GitTag     string     `json:"git_tag"`
-	ReleasedAt *time.Time `json:"released_at,omitempty"`
-	OpenIssues int        `json:"open_issues"`
-	DoneIssues int        `json:"done_issues"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID         uuid.UUID    `json:"id"`
+	ProjectKey string       `json:"project_key"`
+	Version    string       `json:"version"` // e.g. "2.1.0"
+	Name       string       `json:"name"`
+	NotesMD    string       `json:"notes_md"`
+	State      string       `json:"state"` // draft | published
+	GitTag     string       `json:"git_tag"`
+	ReleasedAt *time.Time   `json:"released_at,omitempty"`
+	OpenIssues int          `json:"open_issues"`
+	DoneIssues int          `json:"done_issues"`
+	Effort     EffortRollup `json:"effort"`
+	CreatedAt  time.Time    `json:"created_at"`
 }
 
 // Component is a project-scoped area of ownership (e.g. "api", "web", "infra").
 type Component struct {
-	ID            uuid.UUID  `json:"id"`
-	Name          string     `json:"name"`
-	DescriptionMD string     `json:"description_md"`
-	LeadID        *uuid.UUID `json:"lead_id,omitempty"`
-	OpenIssues    int        `json:"open_issues"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID            uuid.UUID    `json:"id"`
+	Name          string       `json:"name"`
+	DescriptionMD string       `json:"description_md"`
+	LeadID        *uuid.UUID   `json:"lead_id,omitempty"`
+	OpenIssues    int          `json:"open_issues"`
+	Effort        EffortRollup `json:"effort"`
+	CreatedAt     time.Time    `json:"created_at"`
 }
 
 type Issue struct {
@@ -136,6 +139,11 @@ type Issue struct {
 	// SLA is the issue's standing against its project's policy; nil when no policy
 	// matches, which is the normal case for a project that has not set any.
 	SLA *IssueSLA `json:"sla,omitempty"`
+	// EstimateMinutes is how big somebody thinks this is; nil means unestimated,
+	// which is a different statement from zero.
+	EstimateMinutes *int `json:"estimate_minutes,omitempty"`
+	// SpentMinutes is the sum of the issue's time entries — derived, never stored.
+	SpentMinutes int `json:"spent_minutes"`
 }
 
 // IsOverdue reports whether the issue passed its own due date without being finished.

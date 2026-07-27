@@ -157,6 +157,37 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 				fields[key] = "unknown value " + quoted(val) +
 					" — expected breached, at-risk, ok, met, or none"
 			}
+		case "estimate":
+			switch strings.ToLower(val) {
+			case "none", "unset":
+				f.EstimateNone = true
+			case "any", "set":
+				f.EstimateAny = true
+			default:
+				fields[key] = "unknown value " + quoted(val) + " — expected none or any"
+			}
+		case "spent":
+			mins, over, msg := parseDurationTerm(val)
+			if msg != "" {
+				fields[key] = msg
+				continue
+			}
+			if over {
+				f.SpentOver = &mins
+			} else {
+				f.SpentUnder = &mins
+			}
+		case "over-budget", "over_budget":
+			switch strings.ToLower(val) {
+			case "true", "yes", "1":
+				b := true
+				f.OverBudget = &b
+			case "false", "no", "0":
+				b := false
+				f.OverBudget = &b
+			default:
+				fields[key] = "expected true or false, got " + quoted(val)
+			}
 		case "milestone": // UI-generated deep links pass the milestone id
 			id, err := uuid.Parse(val)
 			if err != nil {
@@ -235,6 +266,37 @@ func parseDueTerm(f *IssueFilter, val string) string {
 		f.DueAfter = &t
 	}
 	return ""
+}
+
+// durationTermRe matches `>8h`, `<30m`, `>2d` — the comparison is required, because
+// `spent:8h` has no obvious meaning and guessing one would silently mislead.
+var durationTermRe = regexp.MustCompile(`^([<>])(\d+(?:\.\d+)?)([mhdw])$`)
+
+// parseDurationTerm returns (minutes, isOver, validationMessage).
+func parseDurationTerm(val string) (int, bool, string) {
+	m := durationTermRe.FindStringSubmatch(strings.ToLower(strings.TrimSpace(val)))
+	if m == nil {
+		return 0, false, "unknown value " + quoted(val) + ` — expected a comparison like ">8h" or "<30m"`
+	}
+	n, err := strconv.ParseFloat(m[2], 64)
+	if err != nil || n < 0 {
+		return 0, false, "expected a positive duration, got " + quoted(val)
+	}
+	mins := int(n * float64(unitMinutes(m[3])))
+	return mins, m[1] == ">", ""
+}
+
+func unitMinutes(unit string) int {
+	switch unit {
+	case "m":
+		return 1
+	case "h":
+		return 60
+	case "d":
+		return 60 * 24
+	default: // w
+		return 60 * 24 * 7
+	}
 }
 
 // splitFilterTerms splits on whitespace like strings.Fields, but keeps
