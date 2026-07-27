@@ -6,16 +6,21 @@ import "time"
 type Dashboard struct {
 	// ProjectKey is the scope these figures were computed over; empty means every
 	// project. Echoed back so the UI can label the numbers honestly.
-	ProjectKey         string         `json:"project_key,omitempty"`
-	OpenIssues         int            `json:"open_issues"`
-	CriticalIssues     int            `json:"critical_issues"`
-	AvgResolutionHours float64        `json:"avg_resolution_hours"`
-	MTTRHours          float64        `json:"mttr_hours"`
-	RegressionRate     float64        `json:"regression_rate"`
-	IssuesByStatus     map[string]int `json:"issues_by_status"`
-	IssuesByComponent  map[string]int `json:"issues_by_component"`
-	TeamWorkload       map[string]int `json:"team_workload"`
-	RecentActivity     []Activity     `json:"recent_activity"`
+	ProjectKey         string  `json:"project_key,omitempty"`
+	OpenIssues         int     `json:"open_issues"`
+	CriticalIssues     int     `json:"critical_issues"`
+	AvgResolutionHours float64 `json:"avg_resolution_hours"`
+	MTTRHours          float64 `json:"mttr_hours"`
+	RegressionRate     float64 `json:"regression_rate"`
+	// Overdue / SLA counts. Open issues only — a breach that was already paid for by
+	// shipping late is history, and a band that counted it would never go down.
+	OverdueIssues     int            `json:"overdue_issues"`
+	SLAAtRiskIssues   int            `json:"sla_at_risk_issues"`
+	SLABreachedIssues int            `json:"sla_breached_issues"`
+	IssuesByStatus    map[string]int `json:"issues_by_status"`
+	IssuesByComponent map[string]int `json:"issues_by_component"`
+	TeamWorkload      map[string]int `json:"team_workload"`
+	RecentActivity    []Activity     `json:"recent_activity"`
 }
 
 // Report is the trend view the dashboard cannot give: the dashboard is entirely

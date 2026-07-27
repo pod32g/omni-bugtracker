@@ -27,10 +27,14 @@ const (
 	IssueUnarchived    = "issue.unarchived"
 	IssueSnoozed       = "issue.snoozed"
 	IssueWoke          = "issue.woke"
-	IssueCommented     = "comment.created"
-	IssueLinked        = "issue.linked"
-	UserMentioned      = "user.mentioned"
-	ReleasePublished   = "release.published"
+	// SLA escalations. Warning fires at 75% of the budget, breach when it runs out;
+	// each is emitted at most once per issue and target — see issue_sla_events.
+	IssueSLAWarning  = "issue.sla_warning"
+	IssueSLABreached = "issue.sla_breached"
+	IssueCommented   = "comment.created"
+	IssueLinked      = "issue.linked"
+	UserMentioned    = "user.mentioned"
+	ReleasePublished = "release.published"
 )
 
 // DomainEventArgs is the single fan-out job. The worker's dispatcher turns one of these

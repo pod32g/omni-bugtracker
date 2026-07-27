@@ -286,3 +286,61 @@ func countBy(t *testing.T, ctx context.Context, tx pgx.Tx, q string, args ...any
 	}
 	return n
 }
+
+// TestIntegrationClaimSLAEscalationsIsExactlyOnce is the guard on the escalation claim.
+// The point of it is that a breach is announced once: a second sweep over the same
+// still-breached issues must return nothing, or every worker run re-pages the team
+// about the same issue for as long as it stays late.
+//
+// Unlike the tests above this one commits — the claim is an INSERT whose whole job is
+// to be visible to the next caller — so it cleans up after itself instead.
+func TestIntegrationClaimSLAEscalationsIsExactlyOnce(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	s := New(pool)
+
+	// Snapshot what was already claimed so the test can restore it, then start clean.
+	var preserved [][2]string
+	rows, err := pool.Query(ctx, `SELECT issue_id::text, kind FROM issue_sla_events`)
+	if err != nil {
+		t.Fatalf("read existing: %v", err)
+	}
+	for rows.Next() {
+		var e [2]string
+		if err := rows.Scan(&e[0], &e[1]); err != nil {
+			rows.Close()
+			t.Fatalf("scan: %v", err)
+		}
+		preserved = append(preserved, e)
+	}
+	rows.Close()
+	if _, err := pool.Exec(ctx, `DELETE FROM issue_sla_events`); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM issue_sla_events`); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+		for _, e := range preserved {
+			if _, err := pool.Exec(context.Background(),
+				`INSERT INTO issue_sla_events (issue_id, kind) VALUES ($1::uuid, $2)`, e[0], e[1]); err != nil {
+				t.Logf("restore: %v", err)
+			}
+		}
+	})
+
+	first, err := s.ClaimSLAEscalations(ctx)
+	if err != nil {
+		t.Fatalf("first sweep: %v", err)
+	}
+	if len(first) == 0 {
+		t.Skip("no issues past an SLA threshold in this database — nothing to claim")
+	}
+	second, err := s.ClaimSLAEscalations(ctx)
+	if err != nil {
+		t.Fatalf("second sweep: %v", err)
+	}
+	if len(second) != 0 {
+		t.Errorf("second sweep re-claimed %d escalations; each (issue, kind) must be claimed once", len(second))
+	}
+}

@@ -99,6 +99,10 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/projects/{key}/components", h.createComponent)
 	r.Patch("/components/{id}", h.updateComponent)
 	r.Delete("/components/{id}", h.deleteComponent)
+	r.Get("/projects/{key}/sla-policies", h.listSLAPolicies)
+	r.Post("/projects/{key}/sla-policies", h.createSLAPolicy)
+	r.Patch("/sla-policies/{id}", h.updateSLAPolicy)
+	r.Delete("/sla-policies/{id}", h.deleteSLAPolicy)
 	r.Get("/projects/{key}/milestones", h.listMilestones)
 	r.Post("/projects/{key}/milestones", h.createMilestone)
 	r.Patch("/milestones/{id}", h.updateMilestone)
@@ -1663,6 +1667,7 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		ExpectedMD      string           `json:"expected_md"`
 		ActualMD        string           `json:"actual_md"`
 		EnvironmentMD   string           `json:"environment_md"`
+		DueAt           string           `json:"due_at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -1670,6 +1675,11 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(body.Title) == "" {
 		httpapi.WriteValidation(w, map[string]string{"title": "required"})
+		return
+	}
+	dueAt, _, err := parseDueAt(body.DueAt)
+	if err != nil {
+		httpapi.WriteValidation(w, map[string]string{"due_at": err.Error()})
 		return
 	}
 	reporter, _ := uuid.Parse(p.UserID)
@@ -1680,7 +1690,7 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		Components: body.Components, VersionAffected: body.VersionAffected,
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
 		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD,
-		Source: domain.SourceHuman,
+		Source: domain.SourceHuman, DueAt: dueAt,
 	})
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
@@ -1856,6 +1866,9 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		Components      *[]string         `json:"components"`
 		MilestoneID     *uuid.UUID        `json:"milestone_id"`
 		ReleaseID       *uuid.UUID        `json:"release_id"`
+		// Pointer-to-string so the three cases stay distinguishable: absent leaves the
+		// due date alone, "" clears it, a timestamp sets it.
+		DueAt *string `json:"due_at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -1865,6 +1878,20 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteValidation(w, map[string]string{"title": "cannot be empty"})
 		return
 	}
+	var dueAt *time.Time
+	if body.DueAt != nil {
+		parsed, clear, err := parseDueAt(*body.DueAt)
+		if err != nil {
+			httpapi.WriteValidation(w, map[string]string{"due_at": err.Error()})
+			return
+		}
+		if clear {
+			// The store reads Go's zero time as "clear it" — see UpdateIssue.
+			dueAt = &time.Time{}
+		} else {
+			dueAt = parsed
+		}
+	}
 	actor, _ := uuid.Parse(p.UserID)
 	updated, err := h.issues.Update(r.Context(), issue.ID, actor, UpdateIssueInput{
 		Title: body.Title, DescriptionMD: body.DescriptionMD, Type: body.Type,
@@ -1873,6 +1900,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
 		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD, Labels: body.Labels,
 		Components: body.Components, MilestoneID: body.MilestoneID, ReleaseID: body.ReleaseID,
+		DueAt: dueAt,
 	})
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())

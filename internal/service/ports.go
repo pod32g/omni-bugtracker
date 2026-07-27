@@ -88,6 +88,15 @@ type Repository interface {
 	SetIssueRank(ctx context.Context, id uuid.UUID, rank string) error
 	// NeighbourRanks resolves the ranks either side of a drop position.
 	NeighbourRanks(ctx context.Context, projectKey, beforeKey, afterKey string) (string, string, error)
+	// SLA policies (project-scoped response/resolution budgets)
+	ListSLAPolicies(ctx context.Context, projectKey string) ([]domain.SLAPolicy, error)
+	CreateSLAPolicy(ctx context.Context, in SLAPolicyInput) (domain.SLAPolicy, error)
+	UpdateSLAPolicy(ctx context.Context, id uuid.UUID, in UpdateSLAPolicyInput) (domain.SLAPolicy, error)
+	DeleteSLAPolicy(ctx context.Context, id uuid.UUID) (bool, error)
+	// ClaimSLAEscalations atomically claims each (issue, threshold) crossing exactly
+	// once, so a warning cannot re-fire on every worker run.
+	ClaimSLAEscalations(ctx context.Context) ([]SLAEscalation, error)
+
 	// SetIssueSnooze hides an issue until a time, or wakes it when until is nil.
 	SetIssueSnooze(ctx context.Context, id, actor uuid.UUID, until *time.Time, note string, publish PublishFn) (domain.Issue, error)
 	// WakeSnoozedIssues clears every snooze that has come due, returning the ids.
@@ -437,6 +446,7 @@ type CreateIssueInput struct {
 	EnvironmentMD   string
 	Source          domain.IssueSource
 	DedupeKey       *string
+	DueAt           *time.Time
 }
 
 // ProjectViewInput creates a shared view.
@@ -460,6 +470,30 @@ type UpdateProjectViewInput struct {
 	IsDefault   *bool
 }
 
+// SLAPolicyInput creates a project SLA policy. A nil Severity or Type means "any".
+type SLAPolicyInput struct {
+	ProjectKey        string
+	Severity          *domain.Severity
+	Type              *domain.IssueType
+	ResponseMinutes   int
+	ResolutionMinutes int
+}
+
+// UpdateSLAPolicyInput is a partial edit. The scope (severity/type) is deliberately
+// not editable — changing it would silently re-target every issue the policy governs,
+// and the history of what was promised would be gone. Delete and recreate instead.
+type UpdateSLAPolicyInput struct {
+	ResponseMinutes   *int
+	ResolutionMinutes *int
+	IsActive          *bool
+}
+
+// SLAEscalation is one claimed threshold crossing, ready to announce.
+type SLAEscalation struct {
+	IssueID uuid.UUID
+	Kind    string // response_warning | response_breached | resolution_warning | resolution_breached
+}
+
 // UpdateIssueInput is a partial update: nil fields are left unchanged.
 type UpdateIssueInput struct {
 	Title           *string
@@ -478,6 +512,8 @@ type UpdateIssueInput struct {
 	Components      *[]string  // nil = unchanged; non-nil replaces (names must exist in the project)
 	MilestoneID     *uuid.UUID // nil = unchanged; zero UUID clears; must belong to the issue's project
 	ReleaseID       *uuid.UUID // nil = unchanged; zero UUID clears; must belong to the issue's project
+	// DueAt follows the same convention: nil = unchanged, the zero time clears it.
+	DueAt *time.Time
 }
 
 type IssueFilter struct {
@@ -508,6 +544,18 @@ type IssueFilter struct {
 	Watching  bool
 	Mentioned bool
 	MeUserID  *uuid.UUID
+	// Due-date predicates from the `due:` term. DueOverdue and DueNone are separate
+	// booleans rather than a DueBefore of now(), because "late" also requires the
+	// issue to still be unfinished — an issue delivered a day late is not overdue now.
+	DueOverdue bool
+	DueNone    bool
+	DueAny     bool
+	DueBefore  *time.Time
+	DueAfter   *time.Time
+	// SLAStates filters on the worse of an issue's two SLA states; SLANone matches
+	// issues no policy applies to, which is not the same as "meeting its targets".
+	SLAStates []string
+	SLANone   bool
 	Sort      string
 	Limit     int32
 	Offset    int32

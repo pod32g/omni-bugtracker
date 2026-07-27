@@ -32,10 +32,15 @@ var DefaultChannels = map[string]string{
 	events.IssueReopened:      ChannelInbox,
 	events.IssueCreated:       ChannelInbox,
 	events.IssueWoke:          ChannelInbox,
-	events.IssueUpdated:       ChannelOff,
-	events.IssueArchived:      ChannelOff,
-	events.IssueUnarchived:    ChannelOff,
-	events.IssueLinked:        ChannelOff,
+	// A breach is a commitment already broken — that is worth interrupting somebody
+	// for. The warning is the one that still gives them time to act, so it goes to
+	// both too; anyone who finds that noisy can turn it down per-event.
+	events.IssueSLAWarning:  ChannelBoth,
+	events.IssueSLABreached: ChannelBoth,
+	events.IssueUpdated:     ChannelOff,
+	events.IssueArchived:    ChannelOff,
+	events.IssueUnarchived:  ChannelOff,
+	events.IssueLinked:      ChannelOff,
 }
 
 // ChannelFor resolves an event to a channel, falling back to the default and then to

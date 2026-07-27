@@ -5,7 +5,16 @@ import { api, type Issue, type IssueStatus, type Priority, type SavedSearch } fr
 import { useProject } from "../../lib/project";
 import { useShortcut } from "../../lib/shortcuts";
 import { timeAgo } from "../../lib/activity";
-import { Avatar, LabelChip, PriorityText, SeverityBar, SeverityMark, StatusPill } from "../../components/Badges";
+import {
+  Avatar,
+  DueChip,
+  LabelChip,
+  PriorityText,
+  SeverityBar,
+  SeverityMark,
+  SLAPill,
+  StatusPill,
+} from "../../components/Badges";
 import { IconArrowDown, IconLabelLines, IconPlus, IconSearch } from "../../components/icons";
 import { NewIssueForm } from "./NewIssueForm";
 
@@ -19,6 +28,7 @@ const QUICK_FILTERS = [
   { label: "All", filter: "" },
   { label: "Archived", filter: "is:archived" },
   { label: "Snoozed", filter: "is:snoozed" },
+  { label: "Overdue", filter: "is:open due:overdue" },
 ];
 
 const SORTS = [
@@ -27,6 +37,7 @@ const SORTS = [
   { value: "-updated_at", label: "Recently updated" },
   { value: "priority", label: "Priority" },
   { value: "severity", label: "Severity" },
+  { value: "due", label: "Due date" },
 ];
 
 // Compact relative time for the dense list ("2h", "5h", "1d", "just now").
@@ -385,6 +396,11 @@ function IssueRow({
           <span className="hidden min-w-0 items-center gap-1.5 sm:flex">
             {issue.labels?.slice(0, 3).map((l) => <LabelChip key={l} name={l} />)}
           </span>
+          {/* Deadline state sits on the row itself rather than in a column: it only
+              applies to some issues, and an empty column on every other row costs
+              more width than it is worth. */}
+          <SLAPill sla={issue.sla} />
+          <DueChip dueAt={issue.due_at} resolved={!!issue.resolved_at} />
           <span className="font-mono text-xs text-graphite-soft">#{issue.number}</span>
         </div>
       </div>

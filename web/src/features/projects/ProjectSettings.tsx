@@ -157,6 +157,8 @@ export function ProjectSettings() {
 
         <ComponentsSection projectKey={key} canManage={canManage} />
 
+        <SLASection projectKey={key} canManage={canManage} />
+
         <MembersSection projectKey={key} canManage={canManage} />
 
         {canManage && (
@@ -311,6 +313,229 @@ function ComponentsSection({ projectKey, canManage }: { projectKey: string; canM
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * humanMinutes turns a budget into the unit somebody would have typed it in.
+ * "2880 minutes" is unreadable; "2 days" is the thing that was actually agreed.
+ */
+function humanMinutes(m: number): string {
+  if (m % (60 * 24) === 0) {
+    const d = m / (60 * 24);
+    return d === 1 ? "1 day" : `${d} days`;
+  }
+  if (m % 60 === 0) {
+    const h = m / 60;
+    return h === 1 ? "1 hour" : `${h} hours`;
+  }
+  return `${m} min`;
+}
+
+// Budgets are entered as a number plus a unit rather than raw minutes, because
+// nobody knows what 2880 is and everybody knows what 2 days is.
+const UNITS: { label: string; minutes: number }[] = [
+  { label: "hours", minutes: 60 },
+  { label: "days", minutes: 60 * 24 },
+];
+
+function SLASection({ projectKey, canManage }: { projectKey: string; canManage: boolean }) {
+  const qc = useQueryClient();
+  const policies = useQuery({
+    queryKey: ["sla-policies", projectKey],
+    queryFn: () => api.listSLAPolicies(projectKey),
+  });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["sla-policies", projectKey] });
+
+  const [severity, setSeverity] = useState("");
+  const [type, setType] = useState("");
+  const [respN, setRespN] = useState("4");
+  const [respUnit, setRespUnit] = useState(60);
+  const [resoN, setResoN] = useState("3");
+  const [resoUnit, setResoUnit] = useState(60 * 24);
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.createSLAPolicy(projectKey, {
+        severity,
+        type,
+        response_minutes: Math.round(Number(respN) * respUnit),
+        resolution_minutes: Math.round(Number(resoN) * resoUnit),
+      }),
+    onSuccess: invalidate,
+  });
+  const update = useMutation({
+    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
+      api.updateSLAPolicy(id, { is_active }),
+    onSuccess: invalidate,
+  });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteSLAPolicy(id), onSuccess: invalidate });
+
+  const items = policies.data?.items ?? [];
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold text-ink">SLA policies</h2>
+        <p className="text-sm leading-relaxed text-graphite">
+          What this project commits to per severity: how long until somebody answers, and how long
+          until it is fixed. A warning fires at 75% of a budget and a breach when it runs out — each
+          once. Filter with{" "}
+          <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-ink">sla:breached</code>{" "}
+          or{" "}
+          <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-ink">sla:at-risk</code>.
+        </p>
+        {/* The resolution order is the part people get wrong, and it is invisible in a
+            flat list — an unqualified row that looks last can still be the one applied. */}
+        <p className="text-sm leading-relaxed text-graphite-soft">
+          The most specific matching policy wins; rows are listed in that order.
+        </p>
+      </div>
+
+      {canManage && (
+        <div className="flex flex-wrap items-end gap-3 rounded-md border border-hairline bg-panel/50 p-3">
+          <label className="text-sm">
+            <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+              Severity
+            </span>
+            <select
+              value={severity}
+              onChange={(e) => setSeverity(e.target.value)}
+              className="h-9 rounded-md border border-hairline bg-paper px-2 text-sm text-ink"
+            >
+              <option value="">Any</option>
+              {["critical", "high", "medium", "low"].map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+              Type
+            </span>
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              className="h-9 rounded-md border border-hairline bg-paper px-2 text-sm text-ink"
+            >
+              <option value="">Any</option>
+              {["bug", "task", "feature", "improvement"].map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+          <BudgetInput
+            label="First response"
+            n={respN}
+            unit={respUnit}
+            onN={setRespN}
+            onUnit={setRespUnit}
+          />
+          <BudgetInput label="Resolution" n={resoN} unit={resoUnit} onN={setResoN} onUnit={setResoUnit} />
+          <button
+            disabled={create.isPending || !Number(respN) || !Number(resoN)}
+            onClick={() => create.mutate()}
+            className="flex h-9 items-center gap-1.5 rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+          >
+            <IconPlus size={15} />
+            Add
+          </button>
+        </div>
+      )}
+      {create.isError && <p className="text-sm text-critical">{(create.error as Error).message}</p>}
+
+      <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
+        {policies.isLoading && <div className="p-4 text-sm text-graphite">Loading…</div>}
+        {policies.isSuccess && items.length === 0 && (
+          <div className="p-4 text-sm text-graphite-soft">
+            No policies — issues in this project carry no SLA.
+          </div>
+        )}
+        {items.map((p) => (
+          <div key={p.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+            <span className="w-40 text-sm font-medium text-ink">
+              {p.severity ?? "any severity"}
+              {p.type ? ` · ${p.type}` : ""}
+            </span>
+            <span className="text-sm text-graphite">
+              respond in <span className="font-semibold text-ink">{humanMinutes(p.response_minutes)}</span>
+              {" · "}
+              resolve in <span className="font-semibold text-ink">{humanMinutes(p.resolution_minutes)}</span>
+            </span>
+            {!p.is_active && (
+              <span className="rounded-full border border-hairline bg-panel px-2 py-px text-xs text-graphite">
+                paused
+              </span>
+            )}
+            {canManage && (
+              <span className="ml-auto flex items-center gap-3">
+                <button
+                  onClick={() => update.mutate({ id: p.id, is_active: !p.is_active })}
+                  className="text-xs font-semibold text-blueprint transition hover:opacity-80"
+                >
+                  {p.is_active ? "Pause" : "Resume"}
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm("Delete this SLA policy? Issues it governs stop being measured."))
+                      del.mutate(p.id);
+                  }}
+                  className="text-xs font-semibold text-graphite transition hover:text-critical"
+                >
+                  Delete
+                </button>
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function BudgetInput({
+  label,
+  n,
+  unit,
+  onN,
+  onUnit,
+}: {
+  label: string;
+  n: string;
+  unit: number;
+  onN: (v: string) => void;
+  onUnit: (v: number) => void;
+}) {
+  return (
+    <label className="text-sm">
+      <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+        {label}
+      </span>
+      <span className="flex items-center gap-1">
+        <input
+          type="number"
+          min={1}
+          value={n}
+          onChange={(e) => onN(e.target.value)}
+          className="h-9 w-16 rounded-md border border-hairline bg-paper px-2 text-sm text-ink"
+        />
+        <select
+          value={unit}
+          onChange={(e) => onUnit(Number(e.target.value))}
+          className="h-9 rounded-md border border-hairline bg-paper px-2 text-sm text-ink"
+        >
+          {UNITS.map((u) => (
+            <option key={u.label} value={u.minutes}>
+              {u.label}
+            </option>
+          ))}
+        </select>
+      </span>
+    </label>
   );
 }
 

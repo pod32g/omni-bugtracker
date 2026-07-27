@@ -8,6 +8,7 @@ import {
   UNASSIGNED,
   type Comment,
   type Issue,
+  type IssueSLA,
   EMOJI,
   type IssueStatus,
   type Milestone,
@@ -21,7 +22,19 @@ import {
 import { describeActivity, timeAgo } from "../../lib/activity";
 import { remarkIssueKeys } from "../../lib/issueRefs";
 import { matchUsers, mentionQuery, preferredHandle, remarkMentions } from "../../lib/mentions";
-import { Avatar, LabelChip, PriorityText, SeverityMark, SeverityPill, StatusPill, statusLabel, statusTone } from "../../components/Badges";
+import {
+  Avatar,
+  DueChip,
+  LabelChip,
+  PriorityText,
+  relativeDue,
+  SeverityMark,
+  SeverityPill,
+  SLAPill,
+  StatusPill,
+  statusLabel,
+  statusTone,
+} from "../../components/Badges";
 import { IconBranch, IconChevronDown, IconCommit, IconEye, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
 import { EditIssueForm } from "./EditIssueForm";
 import { ComponentsSelect } from "./formFields";
@@ -416,6 +429,15 @@ export function IssueDetail() {
               <SeverityMark severity={i.severity} />
             </MetaRow>
           </div>
+
+          <MetaRow label="Due">
+            <DueControl
+              dueAt={i.due_at ?? null}
+              resolved={!!i.resolved_at}
+              sla={i.sla}
+              onChange={(due_at) => patch.mutate({ due_at })}
+            />
+          </MetaRow>
 
           {(i.version_fixed || i.version_affected) && (
             <MetaRow label="Version">
@@ -1264,6 +1286,84 @@ function Callout({ tone, label, body }: { tone: "resolved" | "critical"; label: 
     <div className={`flex grow basis-0 flex-col gap-2 rounded-md border-l-[3px] bg-panel/50 px-4 py-3.5 ${border}`}>
       <span className={`font-mono text-[10px] font-medium uppercase tracking-caps ${text}`}>{label}</span>
       <Markdown body={body} className="markdown text-[14px] leading-[1.55]" />
+    </div>
+  );
+}
+
+/**
+ * DueControl edits the issue's own deadline and, underneath it, reports where the
+ * issue stands against its project's SLA.
+ *
+ * The two are deliberately shown together but never conflated: the due date is a
+ * promise somebody made about this issue, the SLA is what the project already
+ * committed to for everything of this severity. Editing one must not look like it
+ * moves the other.
+ */
+function DueControl({
+  dueAt,
+  resolved,
+  sla,
+  onChange,
+}: {
+  dueAt: string | null;
+  resolved: boolean;
+  sla?: IssueSLA;
+  onChange: (dueAt: string) => void;
+}) {
+  // <input type="date"> speaks "YYYY-MM-DD" in local time; the API accepts exactly
+  // that and resolves it to the end of that day, so no timezone maths happens here.
+  const value = dueAt ? new Date(dueAt).toLocaleDateString("en-CA") : "";
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <input
+          type="date"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label="Due date"
+          className="h-[30px] rounded-md border border-hairline bg-paper px-2 text-sm text-ink"
+        />
+        {dueAt && (
+          <button
+            onClick={() => onChange("")}
+            className="text-xs font-semibold text-graphite transition hover:text-critical"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {dueAt && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <DueChip dueAt={dueAt} resolved={resolved} />
+        </div>
+      )}
+      {sla && (
+        <div className="flex flex-col gap-1 border-t border-hairline pt-2">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-graphite">SLA</span>
+            <SLAPill sla={sla} />
+            {sla.state !== "breached" && sla.state !== "at_risk" && (
+              <span className="text-xs font-medium text-resolved">on target</span>
+            )}
+          </div>
+          <SLALine label="First response" due={sla.response_due} state={sla.response_state} />
+          <SLALine label="Resolution" due={sla.resolution_due} state={sla.resolution_state} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SLALine({ label, due, state }: { label: string; due?: string; state: string }) {
+  if (!due) return null;
+  const tone =
+    state === "breached" ? "text-critical" : state === "at_risk" ? "text-high" : "text-graphite";
+  return (
+    <div className="flex items-baseline justify-between gap-2 text-xs">
+      <span className="text-graphite-soft">{label}</span>
+      <span className={`font-medium ${tone}`} title={new Date(due).toLocaleString()}>
+        {state === "met" ? "met" : relativeDue(due)}
+      </span>
     </div>
   );
 }

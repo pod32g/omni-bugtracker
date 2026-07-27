@@ -1,7 +1,10 @@
 package service
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -134,6 +137,26 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 			f.Label = val
 		case "component":
 			f.Component = val
+		case "due":
+			if msg := parseDueTerm(&f, val); msg != "" {
+				fields[key] = msg
+			}
+		case "sla":
+			switch strings.ToLower(strings.ReplaceAll(val, "-", "_")) {
+			case "breached":
+				f.SLAStates = append(f.SLAStates, domain.SLABreached)
+			case "at_risk":
+				f.SLAStates = append(f.SLAStates, domain.SLAAtRisk)
+			case "ok":
+				f.SLAStates = append(f.SLAStates, domain.SLAOK)
+			case "met":
+				f.SLAStates = append(f.SLAStates, domain.SLAMet)
+			case "none":
+				f.SLANone = true
+			default:
+				fields[key] = "unknown value " + quoted(val) +
+					" — expected breached, at-risk, ok, met, or none"
+			}
 		case "milestone": // UI-generated deep links pass the milestone id
 			id, err := uuid.Parse(val)
 			if err != nil {
@@ -155,6 +178,63 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 	f.Query = strings.Join(freeText, " ")
 	f.Statuses = dedupeStatuses(f.Statuses)
 	return f, fields
+}
+
+// dueTermRe matches the relative forms of `due:` — `<7d`, `>2w`, `<48h`.
+var dueTermRe = regexp.MustCompile(`^([<>])(\d+)([hdw])$`)
+
+// parseDueTerm fills the due-date predicates from one `due:` value, returning a
+// validation message (empty on success).
+//
+// Deadlines are compared against wall-clock now() rather than a truncated day: an
+// issue due at 17:00 is not late at 09:00, and rounding to the day would report it as
+// overdue for eight hours before it actually was.
+func parseDueTerm(f *IssueFilter, val string) string {
+	now := time.Now()
+	switch strings.ToLower(val) {
+	case "overdue", "late":
+		f.DueOverdue = true
+		return ""
+	case "none", "unset":
+		f.DueNone = true
+		return ""
+	case "any", "set":
+		f.DueAny = true
+		return ""
+	case "today":
+		end := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
+		f.DueBefore = &end
+		return ""
+	case "week":
+		end := now.AddDate(0, 0, 7)
+		f.DueBefore = &end
+		return ""
+	}
+	m := dueTermRe.FindStringSubmatch(strings.ToLower(val))
+	if m == nil {
+		return "unknown value " + quoted(val) +
+			` — expected overdue, none, any, today, week, or a relative window like "<7d"`
+	}
+	n, err := strconv.Atoi(m[2])
+	if err != nil || n <= 0 {
+		return "expected a positive number of hours/days/weeks, got " + quoted(val)
+	}
+	var d time.Duration
+	switch m[3] {
+	case "h":
+		d = time.Duration(n) * time.Hour
+	case "d":
+		d = time.Duration(n) * 24 * time.Hour
+	case "w":
+		d = time.Duration(n) * 7 * 24 * time.Hour
+	}
+	t := now.Add(d)
+	if m[1] == "<" {
+		f.DueBefore = &t
+	} else {
+		f.DueAfter = &t
+	}
+	return ""
 }
 
 // splitFilterTerms splits on whitespace like strings.Fields, but keeps

@@ -300,20 +300,20 @@ func (s *Store) CreateIssue(ctx context.Context, in service.CreateIssueInput, pu
 		INSERT INTO issues (
 			project_id, number, type, title, description_md, status, severity, priority,
 			reporter_id, assignee_id, version_affected,
-			repro_steps_md, expected_md, actual_md, environment_md, source, dedupe_key
-		) VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			repro_steps_md, expected_md, actual_md, environment_md, source, dedupe_key, due_at
+		) VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		RETURNING id, created_at, updated_at`
 	issue := domain.Issue{
 		ProjectKey: in.ProjectKey, Number: number, Type: in.Type, Title: in.Title,
 		DescriptionMD: in.DescriptionMD, Status: domain.StatusOpen, Severity: in.Severity,
 		Priority: in.Priority, VersionAffected: in.VersionAffected, ReproStepsMD: in.ReproStepsMD,
 		ExpectedMD: in.ExpectedMD, ActualMD: in.ActualMD, EnvironmentMD: in.EnvironmentMD,
-		Source: in.Source, Labels: in.Labels, Components: in.Components,
+		Source: in.Source, Labels: in.Labels, Components: in.Components, DueAt: in.DueAt,
 	}
 	err = tx.QueryRow(ctx, insert,
 		projectID, number, in.Type, in.Title, in.DescriptionMD, sevPtr(in.Severity), in.Priority,
 		in.ReporterID, in.AssigneeID, in.VersionAffected,
-		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD, in.Source, in.DedupeKey,
+		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD, in.Source, in.DedupeKey, in.DueAt,
 	).Scan(&issue.ID, &issue.CreatedAt, &issue.UpdatedAt)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("insert issue: %w", err)
@@ -438,6 +438,15 @@ func (s *Store) EachIssue(ctx context.Context, f service.IssueFilter, fn func(do
 	return rows.Err()
 }
 
+// worstSLAExpr collapses an issue_sla row's two states into the one a list renders.
+// Ordered the same way domain.WorseSLAState orders them; kept as a constant so the SQL
+// filter and the Go pill can never drift apart.
+const worstSLAExpr = `CASE
+	WHEN 'breached' IN (v.response_state, v.resolution_state) THEN 'breached'
+	WHEN 'at_risk'  IN (v.response_state, v.resolution_state) THEN 'at_risk'
+	WHEN 'ok'       IN (v.response_state, v.resolution_state) THEN 'ok'
+	ELSE 'met' END`
+
 // issueWhere builds the shared filter predicate and its arguments. Kept in one place so
 // an export can never disagree with the list it was launched from.
 func issueWhere(f service.IssueFilter) (string, []any) {
@@ -505,6 +514,33 @@ func issueWhere(f service.IssueFilter) (string, []any) {
 	}
 	if strings.TrimSpace(f.Query) != "" {
 		add("i.fts @@ websearch_to_tsquery('english', $%d)", f.Query)
+	}
+	// Overdue means "past its date and still not done" — an issue delivered a day late
+	// is not overdue now, and listing it as such would make the queue useless.
+	if f.DueOverdue {
+		where = append(where, "i.due_at IS NOT NULL AND i.due_at < now() AND i.status NOT IN ('resolved','closed')")
+	}
+	if f.DueNone {
+		where = append(where, "i.due_at IS NULL")
+	}
+	if f.DueAny {
+		where = append(where, "i.due_at IS NOT NULL")
+	}
+	if f.DueBefore != nil {
+		add("(i.due_at IS NOT NULL AND i.due_at <= $%d)", *f.DueBefore)
+	}
+	if f.DueAfter != nil {
+		add("(i.due_at IS NOT NULL AND i.due_at >= $%d)", *f.DueAfter)
+	}
+	if f.SLANone {
+		where = append(where, "NOT EXISTS (SELECT 1 FROM issue_sla v WHERE v.issue_id = i.id)")
+	}
+	if len(f.SLAStates) > 0 {
+		// Matched against the worse of the two states, which is what the single pill
+		// in the list shows — filtering on something the row does not display would
+		// look like a bug.
+		add(`EXISTS (SELECT 1 FROM issue_sla v WHERE v.issue_id = i.id
+		     AND `+worstSLAExpr+` = ANY($%d::text[]))`, f.SLAStates)
 	}
 	return strings.Join(where, " AND "), args
 }
@@ -677,13 +713,20 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		                       WHEN $15::uuid IS NULL THEN release_id
 		                       WHEN $15::uuid = '00000000-0000-0000-0000-000000000000'::uuid THEN NULL
 		                       ELSE $15::uuid END,
+		  -- Due date follows the same three-way convention as the id fields, since
+		  -- "clear the due date" and "leave it alone" are different requests: $16 nil
+		  -- is unchanged, Go's zero time clears, anything else sets.
+		  due_at           = CASE
+		                       WHEN $16::timestamptz IS NULL THEN due_at
+		                       WHEN $16::timestamptz = '0001-01-01 00:00:00+00'::timestamptz THEN NULL
+		                       ELSE $16::timestamptz END,
 		  updated_at       = now()
 		WHERE id = $1 AND deleted_at IS NULL`
 	tag, err := tx.Exec(ctx, q, id,
 		in.Title, in.DescriptionMD, typePtr(in.Type), sevPtr(in.Severity), prioPtr(in.Priority),
 		in.AssigneeID, in.VersionAffected, in.VersionFixed,
 		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD,
-		in.MilestoneID, in.ReleaseID)
+		in.MilestoneID, in.ReleaseID, in.DueAt)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -844,6 +887,15 @@ func (s *Store) AddComment(ctx context.Context, issueID, author uuid.UUID, body 
 		return domain.Comment{}, err
 	}
 	if err := recordActivity(ctx, tx, issueID, author, "comment.created", "comment", c.ID); err != nil {
+		return domain.Comment{}, err
+	}
+	// First response is the first comment by somebody other than the reporter — a
+	// reporter adding "any update?" is not the team responding. Stamped once and only
+	// once, in the same transaction as the comment, so the two can never disagree.
+	if _, err := tx.Exec(ctx,
+		`UPDATE issues SET first_response_at = $2
+		  WHERE id = $1 AND first_response_at IS NULL AND reporter_id IS DISTINCT FROM $3`,
+		issueID, c.CreatedAt, author); err != nil {
 		return domain.Comment{}, err
 	}
 	// Auto-watch: commenting subscribes you to the conversation.
@@ -1105,6 +1157,20 @@ func (s *Store) Dashboard(ctx context.Context, projectKey string) (domain.Dashbo
 		return d, err
 	}
 
+	// Overdue and SLA standing, counted over open issues only. A breach already paid
+	// for by shipping late is history; a band that counted those would never go down
+	// and would stop meaning anything within a month.
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE i.due_at IS NOT NULL AND i.due_at < now()),
+		        count(*) FILTER (WHERE `+worstSLAExpr+` = 'at_risk'),
+		        count(*) FILTER (WHERE `+worstSLAExpr+` = 'breached')
+		   FROM issues i
+		   LEFT JOIN issue_sla v ON v.issue_id = i.id
+		  WHERE `+scope+` AND i.status NOT IN ('resolved','closed')`, projectKey).
+		Scan(&d.OverdueIssues, &d.SLAAtRiskIssues, &d.SLABreachedIssues); err != nil {
+		return d, err
+	}
+
 	var reopened, terminal int
 	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FILTER (WHERE i.status = 'reopened'),
@@ -1308,6 +1374,8 @@ const selectIssue = `
 	       i.repro_steps_md, i.expected_md, i.actual_md, i.environment_md, i.source,
 	       i.created_at, i.updated_at, i.archived_at, i.snoozed_until, i.snooze_note,
 	       COALESCE(i.rank, ''),
+	       i.due_at, i.first_response_at, i.resolved_at,
+	       sla.response_due, sla.resolution_due, sla.response_state, sla.resolution_state,
 	       ru.id, ru.display_name, ru.email,
 	       au.id, au.display_name, au.email,
 	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
@@ -1322,7 +1390,8 @@ const selectIssue = `
 	LEFT JOIN users ru ON ru.id = i.reporter_id
 	LEFT JOIN users au ON au.id = i.assignee_id
 	LEFT JOIN milestones m ON m.id = i.milestone_id
-	LEFT JOIN releases r ON r.id = i.release_id`
+	LEFT JOIN releases r ON r.id = i.release_id
+	LEFT JOIN issue_sla sla ON sla.issue_id = i.id`
 
 // selectLiveIssue re-reads one issue by id after a write. The deleted_at guard
 // matters: every issue write is already conditioned on `deleted_at IS NULL`, so
@@ -1338,11 +1407,15 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	var sev *string
 	var reporterID, assigneeID *uuid.UUID
 	var reporterName, reporterEmail, assigneeName, assigneeEmail, milestoneTitle, releaseVersion *string
+	var respState, resoState *string
+	var respDue, resoDue *time.Time
 	err := row.Scan(
 		&i.ID, &i.ProjectKey, &i.Number, &i.Type, &i.Title, &i.DescriptionMD, &i.Status, &sev, &i.Priority,
 		&i.VersionAffected, &i.VersionFixed, &i.GitCommitSHA, &i.PullRequestURL,
 		&i.ReproStepsMD, &i.ExpectedMD, &i.ActualMD, &i.EnvironmentMD, &i.Source,
 		&i.CreatedAt, &i.UpdatedAt, &i.ArchivedAt, &i.SnoozedUntil, &i.SnoozeNote, &i.Rank,
+		&i.DueAt, &i.FirstResponseAt, &i.ResolvedAt,
+		&respDue, &resoDue, &respState, &resoState,
 		&reporterID, &reporterName, &reporterEmail,
 		&assigneeID, &assigneeName, &assigneeEmail,
 		&i.Labels, &i.Components,
@@ -1354,6 +1427,15 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	}
 	i.Milestone = deref(milestoneTitle)
 	i.Release = deref(releaseVersion)
+	// Both states come from the same LEFT JOIN row, so either both are present or the
+	// project has no policy for this issue and it carries no SLA at all.
+	if respState != nil && resoState != nil {
+		i.SLA = &domain.IssueSLA{
+			ResponseDue: respDue, ResolutionDue: resoDue,
+			ResponseState: *respState, ResolutionState: *resoState,
+			State: domain.WorseSLAState(*respState, *resoState),
+		}
+	}
 	if sev != nil {
 		sv := domain.Severity(*sev)
 		i.Severity = &sv
@@ -1464,6 +1546,10 @@ func orderBy(sort string) string {
 		return "i.priority ASC, i.created_at DESC"
 	case "severity":
 		return "i.severity ASC NULLS LAST, i.created_at DESC"
+	case "due":
+		// Soonest first, and issues with no due date last — a queue sorted by deadline
+		// that opens on the undated ones is answering a different question.
+		return "i.due_at ASC NULLS LAST, i.created_at DESC"
 	case "rank":
 		// Board order. Unranked issues sort last and fall back to recency, so a
 		// project that has never been reordered looks exactly as it does today and

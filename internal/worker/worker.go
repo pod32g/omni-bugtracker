@@ -39,6 +39,7 @@ func New(d Deps) (*river.Client[pgx.Tx], error) {
 	river.AddWorker(workers, &obsIngestWorker{d: d})
 	river.AddWorker(workers, &autoArchiveWorker{d: d})
 	river.AddWorker(workers, &wakeSnoozedWorker{d: d})
+	river.AddWorker(workers, &slaSweepWorker{d: d})
 
 	q := d.Cfg.Worker.Queues
 	queues := map[string]river.QueueConfig{
@@ -61,6 +62,14 @@ func New(d Deps) (*river.Client[pgx.Tx], error) {
 		river.NewPeriodicJob(
 			river.PeriodicInterval(15*time.Minute),
 			func() (river.JobArgs, *river.InsertOpts) { return events.WakeSnoozedArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: true},
+		),
+		// SLA sweep on the same cadence. A five-minute breach alert is not worth the
+		// load, and an hourly one would report a two-hour response target as breached
+		// up to an hour after it was — which is the number people would then argue with.
+		river.NewPeriodicJob(
+			river.PeriodicInterval(15*time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) { return events.SLASweepArgs{}, nil },
 			&river.PeriodicJobOpts{RunOnStart: true},
 		),
 	}

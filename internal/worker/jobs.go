@@ -275,6 +275,10 @@ func humanEventSummary(eventType string, issue domain.Issue) string {
 		return "New comment on " + issue.Key
 	case events.IssueStatusChanged:
 		return issue.Key + " moved to " + string(issue.Status)
+	case events.IssueSLAWarning:
+		return issue.Key + " is approaching its SLA target"
+	case events.IssueSLABreached:
+		return issue.Key + " has breached its SLA target"
 	default:
 		return issue.Key + " was updated"
 	}
@@ -550,6 +554,47 @@ func (w *wakeSnoozedWorker) Work(ctx context.Context, _ *river.Job[events.WakeSn
 		// snooze — so say so, through the same fan-out every other event uses.
 		if _, err := client.Insert(ctx, events.DomainEventArgs{
 			EventType: events.IssueWoke, IssueID: id.String(),
+		}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// slaSweepWorker escalates issues that have crossed an SLA threshold.
+//
+// The claim happens in the store, in one statement, so this loop only ever sees
+// crossings nobody has announced yet — a re-run after a crash re-announces nothing.
+type slaSweepWorker struct {
+	river.WorkerDefaults[events.SLASweepArgs]
+	d Deps
+}
+
+func (w *slaSweepWorker) Work(ctx context.Context, _ *river.Job[events.SLASweepArgs]) error {
+	claims, err := w.d.Store.ClaimSLAEscalations(ctx)
+	if err != nil {
+		return err
+	}
+	if len(claims) == 0 {
+		return nil
+	}
+	w.d.Logger.Info("sla sweep", "escalations", len(claims))
+
+	client := river.ClientFromContext[pgx.Tx](ctx)
+	for _, c := range claims {
+		eventType := events.IssueSLAWarning
+		if strings.HasSuffix(c.Kind, "_breached") {
+			eventType = events.IssueSLABreached
+		}
+		// The kind ("response_warning") rides in the payload rather than in the event
+		// type: a webhook subscriber filtering on issue.sla_breached wants both
+		// targets, and one that cares which can read it.
+		payload, err := json.Marshal(map[string]string{"target": c.Kind})
+		if err != nil {
+			return err
+		}
+		if _, err := client.Insert(ctx, events.DomainEventArgs{
+			EventType: eventType, IssueID: c.IssueID.String(), Payload: payload,
 		}, nil); err != nil {
 			return err
 		}

@@ -109,6 +109,8 @@ export interface NewIssue {
   expected_md?: string;
   actual_md?: string;
   environment_md?: string;
+  /** "YYYY-MM-DD" or RFC 3339. On PATCH, "" clears it; omitting it leaves it alone. */
+  due_at?: string;
 }
 
 // Sentinel assignee_id meaning "clear the assignee" on PATCH.
@@ -146,6 +148,35 @@ export interface Issue {
   /** Hidden from default lists until this time; still open, just not now. */
   snoozed_until?: string | null;
   snooze_note?: string;
+  /** The deliberate per-issue promise, independent of any SLA policy. */
+  due_at?: string | null;
+  first_response_at?: string | null;
+  resolved_at?: string | null;
+  /** Absent when no policy in the project matches this issue — most issues. */
+  sla?: IssueSLA;
+}
+
+export type SLAState = "met" | "ok" | "at_risk" | "breached";
+
+export interface IssueSLA {
+  response_due?: string;
+  resolution_due?: string;
+  response_state: SLAState;
+  resolution_state: SLAState;
+  /** The worse of the two — what a single pill renders. */
+  state: SLAState;
+}
+
+export interface SLAPolicy {
+  id: string;
+  project_key: string;
+  /** Absent means the policy applies to any severity. */
+  severity?: Severity;
+  type?: IssueType;
+  response_minutes: number;
+  resolution_minutes: number;
+  is_active: boolean;
+  created_at: string;
 }
 
 export interface Comment {
@@ -366,6 +397,10 @@ export interface DashboardOverview {
   avg_resolution_hours: number;
   mttr_hours: number;
   regression_rate: number;
+  /** Open issues only — a breach already paid for by shipping late is history. */
+  overdue_issues?: number;
+  sla_at_risk_issues?: number;
+  sla_breached_issues?: number;
   issues_by_status: Record<string, number>;
   issues_by_component: Record<string, number>;
   team_workload: Record<string, number>;
@@ -779,5 +814,21 @@ export const api = {
       body: JSON.stringify({ until, note }),
     }),
   wakeIssue: (issueKey: string) => request<Issue>(`/issues/${issueKey}/snooze`, { method: "DELETE" }),
+
+  listSLAPolicies: (projectKey: string) =>
+    request<{ items: SLAPolicy[] }>(`/projects/${projectKey}/sla-policies`),
+  createSLAPolicy: (
+    projectKey: string,
+    body: { severity: string; type: string; response_minutes: number; resolution_minutes: number },
+  ) =>
+    request<SLAPolicy>(`/projects/${projectKey}/sla-policies`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateSLAPolicy: (
+    id: string,
+    body: { response_minutes?: number; resolution_minutes?: number; is_active?: boolean },
+  ) => request<SLAPolicy>(`/sla-policies/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteSLAPolicy: (id: string) => request<void>(`/sla-policies/${id}`, { method: "DELETE" }),
   deleteAttachment: (id: string) => request<void>(`/attachments/${id}`, { method: "DELETE" }),
 };

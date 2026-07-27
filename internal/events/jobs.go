@@ -79,6 +79,13 @@ type WakeSnoozedArgs struct{}
 func (WakeSnoozedArgs) Kind() string                 { return "wake_snoozed" }
 func (WakeSnoozedArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "default"} }
 
+// SLASweepArgs is the periodic job that escalates issues past their SLA thresholds.
+// No payload — it claims whatever has crossed since the last run.
+type SLASweepArgs struct{}
+
+func (SLASweepArgs) Kind() string                 { return "sla_sweep" }
+func (SLASweepArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "default"} }
+
 // ObsIngestArgs → create/dedupe an issue from a logging/metrics alert.
 type ObsIngestArgs struct {
 	Source      string          `json:"source"` // logging|metrics

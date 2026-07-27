@@ -22,7 +22,16 @@ var exportColumns = []string{
 	"key", "project", "number", "type", "title", "status", "severity", "priority",
 	"assignee", "reporter", "labels", "components", "milestone", "release",
 	"version_affected", "version_fixed", "open_blockers", "created_at", "updated_at",
-	"archived_at", "description",
+	"archived_at", "due_at", "first_response_at", "resolved_at", "sla_state", "description",
+}
+
+// slaStateString renders an absent SLA as empty rather than "ok": a project with no
+// policy is not meeting its targets, it simply has none.
+func slaStateString(s *domain.IssueSLA) string {
+	if s == nil {
+		return ""
+	}
+	return s.State
 }
 
 func exportRow(i domain.Issue) []string {
@@ -34,7 +43,8 @@ func exportRow(i domain.Issue) []string {
 		i.Milestone, i.Release, i.VersionAffected, i.VersionFixed,
 		strconv.Itoa(i.OpenBlockers),
 		i.CreatedAt.UTC().Format(time.RFC3339), i.UpdatedAt.UTC().Format(time.RFC3339),
-		timeString(i.ArchivedAt), i.DescriptionMD,
+		timeString(i.ArchivedAt), timeString(i.DueAt), timeString(i.FirstResponseAt),
+		timeString(i.ResolvedAt), slaStateString(i.SLA), i.DescriptionMD,
 	}
 }
 

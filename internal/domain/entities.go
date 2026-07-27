@@ -126,6 +126,21 @@ type Issue struct {
 	// Rank is the manual board order within a column. Empty means never ranked, which
 	// the board sorts after everything that has been.
 	Rank string `json:"rank,omitempty"`
+	// DueAt is the deliberate per-issue promise, independent of any SLA policy.
+	DueAt *time.Time `json:"due_at,omitempty"`
+	// FirstResponseAt / ResolvedAt are stamps rather than derivations — see the
+	// migration: a response time inferred from the comment table changes meaning
+	// whenever a comment is edited, and updated_at is not a resolution time.
+	FirstResponseAt *time.Time `json:"first_response_at,omitempty"`
+	ResolvedAt      *time.Time `json:"resolved_at,omitempty"`
+	// SLA is the issue's standing against its project's policy; nil when no policy
+	// matches, which is the normal case for a project that has not set any.
+	SLA *IssueSLA `json:"sla,omitempty"`
+}
+
+// IsOverdue reports whether the issue passed its own due date without being finished.
+func (i Issue) IsOverdue(now time.Time) bool {
+	return i.DueAt != nil && i.ResolvedAt == nil && now.After(*i.DueAt)
 }
 
 // Key builds the human-readable issue key from a project key and number.

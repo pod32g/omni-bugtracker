@@ -130,6 +130,74 @@ export function Avatar({ user, size = 28 }: { user?: User; size?: number }) {
   );
 }
 
+// ── Due dates & SLA ───────────────────────────────────────────────────────
+
+/** relativeDue renders a deadline the way people say it out loud. */
+export function relativeDue(iso: string, now = Date.now()): string {
+  const ms = new Date(iso).getTime() - now;
+  const days = Math.round(ms / 86_400_000);
+  const hours = Math.round(ms / 3_600_000);
+  if (ms < 0) {
+    const late = Math.abs(days);
+    if (late === 0) return `${Math.abs(hours)}h late`;
+    return late === 1 ? "1 day late" : `${late} days late`;
+  }
+  if (hours < 24) return `in ${hours}h`;
+  return days === 1 ? "tomorrow" : `in ${days} days`;
+}
+
+/**
+ * DueChip shows a deadline, emphasised only when it is actually a problem. A
+ * resolved issue never reads as late — the work is done, and colouring history red
+ * would make the whole column noise.
+ */
+export function DueChip({
+  dueAt,
+  resolved,
+  now,
+}: {
+  dueAt?: string | null;
+  resolved?: boolean;
+  now?: number;
+}) {
+  if (!dueAt) return null;
+  const overdue = !resolved && new Date(dueAt).getTime() < (now ?? Date.now());
+  return (
+    <span
+      title={new Date(dueAt).toLocaleString()}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-px text-xs font-medium ${
+        overdue
+          ? "border-critical-border bg-critical-soft text-critical"
+          : "border-hairline bg-panel text-graphite"
+      }`}
+    >
+      {overdue ? "⚠" : "⏱"} {relativeDue(dueAt, now)}
+    </span>
+  );
+}
+
+/**
+ * SLAPill renders the worse of an issue's two SLA states. "ok" and "met" render
+ * nothing: a pill on every issue that is simply fine is a pill nobody reads, and the
+ * two states worth interrupting someone over lose their weight next to it.
+ */
+export function SLAPill({ sla }: { sla?: { state: string } }) {
+  if (!sla || (sla.state !== "breached" && sla.state !== "at_risk")) return null;
+  const breached = sla.state === "breached";
+  return (
+    <span
+      title={breached ? "Past its SLA target" : "Approaching its SLA target"}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-px text-xs font-semibold ${
+        breached
+          ? "border-critical-border bg-critical-soft text-critical"
+          : "border-high-border bg-high-soft text-high"
+      }`}
+    >
+      SLA {breached ? "breached" : "at risk"}
+    </span>
+  );
+}
+
 // ── Labels ────────────────────────────────────────────────────────────────
 export function LabelChip({ name }: { name: string }) {
   return (

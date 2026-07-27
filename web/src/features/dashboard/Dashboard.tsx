@@ -75,6 +75,8 @@ export function Dashboard() {
           <Kpi label="MTTR · 30d" value={hours(data.mttr_hours)} foot={<span className="text-graphite">regression rate {pct(data.regression_rate)}</span>} />
         </div>
 
+        <CommitmentsBand data={data} />
+
         {/* Gadgets */}
         <div className="grid gap-4 lg:grid-cols-2">
           <IssueGadget
@@ -206,6 +208,50 @@ function IssueGadget({
         </ul>
       )}
     </Card>
+  );
+}
+
+/**
+ * CommitmentsBand surfaces the promises this project is currently failing.
+ *
+ * It renders nothing when there is nothing to say. A permanent row of zeros is what
+ * a status board looks like; this is an alert band, and one that is usually empty is
+ * one people believe when it is not.
+ */
+function CommitmentsBand({ data }: { data: DashboardOverview }) {
+  const breached = data.sla_breached_issues ?? 0;
+  const atRisk = data.sla_at_risk_issues ?? 0;
+  const overdue = data.overdue_issues ?? 0;
+  if (breached + atRisk + overdue === 0) return null;
+
+  const cells: { label: string; count: number; filter: string; tone: string }[] = [
+    { label: "SLA breached", count: breached, filter: "is:open sla:breached", tone: "critical" },
+    { label: "SLA at risk", count: atRisk, filter: "is:open sla:at-risk", tone: "high" },
+    { label: "Overdue", count: overdue, filter: "is:open due:overdue", tone: "high" },
+  ].filter((c) => c.count > 0);
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border border-critical-border bg-critical-soft px-5 py-4">
+      <span className="font-mono text-[10px] font-medium uppercase tracking-caps text-critical">
+        Commitments
+      </span>
+      {cells.map((c) => (
+        <Link
+          key={c.label}
+          to={`/issues?filter=${encodeURIComponent(c.filter)}`}
+          className="flex items-baseline gap-2 transition hover:opacity-80"
+        >
+          <span
+            className={`text-2xl font-bold leading-none ${
+              c.tone === "critical" ? "text-critical" : "text-high"
+            }`}
+          >
+            {c.count}
+          </span>
+          <span className="text-sm font-medium text-ink">{c.label}</span>
+        </Link>
+      ))}
+    </div>
   );
 }
 
