@@ -25,15 +25,6 @@ type NotifyEvent struct {
 	Timestamp string            `json:"timestamp"` // RFC3339
 }
 
-// SearchDoc is a document projected into Omni-Search.
-type SearchDoc struct {
-	ID     string            `json:"id"`
-	Type   string            `json:"type"` // issue|comment|commit|release
-	Title  string            `json:"title"`
-	Body   string            `json:"body"`
-	Fields map[string]string `json:"fields,omitempty"`
-}
-
 // UploadRequest asks Omni-Upload for a presigned direct-upload target.
 type UploadRequest struct {
 	Filename    string `json:"filename"`
@@ -52,9 +43,6 @@ type UploadTarget struct {
 type Notifier interface {
 	Notify(ctx context.Context, ev NotifyEvent) error
 }
-type Indexer interface {
-	Index(ctx context.Context, doc SearchDoc) error
-}
 type Uploader interface {
 	Presign(ctx context.Context, req UploadRequest) (UploadTarget, error)
 }
@@ -62,7 +50,6 @@ type Uploader interface {
 // Registry is the set of external adapters, chosen by config (real vs no-op).
 type Registry struct {
 	Notify Notifier
-	Search Indexer
 	Upload Uploader
 }
 
@@ -70,14 +57,10 @@ type Registry struct {
 func NewRegistry(cfg config.Integrations, logger *slog.Logger) *Registry {
 	reg := &Registry{
 		Notify: noopNotifier{},
-		Search: noopIndexer{},
 		Upload: noopUploader{},
 	}
 	if cfg.Notify.Enabled {
 		reg.Notify = newNotifyClient(cfg.Notify, logger)
-	}
-	if cfg.Search.Enabled {
-		reg.Search = newSearchClient(cfg.Search, logger)
 	}
 	if cfg.Upload.Enabled {
 		reg.Upload = newUploadClient(cfg.Upload, logger)
@@ -90,10 +73,6 @@ func NewRegistry(cfg config.Integrations, logger *slog.Logger) *Registry {
 type noopNotifier struct{}
 
 func (noopNotifier) Notify(context.Context, NotifyEvent) error { return ErrDisabled }
-
-type noopIndexer struct{}
-
-func (noopIndexer) Index(context.Context, SearchDoc) error { return ErrDisabled }
 
 type noopUploader struct{}
 

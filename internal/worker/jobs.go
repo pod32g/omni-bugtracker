@@ -35,14 +35,14 @@ func (w *eventWorker) Work(ctx context.Context, job *river.Job[events.DomainEven
 	ev := job.Args
 	w.d.Logger.Info("dispatch", "event", ev.EventType, "issue", ev.IssueID)
 
-	// Notify + index on every issue event; automation always evaluates.
+	// Notify on every issue event; automation always evaluates.
+	//
+	// There is no search-index fan-out: search is Postgres FTS over generated tsvector
+	// columns, maintained by the database itself, so there is nothing to project.
 	if ev.IssueID != "" {
 		if _, err := client.Insert(ctx, events.NotifyJobArgs{
 			EventType: ev.EventType, IssueID: ev.IssueID, ActorID: ev.ActorID,
 		}, nil); err != nil {
-			return err
-		}
-		if _, err := client.Insert(ctx, events.IndexJobArgs{DocType: "issue", DocID: ev.IssueID}, nil); err != nil {
 			return err
 		}
 		if _, err := client.Insert(ctx, events.AutomationJobArgs{
@@ -350,20 +350,6 @@ func (w *webhookWorker) markDelivery(ctx context.Context, deliveryID, status str
 		 WHERE id = $1`, deliveryID, status, code); err != nil {
 		w.d.Logger.Error("webhook delivery bookkeeping", "err", err)
 	}
-}
-
-// indexWorker projects a document into Omni-Search.
-type indexWorker struct {
-	river.WorkerDefaults[events.IndexJobArgs]
-	d Deps
-}
-
-func (w *indexWorker) Work(ctx context.Context, job *river.Job[events.IndexJobArgs]) error {
-	// TODO: load the entity and build a richer SearchDoc (title/body/fields).
-	err := w.d.Adapters.Search.Index(ctx, integrations.SearchDoc{
-		ID: job.Args.DocID, Type: job.Args.DocType,
-	})
-	return softFail(w.d, "search_index", err)
 }
 
 // automationWorker evaluates automation rules against the event.

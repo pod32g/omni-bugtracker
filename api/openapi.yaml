@@ -1425,7 +1425,7 @@ components:
       type: object
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/SearchHit" } }
-        source: { type: string, enum: [omni-search, postgres-fts] }
+        source: { type: string, enum: [postgres-fts], description: "always postgres-fts; search is native, there is no external index" }
         total: { type: integer }
 
     AutomationRule:

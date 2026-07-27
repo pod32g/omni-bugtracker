@@ -14,7 +14,7 @@ Design philosophy: **simplicity over completeness, API-first, everything automat
 | Redis | Cache + rate limiting only | Job durability lives in Postgres via River. |
 | Tenancy | **Single-tenant** (one org per deployment) | Chosen for simplicity; no `tenant_id`/RLS. |
 | Auth | **Omni-Identity only** (OIDC/OAuth2/LDAP terminate there); we validate JWTs + issue hashed API tokens | No local passwords. |
-| Search | Postgres **FTS** primary + **Omni-Search** projection | Local search always works; global search when Omni-Search is up. |
+| Search | Postgres **FTS** (generated `tsvector` columns + GIN) | The index is maintained by the database, so search cannot fall behind writes and there is no projection to fail. |
 | Issues | **One `issues` table** with a `type` discriminator + nullable bug fields + `jsonb` escape hatch | No table-per-type, no custom-field engine. |
 
 ## Runtime shape
@@ -31,7 +31,7 @@ Redis: cache · rate limit
 ```
 
 Every mutation: `BEGIN → mutate rows → INSERT activity → river.InsertTx(dispatch job) → COMMIT`.
-Workers fan out to Notify, webhooks, Omni-Search indexing, automation rules, and the activity timeline.
+Workers fan out to Notify, webhooks, automation rules, and the activity timeline.
 
 ## Modules (`internal/`)
 
@@ -74,7 +74,8 @@ issues live `/api/v1` calls once you **Authorize** with an `obt_` bearer token.
 
 Per-project number counter (per-row contention, mitigate with batch reservation) · River queue throughput
 (Postgres `SKIP LOCKED`, scale workers) · webhook fan-out (per-endpoint caps, backoff, DLQ) · obs-ingest
-storms (fingerprint dedupe) · FTS at scale (delegate to Omni-Search, partition) · activity growth
+storms (fingerprint dedupe) · FTS at scale (partition, or a dedicated index if Postgres stops
+coping — but only once it actually does) · activity growth
 (time partitioning + BRIN) · attachments (direct-to-Upload, never through API).
 
 ## Build / run

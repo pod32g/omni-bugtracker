@@ -33,7 +33,6 @@ func New(d Deps) (*river.Client[pgx.Tx], error) {
 	river.AddWorker(workers, &eventWorker{d: d})
 	river.AddWorker(workers, &notifyWorker{d: d})
 	river.AddWorker(workers, &webhookWorker{d: d})
-	river.AddWorker(workers, &indexWorker{d: d})
 	river.AddWorker(workers, &automationWorker{d: d})
 	river.AddWorker(workers, &gitIngestWorker{d: d})
 	river.AddWorker(workers, &obsIngestWorker{d: d})

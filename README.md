@@ -85,5 +85,6 @@ in the server binary, so it's always in sync with the deployed build.
 ## Design choices
 
 Single-tenant · River for durable jobs (Postgres-only; Redis is cache/rate-limit only) ·
-one unified `issues` table · Omni-Identity is the only IdP · Postgres FTS with Omni-Search projection.
+one unified `issues` table · Omni-Identity is the only IdP · search is native Postgres FTS
+(generated `tsvector` columns; there is no external index to keep in step).
 Rationale in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).

@@ -125,7 +125,6 @@ func (i Identity) LoginEnabled() bool {
 
 type Integrations struct {
 	Notify  ServiceAdapter `koanf:"notify"`
-	Search  ServiceAdapter `koanf:"search"`
 	Upload  ServiceAdapter `koanf:"upload"`
 	Logging Inbound        `koanf:"logging"`
 	Metrics Inbound        `koanf:"metrics"`

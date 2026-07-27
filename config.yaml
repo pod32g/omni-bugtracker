@@ -58,10 +58,6 @@ integrations:
     enabled: true
     base_url: "http://omni-notify:8080"
     timeout: "5s"
-  search:
-    enabled: true
-    base_url: "http://omni-search:8080"
-    timeout: "5s"
   upload:
     enabled: true
     base_url: "http://omni-upload:8080"

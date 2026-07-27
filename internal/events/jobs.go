@@ -35,15 +35,6 @@ func (WebhookJobArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{Queue: "webhooks", MaxAttempts: 8}
 }
 
-// IndexJobArgs → project a document into Omni-Search.
-type IndexJobArgs struct {
-	DocType string `json:"doc_type"`
-	DocID   string `json:"doc_id"`
-}
-
-func (IndexJobArgs) Kind() string                 { return "search_index" }
-func (IndexJobArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "integrations"} }
-
 // AutomationJobArgs → evaluate automation rules against an event. ActorID lets
 // the worker skip events caused by the automation bot itself (loop guard).
 type AutomationJobArgs struct {
