@@ -236,7 +236,7 @@ export function IssueList() {
       {hasProjects && (
         <>
           {/* Toolbar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-paper/80 px-4 md:px-9 py-4 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-hairline bg-paper/80 px-4 md:px-9 py-2.5 backdrop-blur">
             <div className="flex flex-wrap items-center gap-2">
               {QUICK_FILTERS.map((q) => {
                 const active = filter === q.filter;
@@ -244,7 +244,7 @@ export function IssueList() {
                   <button
                     key={q.label}
                     onClick={() => setFilter(q.filter)}
-                    className={`flex h-[30px] items-center rounded-full px-3.5 text-sm transition ${
+                    className={`flex h-[26px] items-center rounded-full px-3 text-[13px] transition ${
                       active
                         ? "bg-blueprint font-semibold text-paper"
                         : "border border-hairline font-medium text-graphite hover:border-graphite hover:text-ink"
@@ -260,7 +260,7 @@ export function IssueList() {
                   setFilter((f) => (f ? `${f} label:` : "label:"));
                   searchRef.current?.focus();
                 }}
-                className="flex h-[30px] items-center gap-1.5 rounded-full border border-dashed border-hairline px-3 text-graphite-soft transition hover:border-graphite hover:text-graphite"
+                className="flex h-[26px] items-center gap-1.5 rounded-full border border-dashed border-hairline px-2.5 text-graphite-soft transition hover:border-graphite hover:text-graphite"
               >
                 <IconLabelLines size={13} />
                 <span className="font-mono text-xs">label:</span>
@@ -388,7 +388,7 @@ function IssueRow({
     <Link
       ref={rowRef}
       to={`/issues/${issue.key}`}
-      className={`flex items-center gap-2 border-b border-hairline px-4 py-[11px] transition hover:bg-panel/60 sm:gap-4 md:px-9 ${
+      className={`flex items-center gap-2 border-b border-hairline px-4 py-2 transition hover:bg-panel/60 sm:gap-4 md:px-9 ${
         selected ? "bg-blueprint-soft/40" : ""
       } ${focused ? "bg-panel ring-1 ring-inset ring-blueprint" : ""}`}
     >
@@ -405,11 +405,24 @@ function IssueRow({
       <div className="flex w-3 shrink-0 justify-center">
         <SeverityBar severity={issue.severity} />
       </div>
-      <span className="w-16 shrink-0 font-mono text-sm font-medium text-blueprint sm:w-[88px]">{issue.key}</span>
-      <div className="flex min-w-0 grow flex-col gap-1">
-        <span className="truncate text-[15px] font-medium leading-tight text-ink">{issue.title}</span>
-        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-          <span className="hidden min-w-0 items-center gap-1.5 sm:flex">
+      {/* whitespace-nowrap and a *minimum* width rather than a fixed one: a fixed
+          88px wrapped "RECORDER-107" onto a second line, making every row in that
+          project half again as tall. Long keys now nudge the title instead. */}
+      <span className="shrink-0 whitespace-nowrap font-mono text-sm font-medium text-blueprint sm:min-w-[88px]">
+        {issue.key}
+      </span>
+      {/* One line from lg up, two below it. The metadata used to sit on its own line
+          always, which made every row ~60px: on a 44-issue project that is eight rows
+          per screen where twelve fit. The title still gets whatever width is left. */}
+      <div className="flex min-w-0 grow flex-col gap-1 lg:flex-row lg:items-center lg:gap-3">
+        <span className="truncate text-[15px] font-medium leading-tight text-ink lg:min-w-0 lg:grow">
+          {issue.title}
+        </span>
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5 overflow-hidden">
+          {/* Labels only where there is genuine slack. Sharing a line with the title
+              they cost it ~120px, and the title is the only thing in the row you
+              cannot read off another column. Below 2xl they stay on their own line. */}
+          <span className="hidden min-w-0 items-center gap-1.5 sm:flex lg:hidden 2xl:flex">
             {issue.labels?.slice(0, 3).map((l) => <LabelChip key={l} name={l} />)}
           </span>
           {/* Deadline state sits on the row itself rather than in a column: it only
@@ -419,7 +432,6 @@ function IssueRow({
           <DueChip dueAt={issue.due_at} resolved={!!issue.resolved_at} />
           <EstimateChip minutes={issue.estimate_minutes} />
           <ChecklistChip progress={issue.checklist} />
-          <span className="font-mono text-xs text-graphite-soft">#{issue.number}</span>
         </div>
       </div>
       <div className="hidden w-10 shrink-0 justify-center sm:flex">
