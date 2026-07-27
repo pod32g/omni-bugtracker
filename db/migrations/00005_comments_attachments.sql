@@ -14,7 +14,10 @@ CREATE TABLE comments (
 CREATE INDEX idx_comments_issue ON comments (issue_id, created_at) WHERE deleted_at IS NULL;
 CREATE INDEX idx_comments_fts   ON comments USING GIN (fts);
 
--- Attachment bytes live in Omni-Upload; we store metadata + object key only.
+-- Attachment metadata + the storage object key. The bytes were originally meant to
+-- live in Omni-Upload, which was never built; they are on local disk under
+-- storage.attachments_dir. Comment corrected in the commit that removed the adapter —
+-- the DDL below is exactly as it was applied.
 CREATE TABLE attachments (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     issue_id       UUID REFERENCES issues(id) ON DELETE CASCADE,

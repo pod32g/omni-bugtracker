@@ -25,45 +25,23 @@ type NotifyEvent struct {
 	Timestamp string            `json:"timestamp"` // RFC3339
 }
 
-// UploadRequest asks Omni-Upload for a presigned direct-upload target.
-type UploadRequest struct {
-	Filename    string `json:"filename"`
-	ContentType string `json:"content_type"`
-	SizeBytes   int64  `json:"size_bytes"`
-}
-
-type UploadTarget struct {
-	UploadURL string            `json:"upload_url"`
-	ObjectKey string            `json:"object_key"`
-	Method    string            `json:"method"`
-	Headers   map[string]string `json:"headers,omitempty"`
-}
-
 // Ports.
 type Notifier interface {
 	Notify(ctx context.Context, ev NotifyEvent) error
-}
-type Uploader interface {
-	Presign(ctx context.Context, req UploadRequest) (UploadTarget, error)
 }
 
 // Registry is the set of external adapters, chosen by config (real vs no-op).
 type Registry struct {
 	Notify Notifier
-	Upload Uploader
 }
 
 // NewRegistry builds adapters honoring the enabled flags. Disabled services get no-ops.
 func NewRegistry(cfg config.Integrations, logger *slog.Logger) *Registry {
 	reg := &Registry{
 		Notify: noopNotifier{},
-		Upload: noopUploader{},
 	}
 	if cfg.Notify.Enabled {
 		reg.Notify = newNotifyClient(cfg.Notify, logger)
-	}
-	if cfg.Upload.Enabled {
-		reg.Upload = newUploadClient(cfg.Upload, logger)
 	}
 	return reg
 }
@@ -73,9 +51,3 @@ func NewRegistry(cfg config.Integrations, logger *slog.Logger) *Registry {
 type noopNotifier struct{}
 
 func (noopNotifier) Notify(context.Context, NotifyEvent) error { return ErrDisabled }
-
-type noopUploader struct{}
-
-func (noopUploader) Presign(context.Context, UploadRequest) (UploadTarget, error) {
-	return UploadTarget{}, ErrDisabled
-}

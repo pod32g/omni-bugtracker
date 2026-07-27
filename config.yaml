@@ -58,10 +58,6 @@ integrations:
     enabled: true
     base_url: "http://omni-notify:8080"
     timeout: "5s"
-  upload:
-    enabled: true
-    base_url: "http://omni-upload:8080"
-    timeout: "10s"
   # Inbound webhook endpoints authenticate by HMAC, not bearer token, and can create
   # issues and drive transitions. An empty webhook_secret fails CLOSED (every delivery
   # is rejected with 503) — set the secret via the environment, or set enabled: false.

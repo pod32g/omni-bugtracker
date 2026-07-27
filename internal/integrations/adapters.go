@@ -26,20 +26,3 @@ func newNotifyClient(cfg config.ServiceAdapter, logger *slog.Logger) *notifyClie
 func (c *notifyClient) Notify(ctx context.Context, ev NotifyEvent) error {
 	return c.postJSON(ctx, "/api/v1/events", ev, nil)
 }
-
-// ── Omni-Upload ──
-
-type uploadClient struct {
-	jsonClient
-	logger *slog.Logger
-}
-
-func newUploadClient(cfg config.ServiceAdapter, logger *slog.Logger) *uploadClient {
-	return &uploadClient{jsonClient: newJSONClient(cfg.BaseURL, cfg.Timeout, "omni-upload"), logger: logger}
-}
-
-func (c *uploadClient) Presign(ctx context.Context, req UploadRequest) (UploadTarget, error) {
-	var target UploadTarget
-	err := c.postJSON(ctx, "/api/v1/presign", req, &target)
-	return target, err
-}

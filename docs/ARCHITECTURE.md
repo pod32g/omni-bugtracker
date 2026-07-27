@@ -41,7 +41,8 @@ Workers fan out to Notify, webhooks, automation rules, and the activity timeline
 
 Core: `users` (mirror of Identity subjects) · `projects` · `components` · `labels` · `milestones` ·
 `releases` · **`issues`** (bug|task|feature|improvement) · `issue_labels` · `issue_components` ·
-`issue_relations` · `issue_watchers` · `comments` · `attachments` (metadata; bytes in Omni-Upload) ·
+`issue_relations` · `issue_watchers` · `comments` · `attachments` (metadata; bytes on local disk
+under `storage.attachments_dir`) ·
 `git_commits` / `issue_commits` · `pull_requests` / `issue_pull_requests` · `activity` (append-only audit) ·
 `webhooks` / `webhook_deliveries` · `automation_rules` / `automation_runs` · `integration_configs` ·
 `api_tokens` · `saved_searches`.
@@ -67,8 +68,6 @@ issues live `/api/v1` calls once you **Authorize** with an `obt_` bearer token.
 | Notify | outbound | worker → REST, idempotency key |
 | Logging | in+out | we emit slog; it POSTs `/integrations/logging/alerts` → dedupe→bug |
 | Metrics | in+out | we expose `/metrics`; it POSTs `/integrations/metrics/alerts` |
-| Search | outbound | index worker pushes docs; `/search` fans out |
-| Upload | outbound | presigned direct upload; we store metadata only |
 
 ## Scalability notes
 
