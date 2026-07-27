@@ -88,6 +88,13 @@ type Repository interface {
 	SetIssueRank(ctx context.Context, id uuid.UUID, rank string) error
 	// NeighbourRanks resolves the ranks either side of a drop position.
 	NeighbourRanks(ctx context.Context, projectKey, beforeKey, afterKey string) (string, string, error)
+	// Issue templates (per project and type)
+	ListIssueTemplates(ctx context.Context, projectKey string) ([]domain.IssueTemplate, error)
+	GetIssueTemplate(ctx context.Context, id uuid.UUID) (domain.IssueTemplate, error)
+	CreateIssueTemplate(ctx context.Context, in IssueTemplateInput) (domain.IssueTemplate, error)
+	UpdateIssueTemplate(ctx context.Context, id uuid.UUID, in UpdateIssueTemplateInput) (domain.IssueTemplate, error)
+	DeleteIssueTemplate(ctx context.Context, id uuid.UUID) (bool, error)
+
 	// Custom fields (project-scoped extra structure)
 	ListFieldDefinitions(ctx context.Context, projectKey string) ([]domain.FieldDefinition, error)
 	CreateFieldDefinition(ctx context.Context, in FieldDefinitionInput) (domain.FieldDefinition, error)
@@ -514,6 +521,36 @@ type UpdateProjectViewInput struct {
 	Sort        *string
 	Position    *int
 	IsDefault   *bool
+}
+
+// IssueTemplateInput creates a template.
+type IssueTemplateInput struct {
+	ProjectKey        string
+	Name              string
+	Type              domain.IssueType
+	BodyMD            string
+	RequiredSections  []string
+	DefaultLabels     []string
+	DefaultComponent  string
+	DefaultPriority   *string
+	DefaultSeverity   *string
+	DefaultAssigneeID *string
+	IsDefault         bool
+}
+
+// UpdateIssueTemplateInput is a partial edit. The issue type is not editable: a
+// template's defaults and required sections are written for one type, and moving it
+// would silently apply the wrong shape to every issue filed from it afterwards.
+type UpdateIssueTemplateInput struct {
+	Name             *string
+	BodyMD           *string
+	RequiredSections *[]string
+	DefaultLabels    *[]string
+	DefaultComponent *string
+	DefaultPriority  *string
+	DefaultSeverity  *string
+	IsDefault        *bool
+	Position         *int
 }
 
 // FieldDefinitionInput declares a custom field on a project.

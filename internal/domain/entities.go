@@ -148,6 +148,9 @@ type Issue struct {
 	// resolved via join.
 	IterationID *uuid.UUID `json:"iteration_id,omitempty"`
 	Iteration   string     `json:"iteration,omitempty"`
+	// Checklist is the `- [ ]` progress in the description; nil when there is none,
+	// which is different from a checklist with nothing ticked.
+	Checklist *ChecklistProgress `json:"checklist,omitempty"`
 }
 
 // IsOverdue reports whether the issue passed its own due date without being finished.

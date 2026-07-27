@@ -118,6 +118,8 @@ export interface NewIssue {
   estimate?: string;
   /** Custom field values keyed by field key; required ones are enforced on create. */
   fields?: Record<string, unknown>;
+  /** Applies the template's defaults and enforces its required sections. */
+  template_id?: string;
 }
 
 // Sentinel assignee_id meaning "clear the assignee" on PATCH.
@@ -166,6 +168,7 @@ export interface Issue {
   spent_minutes?: number;
   iteration_id?: string | null;
   iteration?: string;
+  checklist?: ChecklistProgress;
 }
 
 export interface TimeEntry {
@@ -176,6 +179,30 @@ export interface TimeEntry {
   spent_on: string; // YYYY-MM-DD
   note?: string;
   created_at: string;
+}
+
+export interface IssueTemplate {
+  id: string;
+  project_key: string;
+  name: string;
+  type: IssueType;
+  body_md: string;
+  /** Headings that must be present and filled in before the issue is accepted. */
+  required_sections: string[];
+  default_labels: string[];
+  default_component?: string;
+  default_priority?: Priority;
+  default_severity?: Severity;
+  default_assignee?: User;
+  is_default: boolean;
+  position: number;
+  created_at: string;
+}
+
+/** `- [ ]` progress in a body; absent when there is no checklist at all. */
+export interface ChecklistProgress {
+  done: number;
+  total: number;
 }
 
 export type FieldType =
@@ -935,6 +962,29 @@ export const api = {
     body: { response_minutes?: number; resolution_minutes?: number; is_active?: boolean },
   ) => request<SLAPolicy>(`/sla-policies/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteSLAPolicy: (id: string) => request<void>(`/sla-policies/${id}`, { method: "DELETE" }),
+
+  listIssueTemplates: (projectKey: string) =>
+    request<{ items: IssueTemplate[] }>(`/projects/${projectKey}/templates`),
+  createIssueTemplate: (
+    projectKey: string,
+    body: {
+      name: string;
+      type: IssueType;
+      body_md: string;
+      required_sections?: string[];
+      default_labels?: string[];
+      default_priority?: string;
+      default_severity?: string;
+      is_default?: boolean;
+    },
+  ) =>
+    request<IssueTemplate>(`/projects/${projectKey}/templates`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateIssueTemplate: (id: string, body: Record<string, unknown>) =>
+    request<IssueTemplate>(`/templates/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteIssueTemplate: (id: string) => request<void>(`/templates/${id}`, { method: "DELETE" }),
 
   listFieldDefinitions: (projectKey: string) =>
     request<{ items: FieldDefinition[] }>(`/projects/${projectKey}/fields`),

@@ -26,6 +26,8 @@ func (s *Store) ProjectKeyForEntity(ctx context.Context, entity string, id uuid.
 		q = `SELECT p.key FROM releases t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`
 	case "board":
 		q = `SELECT p.key FROM boards t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`
+	case "issue_template":
+		q = `SELECT p.key FROM issue_templates t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`
 	case "field_definition":
 		q = `SELECT p.key FROM field_definitions t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`
 	case "iteration":

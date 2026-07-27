@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, UNASSIGNED, type Component, type FieldType, type User } from "../../lib/api";
+import {
+  api,
+  UNASSIGNED,
+  type Component,
+  type FieldType,
+  type IssueType,
+  type User,
+} from "../../lib/api";
 import { useProject } from "../../lib/project";
 import { AssigneeSelect } from "../issues/formFields";
 import { Avatar } from "../../components/Badges";
@@ -156,6 +163,8 @@ export function ProjectSettings() {
         </section>
 
         <ComponentsSection projectKey={key} canManage={canManage} />
+
+        <TemplatesSection projectKey={key} canManage={canManage} />
 
         <FieldsSection projectKey={key} canManage={canManage} />
 
@@ -318,6 +327,209 @@ function ComponentsSection({ projectKey, canManage }: { projectKey: string; canM
   );
 }
 
+function TemplatesSection({ projectKey, canManage }: { projectKey: string; canManage: boolean }) {
+  const qc = useQueryClient();
+  const templates = useQuery({
+    queryKey: ["templates", projectKey],
+    queryFn: () => api.listIssueTemplates(projectKey),
+  });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["templates", projectKey] });
+
+  const [editing, setEditing] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [type, setType] = useState<IssueType>("bug");
+  const [bodyMD, setBodyMD] = useState("");
+  const [required, setRequired] = useState("");
+
+  const reset = () => {
+    setEditing(null);
+    setName("");
+    setBodyMD("");
+    setRequired("");
+  };
+  const sections = () =>
+    required
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+  const save = useMutation({
+    mutationFn: () =>
+      editing
+        ? api.updateIssueTemplate(editing, {
+            name: name.trim(),
+            body_md: bodyMD,
+            required_sections: sections(),
+          })
+        : api.createIssueTemplate(projectKey, {
+            name: name.trim(),
+            type,
+            body_md: bodyMD,
+            required_sections: sections(),
+          }),
+    onSuccess: () => {
+      reset();
+      invalidate();
+    },
+  });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteIssueTemplate(id), onSuccess: invalidate });
+  const setDefault = useMutation({
+    mutationFn: (id: string) => api.updateIssueTemplate(id, { is_default: true }),
+    onSuccess: invalidate,
+  });
+
+  const items = templates.data?.items ?? [];
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold text-ink">Issue templates</h2>
+        <p className="text-sm leading-relaxed text-graphite">
+          What a filed issue should say, per type. Triage cost is decided at filing time;
+          a template moves it to the person with the most context. Required sections are
+          markdown headings that must be present <em>and answered</em> — filing with the
+          prompts still in place is rejected, naming the sections.
+        </p>
+        <p className="text-sm leading-relaxed text-graphite-soft">
+          <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-ink">- [ ]</code>{" "}
+          lines become live checkboxes on the issue, and their progress shows in the list.
+        </p>
+      </div>
+
+      {canManage && (
+        <div className="flex flex-col gap-3 rounded-md border border-hairline bg-panel/50 p-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="grow text-sm">
+              <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+                Name
+              </span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Regression"
+                className="h-9 w-full rounded-md border border-hairline bg-paper px-3 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+                Type
+              </span>
+              <select
+                value={type}
+                disabled={!!editing}
+                onChange={(e) => setType(e.target.value as IssueType)}
+                className="h-9 rounded-md border border-hairline bg-paper px-2 text-sm text-ink disabled:opacity-50"
+              >
+                {ISSUE_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              disabled={!name.trim() || save.isPending}
+              onClick={() => save.mutate()}
+              className="flex h-9 items-center gap-1.5 rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+            >
+              <IconPlus size={15} />
+              {editing ? "Save" : "Add"}
+            </button>
+            {editing && (
+              <button onClick={reset} className="h-9 text-sm font-semibold text-graphite transition hover:text-ink">
+                Cancel
+              </button>
+            )}
+          </div>
+          <label className="text-sm">
+            <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+              Body (Markdown)
+            </span>
+            <textarea
+              value={bodyMD}
+              onChange={(e) => setBodyMD(e.target.value)}
+              rows={8}
+              placeholder={"## Steps to reproduce\n\n## Expected\n\n## Actual\n\n## Definition of done\n\n- [ ] fix\n- [ ] test"}
+              className="w-full rounded-md border border-hairline bg-paper p-3 font-mono text-xs leading-relaxed text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
+            />
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+              Required sections (comma separated headings)
+            </span>
+            <input
+              value={required}
+              onChange={(e) => setRequired(e.target.value)}
+              placeholder="Steps to reproduce, Expected, Actual"
+              className="h-9 w-full rounded-md border border-hairline bg-paper px-3 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
+            />
+          </label>
+          {save.isError && <p className="text-sm text-critical">{(save.error as Error).message}</p>}
+        </div>
+      )}
+
+      <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
+        {templates.isLoading && <div className="p-4 text-sm text-graphite">Loading…</div>}
+        {templates.isSuccess && items.length === 0 && (
+          <div className="p-4 text-sm text-graphite-soft">
+            No templates — the create form falls back to a blank description.
+          </div>
+        )}
+        {items.map((t) => (
+          <div key={t.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+            <span className="text-sm font-medium text-ink">{t.name}</span>
+            <span className="rounded-full border border-hairline bg-panel px-2 py-px text-xs capitalize text-graphite">
+              {t.type}
+            </span>
+            {t.is_default && (
+              <span className="rounded-full border border-blueprint-border bg-blueprint-soft px-2 py-px text-xs font-semibold text-blueprint">
+                default
+              </span>
+            )}
+            {t.required_sections.length > 0 && (
+              <span className="text-xs text-graphite-soft">
+                requires {t.required_sections.join(", ")}
+              </span>
+            )}
+            {canManage && (
+              <span className="ml-auto flex items-center gap-3 text-xs font-semibold">
+                {!t.is_default && (
+                  <button
+                    onClick={() => setDefault.mutate(t.id)}
+                    className="text-blueprint transition hover:opacity-80"
+                  >
+                    Make default
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setEditing(t.id);
+                    setName(t.name);
+                    setType(t.type);
+                    setBodyMD(t.body_md);
+                    setRequired(t.required_sections.join(", "));
+                  }}
+                  className="text-blueprint transition hover:opacity-80"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm(`Delete the ${t.name} template?`)) del.mutate(t.id);
+                  }}
+                  className="text-graphite transition hover:text-critical"
+                >
+                  Delete
+                </button>
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 const FIELD_TYPES: FieldType[] = [
   "text",
   "number",
@@ -329,7 +541,7 @@ const FIELD_TYPES: FieldType[] = [
   "url",
 ];
 
-const ISSUE_TYPES = ["bug", "task", "feature", "improvement"];
+const ISSUE_TYPES: IssueType[] = ["bug", "task", "feature", "improvement"];
 
 function FieldsSection({ projectKey, canManage }: { projectKey: string; canManage: boolean }) {
   const qc = useQueryClient();

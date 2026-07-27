@@ -103,6 +103,40 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
   // Marked before the issue exists; the relation is attached right after it is created.
   const [duplicateOf, setDuplicateOf] = useState<string | null>(null);
 
+  const templates = useQuery({
+    queryKey: ["templates", projectKey],
+    queryFn: () => api.listIssueTemplates(projectKey),
+    enabled: !!projectKey,
+  });
+  const forType = (templates.data?.items ?? []).filter((t) => t.type === form.type);
+  const [templateID, setTemplateID] = useState("");
+  const chosen = forType.find((t) => t.id === templateID);
+
+  // Applying a template overwrites the description, so it only happens on an explicit
+  // pick or when the default loads into an untouched form — silently discarding
+  // somebody's half-written report because they changed the type would be unforgivable.
+  const applyTemplate = (id: string) => {
+    setTemplateID(id);
+    const t = forType.find((x) => x.id === id);
+    if (!t) return;
+    setForm((f) => ({
+      ...f,
+      description_md: t.body_md,
+      labels: f.labels?.length ? f.labels : t.default_labels,
+      priority: t.default_priority ?? f.priority,
+      severity: t.default_severity ?? f.severity,
+    }));
+  };
+
+  // Seed the default template for the chosen type, but never over anything typed.
+  const touched = (form.description_md ?? "").trim() !== "";
+  useEffect(() => {
+    if (touched) return;
+    const fallback = forType.find((t) => t.is_default) ?? forType[0];
+    if (fallback && fallback.id !== templateID) applyTemplate(fallback.id);
+    if (!fallback && templateID) setTemplateID("");
+  }, [form.type, templates.data]);
+
   const create = useMutation({
     mutationFn: async () => {
       const body: NewIssue = { ...form };
@@ -113,6 +147,7 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
       if (!body.due_at) delete body.due_at;
       if (!body.estimate) delete body.estimate;
       if (body.fields && Object.keys(body.fields).length === 0) delete body.fields;
+      if (templateID) body.template_id = templateID;
       const issue = await api.createIssue(projectKey, body);
       // Filing a duplicate on purpose is legitimate — it just has to be recorded, so
       // whoever triages it does not have to rediscover the connection.
@@ -175,6 +210,41 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
         duplicateOf={duplicateOf}
         onMarkDuplicate={setDuplicateOf}
       />
+      {forType.length > 0 && (
+        <Field label="Template" className="mt-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {forType.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => applyTemplate(t.id)}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                  templateID === t.id
+                    ? "border-blueprint bg-blueprint-soft text-blueprint"
+                    : "border-hairline text-graphite hover:border-graphite hover:text-ink"
+                }`}
+              >
+                {t.name}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                setTemplateID("");
+                set("description_md", "");
+              }}
+              className="text-xs font-semibold text-graphite transition hover:text-ink"
+            >
+              Blank
+            </button>
+          </div>
+          {chosen && chosen.required_sections.length > 0 && (
+            <p className="mt-1 text-xs text-graphite-soft">
+              Must be filled in: {chosen.required_sections.join(", ")}
+            </p>
+          )}
+        </Field>
+      )}
       <Field label="Description (Markdown)" className="mt-3">
         <Textarea value={form.description_md ?? ""} onChange={(v) => set("description_md", v)} rows={4} />
       </Field>

@@ -272,7 +272,12 @@ export function IssueDetail() {
           </header>
 
           <Section title="Description">
-            <Markdown body={i.description_md} />
+            <Markdown
+              body={i.description_md}
+              onToggleTask={(index, checked) =>
+                patch.mutate({ description_md: toggleTaskAt(i.description_md ?? "", index, checked) })
+              }
+            />
             <div className="group">
               <Reactions issueKey={issueKey} />
             </div>
@@ -1280,14 +1285,88 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   );
 }
 
-function Markdown({ body, className = "markdown" }: { body?: string; className?: string }) {
+/**
+ * Markdown renders a body. When `onToggleTask` is supplied the GFM task-list
+ * checkboxes become live: ticking one rewrites that `- [ ]` in the source and saves.
+ *
+ * Which box was clicked is worked out at click time, from its position among the
+ * rendered checkboxes, using one delegated handler on the container. Two earlier
+ * attempts were worse: a counter incremented during render drifts the moment React
+ * renders the tree twice (it labelled two boxes 2 and 4), and remark's source
+ * positions are not reliably threaded through to component props.
+ */
+function Markdown({
+  body,
+  className = "markdown",
+  onToggleTask,
+}: {
+  body?: string;
+  className?: string;
+  onToggleTask?: (index: number, checked: boolean) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  const onChange = (e: React.ChangeEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLInputElement;
+    if (!onToggleTask || target.type !== "checkbox" || !ref.current) return;
+    const boxes = Array.from(ref.current.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+    const index = boxes.indexOf(target);
+    if (index >= 0) onToggleTask(index, target.checked);
+  };
+
   return (
-    <div className={className}>
-      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={{ a: MarkdownLink, img: MarkdownImage }}>
+    <div ref={ref} className={className} onChange={onChange}>
+      <ReactMarkdown
+        remarkPlugins={MARKDOWN_PLUGINS}
+        components={{
+          a: MarkdownLink,
+          img: MarkdownImage,
+          // remark-gfm renders task-list boxes disabled. Live ones are the whole point
+          // of a checklist, so the disabled flag is dropped when a handler is present.
+          input: (props) =>
+            props.type === "checkbox" && onToggleTask ? (
+              <input
+                type="checkbox"
+                defaultChecked={!!props.checked}
+                className="mr-1.5 accent-blueprint"
+              />
+            ) : (
+              <input {...props} readOnly />
+            ),
+        }}
+      >
         {body || "_No content_"}
       </ReactMarkdown>
     </div>
   );
+}
+
+/**
+ * toggleTaskAt flips the nth `- [ ]` in a markdown source and returns the new body.
+ *
+ * Fenced code is skipped so the indices line up with what the renderer showed —
+ * a markdown example inside a fence is documentation, not a task.
+ */
+export function toggleTaskAt(body: string, index: number, checked: boolean): string {
+  const lines = body.split("\n");
+  let seen = -1;
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = /^(\s*[-*+]\s+\[)([ xX])(\])/.exec(lines[i]);
+    if (!m) continue;
+    seen += 1;
+    if (seen === index) {
+      lines[i] = lines[i].replace(/^(\s*[-*+]\s+\[)([ xX])(\])/, `$1${checked ? "x" : " "}$3`);
+      break;
+    }
+  }
+  return lines.join("\n");
 }
 
 function Callout({ tone, label, body }: { tone: "resolved" | "critical"; label: string; body: string }) {

@@ -278,6 +278,28 @@ export function EffortNote({ effort }: { effort?: { issues: number; estimated: n
   );
 }
 
+/**
+ * ChecklistChip shows `- [ ]` progress from the body — a definition-of-done nobody can
+ * see the state of without opening the issue is one nobody uses. Goes solid when
+ * everything is ticked, which is the only state worth a colour.
+ */
+export function ChecklistChip({ progress }: { progress?: { done: number; total: number } }) {
+  if (!progress || progress.total === 0) return null;
+  const complete = progress.done === progress.total;
+  return (
+    <span
+      title={`${progress.done} of ${progress.total} checklist items done`}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-px font-mono text-xs ${
+        complete
+          ? "border-resolved-border bg-resolved-soft text-resolved"
+          : "border-hairline bg-panel text-graphite"
+      }`}
+    >
+      {complete ? "☑" : "☐"} {progress.done}/{progress.total}
+    </span>
+  );
+}
+
 /** EstimateChip is the compact list-row form: just the estimate, muted. */
 export function EstimateChip({ minutes }: { minutes?: number | null }) {
   if (!minutes) return null;

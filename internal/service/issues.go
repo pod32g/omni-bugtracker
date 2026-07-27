@@ -66,7 +66,12 @@ func (s *Issues) Create(ctx context.Context, in CreateIssueInput) (domain.Issue,
 
 // Get fetches an issue by its human key (project key + number).
 func (s *Issues) Get(ctx context.Context, projectKey string, number int32) (domain.Issue, error) {
-	return s.repo.GetIssueByKey(ctx, projectKey, number)
+	issue, err := s.repo.GetIssueByKey(ctx, projectKey, number)
+	if err != nil {
+		return issue, err
+	}
+	issue.Checklist = checklistFor(issue.DescriptionMD)
+	return issue, nil
 }
 
 // List returns issues matching the parsed filter.
@@ -74,7 +79,17 @@ func (s *Issues) List(ctx context.Context, f IssueFilter) ([]domain.Issue, int, 
 	// Page bounds are enforced in one place — the repository (clampLimit/clampOffset).
 	// A second copy here silently re-capped an over-max limit to the default, which is
 	// how `?limit=500` came back as 50 even after the repo learned to clamp down.
-	return s.repo.ListIssues(ctx, f)
+	issues, total, err := s.repo.ListIssues(ctx, f)
+	if err != nil {
+		return nil, 0, err
+	}
+	// Checklist progress is derived from the description the row already carries, so
+	// it costs nothing extra — and a definition-of-done nobody can see the state of
+	// without opening the issue is a definition-of-done nobody uses.
+	for i := range issues {
+		issues[i].Checklist = checklistFor(issues[i].DescriptionMD)
+	}
+	return issues, total, nil
 }
 
 // Transition validates the workflow edge, applies it, and emits the right event.

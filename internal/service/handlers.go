@@ -26,6 +26,7 @@ import (
 	"github.com/omni/bugtracker/internal/domain"
 	"github.com/omni/bugtracker/internal/events"
 	"github.com/omni/bugtracker/internal/httpapi"
+	"github.com/omni/bugtracker/internal/prose"
 )
 
 // NewHTTPHandlers builds the authenticated REST surface, wired to the service layer.
@@ -103,6 +104,10 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/projects/{key}/sla-policies", h.createSLAPolicy)
 	r.Patch("/sla-policies/{id}", h.updateSLAPolicy)
 	r.Delete("/sla-policies/{id}", h.deleteSLAPolicy)
+	r.Get("/projects/{key}/templates", h.listIssueTemplates)
+	r.Post("/projects/{key}/templates", h.createIssueTemplate)
+	r.Patch("/templates/{id}", h.updateIssueTemplate)
+	r.Delete("/templates/{id}", h.deleteIssueTemplate)
 	r.Get("/projects/{key}/fields", h.listFieldDefinitions)
 	r.Post("/projects/{key}/fields", h.createFieldDefinition)
 	r.Patch("/fields/{id}", h.updateFieldDefinition)
@@ -1724,6 +1729,7 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		DueAt           string           `json:"due_at"`
 		Estimate        string           `json:"estimate"`
 		Fields          map[string]any   `json:"fields"`
+		TemplateID      string           `json:"template_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -1743,8 +1749,38 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteValidation(w, map[string]string{"estimate": err.Error()})
 		return
 	}
-	// Required custom fields are enforced at filing time only — see ValidateFieldValues.
+	// Template defaults and required sections. Applied before validation so a default
+	// the filer never touched still counts as their answer.
 	projectKey := chi.URLParam(r, "key")
+	if body.TemplateID != "" {
+		tmplID, err := uuid.Parse(body.TemplateID)
+		if err != nil {
+			httpapi.WriteValidation(w, map[string]string{"template_id": "expected a template uuid"})
+			return
+		}
+		tmpl, err := h.repo.GetIssueTemplate(r.Context(), tmplID)
+		if err != nil {
+			httpapi.WriteValidation(w, map[string]string{"template_id": "no such template"})
+			return
+		}
+		if tmpl.ProjectKey != projectKey {
+			httpapi.WriteValidation(w, map[string]string{
+				"template_id": "that template belongs to a different project",
+			})
+			return
+		}
+		if missing := prose.MissingSections(body.DescriptionMD, tmpl.RequiredSections); len(missing) > 0 {
+			// 422 naming the headings, the same shape the filter parser returns —
+			// "validation failed" with no clue which section is the reason people
+			// paste the whole template back in and try again.
+			httpapi.WriteValidation(w, map[string]string{
+				"description_md": "the " + tmpl.Name + " template requires these sections, filled in: " +
+					strings.Join(missing, ", "),
+			})
+			return
+		}
+		applyTemplateDefaults(&body.Labels, &body.Components, &body.Priority, &body.Severity, tmpl)
+	}
 	defs, err := h.repo.ListFieldDefinitions(r.Context(), projectKey)
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "load fields failed", err.Error())

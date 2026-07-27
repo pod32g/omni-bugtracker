@@ -15,6 +15,7 @@ import { timeAgo } from "../../lib/activity";
 import { sameUnit } from "../../lib/duration";
 import {
   Avatar,
+  ChecklistChip,
   DueChip,
   EstimateChip,
   LabelChip,
@@ -417,6 +418,7 @@ function IssueRow({
           <SLAPill sla={issue.sla} />
           <DueChip dueAt={issue.due_at} resolved={!!issue.resolved_at} />
           <EstimateChip minutes={issue.estimate_minutes} />
+          <ChecklistChip progress={issue.checklist} />
           <span className="font-mono text-xs text-graphite-soft">#{issue.number}</span>
         </div>
       </div>
