@@ -162,6 +162,8 @@ export interface Issue {
   /** Absent means unestimated, which is a different statement from zero. */
   estimate_minutes?: number;
   spent_minutes?: number;
+  iteration_id?: string | null;
+  iteration?: string;
 }
 
 export interface TimeEntry {
@@ -172,6 +174,42 @@ export interface TimeEntry {
   spent_on: string; // YYYY-MM-DD
   note?: string;
   created_at: string;
+}
+
+export type IterationState = "planned" | "active" | "completed";
+
+export interface Iteration {
+  id: string;
+  project_key: string;
+  name: string;
+  starts_on: string; // YYYY-MM-DD
+  ends_on: string;
+  state: IterationState;
+  goal?: string;
+  issues: number;
+  done_issues: number;
+  effort: EffortRollup;
+  done_minutes: number;
+  created_at: string;
+}
+
+/** One stored day of an iteration. Read back, never recomputed. */
+export interface BurndownPoint {
+  date: string;
+  remaining_issues: number;
+  remaining_minutes: number;
+  total_issues: number;
+  total_minutes: number;
+}
+
+export interface Velocity {
+  iteration_id: string;
+  name: string;
+  ends_on: string;
+  done_issues: number;
+  done_minutes: number;
+  planned_issues: number;
+  planned_minutes: number;
 }
 
 export interface EffortRollup {
@@ -861,6 +899,43 @@ export const api = {
     body: { response_minutes?: number; resolution_minutes?: number; is_active?: boolean },
   ) => request<SLAPolicy>(`/sla-policies/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteSLAPolicy: (id: string) => request<void>(`/sla-policies/${id}`, { method: "DELETE" }),
+
+  listIterations: (projectKey: string) =>
+    request<{ items: Iteration[] }>(`/projects/${projectKey}/iterations`),
+  createIteration: (
+    projectKey: string,
+    body: { name: string; starts_on: string; ends_on: string; goal?: string },
+  ) =>
+    request<Iteration>(`/projects/${projectKey}/iterations`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateIteration: (
+    id: string,
+    body: { name?: string; starts_on?: string; ends_on?: string; goal?: string; state?: IterationState },
+  ) => request<Iteration>(`/iterations/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteIteration: (id: string) => request<void>(`/iterations/${id}`, { method: "DELETE" }),
+  iterationBurndown: (id: string) =>
+    request<{ iteration: Iteration; points: BurndownPoint[] }>(`/iterations/${id}/burndown`),
+  velocity: (projectKey: string) =>
+    request<{
+      items: Velocity[];
+      average_issues: number;
+      average_minutes: number;
+      averaged_over: number;
+      average_window_size: number;
+    }>(`/projects/${projectKey}/velocity`),
+  /** An empty `to` returns the unfinished work to the backlog. */
+  carryOverIteration: (id: string, to: string) =>
+    request<{ moved: number }>(`/iterations/${id}/carry-over`, {
+      method: "POST",
+      body: JSON.stringify({ to }),
+    }),
+  setIssueIteration: (issueKey: string, iterationId: string) =>
+    request<Issue>(`/issues/${issueKey}/iteration`, {
+      method: "PUT",
+      body: JSON.stringify({ iteration_id: iterationId }),
+    }),
 
   listTimeEntries: (issueKey: string) =>
     request<{ items: TimeEntry[]; spent_minutes: number; estimate_minutes?: number }>(

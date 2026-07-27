@@ -9,6 +9,7 @@ import { IssueList } from "./features/issues/IssueList";
 import { IssueDetail } from "./features/issues/IssueDetail";
 import { Settings } from "./features/settings/Settings";
 import { ProjectSettings } from "./features/projects/ProjectSettings";
+import { Iterations } from "./features/iterations/Iterations";
 import { Milestones } from "./features/milestones/Milestones";
 import { Releases } from "./features/releases/Releases";
 
@@ -24,6 +25,7 @@ export const router = createBrowserRouter([
       { path: "issues", element: <IssueList /> },
       { path: "issues/:issueKey", element: <IssueDetail /> },
       { path: "reports", element: <Reports /> },
+      { path: "iterations", element: <Iterations /> },
       { path: "milestones", element: <Milestones /> },
       { path: "releases", element: <Releases /> },
       { path: "settings", element: <Settings /> },

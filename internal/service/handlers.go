@@ -103,6 +103,14 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/projects/{key}/sla-policies", h.createSLAPolicy)
 	r.Patch("/sla-policies/{id}", h.updateSLAPolicy)
 	r.Delete("/sla-policies/{id}", h.deleteSLAPolicy)
+	r.Get("/projects/{key}/iterations", h.listIterations)
+	r.Post("/projects/{key}/iterations", h.createIteration)
+	r.Get("/projects/{key}/velocity", h.iterationVelocity)
+	r.Patch("/iterations/{id}", h.updateIteration)
+	r.Delete("/iterations/{id}", h.deleteIteration)
+	r.Get("/iterations/{id}/burndown", h.iterationBurndown)
+	r.Post("/iterations/{id}/carry-over", h.carryOverIteration)
+	r.Put("/issues/{issueKey}/iteration", h.setIssueIteration)
 	r.Get("/projects/{key}/milestones", h.listMilestones)
 	r.Post("/projects/{key}/milestones", h.createMilestone)
 	r.Patch("/milestones/{id}", h.updateMilestone)
@@ -1658,6 +1666,7 @@ func (h *httpHandlers) issueList(w http.ResponseWriter, r *http.Request, key str
 		httpapi.WriteValidation(w, badTerms)
 		return
 	}
+	h.resolveIterationFilter(r, &f)
 	f.Sort = r.URL.Query().Get("sort")
 	f.Limit = int32(atoiDefault(r.URL.Query().Get("limit"), 50))
 	// Paging: `total` in the response is the unpaged count, so clients page with

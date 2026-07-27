@@ -22,6 +22,18 @@ export function Board() {
 
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
   const canManage = CAN_MANAGE.has(me.data?.role ?? "");
+  const iterations = useQuery({
+    queryKey: ["iterations", projectKey],
+    queryFn: () => api.listIterations(projectKey),
+    enabled: !!projectKey,
+  });
+  const activeIteration = iterations.data?.items.find((i) => i.state === "active");
+  // Scoped to the current iteration by default when there is one: a board showing the
+  // whole project (UMAOS is 472 issues) is a list with extra steps. `scope` is state
+  // rather than derived, so the toggle survives the iterations query refetching.
+  const [scope, setScope] = useState<"iteration" | "all">("iteration");
+  const iterationScoped = scope === "iteration" && !!activeIteration;
+  const boardFilter = iterationScoped ? `iteration:"${activeIteration.name}"` : "";
   const board = useQuery({
     queryKey: ["board", projectKey],
     queryFn: () => api.getBoard(projectKey),
@@ -31,8 +43,8 @@ export function Board() {
   // computed from what's loaded, so a partial page renders a quietly wrong board.
   // Pages until every issue is in hand (the API caps a single request at 200).
   const issues = useInfiniteQuery({
-    queryKey: ["issues", projectKey, "", "board-rank"],
-    queryFn: ({ pageParam }) => api.listIssues(projectKey, "", "rank", BOARD_PAGE_SIZE, pageParam),
+    queryKey: ["issues", projectKey, boardFilter, "board-rank"],
+    queryFn: ({ pageParam }) => api.listIssues(projectKey, boardFilter, "rank", BOARD_PAGE_SIZE, pageParam),
     initialPageParam: 0,
     getNextPageParam: (last, pages) => {
       const loaded = pages.reduce((n, p) => n + p.items.length, 0);
@@ -129,6 +141,36 @@ export function Board() {
           )}
         </div>
       </div>
+
+      {activeIteration && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-hairline px-4 md:px-9 py-3">
+          <span className="font-mono text-[11px] uppercase tracking-caps text-graphite-soft">Scope</span>
+          {(
+            [
+              ["iteration", activeIteration.name],
+              ["all", "Whole project"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              onClick={() => setScope(value)}
+              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                scope === value
+                  ? "border-blueprint bg-blueprint-soft text-blueprint"
+                  : "border-hairline text-graphite hover:border-graphite hover:text-ink"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+          <Link
+            to={`/issues?filter=${encodeURIComponent("is:open iteration:none")}`}
+            className="ml-auto text-xs font-semibold text-blueprint transition hover:opacity-80"
+          >
+            Backlog →
+          </Link>
+        </div>
+      )}
 
       {configuring && board.data && <BoardConfigPanel board={board.data} projectKey={projectKey} />}
 

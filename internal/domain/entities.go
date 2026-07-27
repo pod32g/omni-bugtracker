@@ -144,6 +144,10 @@ type Issue struct {
 	EstimateMinutes *int `json:"estimate_minutes,omitempty"`
 	// SpentMinutes is the sum of the issue's time entries — derived, never stored.
 	SpentMinutes int `json:"spent_minutes"`
+	// An issue belongs to at most one iteration at a time. Iteration is the name,
+	// resolved via join.
+	IterationID *uuid.UUID `json:"iteration_id,omitempty"`
+	Iteration   string     `json:"iteration,omitempty"`
 }
 
 // IsOverdue reports whether the issue passed its own due date without being finished.

@@ -534,6 +534,17 @@ func issueWhere(f service.IssueFilter) (string, []any) {
 	if f.DueAfter != nil {
 		add("(i.due_at IS NOT NULL AND i.due_at >= $%d)", *f.DueAfter)
 	}
+	// MatchNothing is a resolved-to-nothing constraint (`iteration:current` with no
+	// active iteration). It has to narrow to empty, not disappear.
+	if f.MatchNothing {
+		where = append(where, "FALSE")
+	}
+	if f.IterationID != nil {
+		add("i.iteration_id = $%d", *f.IterationID)
+	}
+	if f.IterationNone {
+		where = append(where, "i.iteration_id IS NULL")
+	}
 	if f.EstimateNone {
 		where = append(where, "i.estimate_minutes IS NULL")
 	}
@@ -1413,6 +1424,7 @@ const selectIssue = `
 	       i.due_at, i.first_response_at, i.resolved_at,
 	       sla.response_due, sla.resolution_due, sla.response_state, sla.resolution_state,
 	       i.estimate_minutes, COALESCE(tm.spent_minutes, 0),
+	       i.iteration_id, itr.name,
 	       ru.id, ru.display_name, ru.email,
 	       au.id, au.display_name, au.email,
 	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
@@ -1429,7 +1441,8 @@ const selectIssue = `
 	LEFT JOIN milestones m ON m.id = i.milestone_id
 	LEFT JOIN releases r ON r.id = i.release_id
 	LEFT JOIN issue_sla sla ON sla.issue_id = i.id
-	LEFT JOIN issue_time tm ON tm.issue_id = i.id`
+	LEFT JOIN issue_time tm ON tm.issue_id = i.id
+	LEFT JOIN iterations itr ON itr.id = i.iteration_id`
 
 // selectLiveIssue re-reads one issue by id after a write. The deleted_at guard
 // matters: every issue write is already conditioned on `deleted_at IS NULL`, so
@@ -1445,7 +1458,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	var sev *string
 	var reporterID, assigneeID *uuid.UUID
 	var reporterName, reporterEmail, assigneeName, assigneeEmail, milestoneTitle, releaseVersion *string
-	var respState, resoState *string
+	var respState, resoState, iterationName *string
 	var respDue, resoDue *time.Time
 	err := row.Scan(
 		&i.ID, &i.ProjectKey, &i.Number, &i.Type, &i.Title, &i.DescriptionMD, &i.Status, &sev, &i.Priority,
@@ -1455,6 +1468,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 		&i.DueAt, &i.FirstResponseAt, &i.ResolvedAt,
 		&respDue, &resoDue, &respState, &resoState,
 		&i.EstimateMinutes, &i.SpentMinutes,
+		&i.IterationID, &iterationName,
 		&reporterID, &reporterName, &reporterEmail,
 		&assigneeID, &assigneeName, &assigneeEmail,
 		&i.Labels, &i.Components,
@@ -1466,6 +1480,7 @@ func scanIssue(row scanner) (domain.Issue, error) {
 	}
 	i.Milestone = deref(milestoneTitle)
 	i.Release = deref(releaseVersion)
+	i.Iteration = deref(iterationName)
 	// Both states come from the same LEFT JOIN row, so either both are present or the
 	// project has no policy for this issue and it carries no SLA at all.
 	if respState != nil && resoState != nil {

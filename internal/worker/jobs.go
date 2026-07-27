@@ -602,6 +602,28 @@ func (w *slaSweepWorker) Work(ctx context.Context, _ *river.Job[events.SLASweepA
 	return nil
 }
 
+// iterationSnapshotWorker records today's remaining work per active iteration.
+//
+// The burndown is stored rather than derived because deriving it would redraw history
+// every time an issue was re-estimated — see the migration. That only holds if this
+// actually runs, so it upserts on (iteration, date): a missed run can be made up by
+// the next one, and a double run overwrites rather than duplicating.
+type iterationSnapshotWorker struct {
+	river.WorkerDefaults[events.IterationSnapshotArgs]
+	d Deps
+}
+
+func (w *iterationSnapshotWorker) Work(ctx context.Context, _ *river.Job[events.IterationSnapshotArgs]) error {
+	n, err := w.d.Store.SnapshotIterations(ctx)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		w.d.Logger.Info("iteration snapshot", "iterations", n)
+	}
+	return nil
+}
+
 func (w *autoArchiveWorker) Work(ctx context.Context, _ *river.Job[events.AutoArchiveArgs]) error {
 	// Read live: the Settings value (DB) overrides the bootstrap config default, so an
 	// admin can toggle auto-archive without restarting the worker.

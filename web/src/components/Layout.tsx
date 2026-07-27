@@ -238,6 +238,7 @@ function Sidebar({ me, onSearch, open }: { me?: User; onSearch: () => void; open
         />
         <NavItem to="/board" icon={<IconBoard size={17} />} label="Board" />
         <NavItem to="/reports" icon={<IconDashboard size={17} />} label="Reports" />
+        <NavItem to="/iterations" icon={<IconFlag size={17} />} label="Iterations" />
         <NavItem to="/milestones" icon={<IconFlag size={17} />} label="Milestones" />
         <NavItem to="/releases" icon={<IconTag size={17} />} label="Releases" />
         <NavItem to="/settings" icon={<IconGear size={17} />} label="Settings" />

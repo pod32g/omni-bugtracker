@@ -40,6 +40,7 @@ func New(d Deps) (*river.Client[pgx.Tx], error) {
 	river.AddWorker(workers, &autoArchiveWorker{d: d})
 	river.AddWorker(workers, &wakeSnoozedWorker{d: d})
 	river.AddWorker(workers, &slaSweepWorker{d: d})
+	river.AddWorker(workers, &iterationSnapshotWorker{d: d})
 
 	q := d.Cfg.Worker.Queues
 	queues := map[string]river.QueueConfig{
@@ -70,6 +71,14 @@ func New(d Deps) (*river.Client[pgx.Tx], error) {
 		river.NewPeriodicJob(
 			river.PeriodicInterval(15*time.Minute),
 			func() (river.JobArgs, *river.InsertOpts) { return events.SLASweepArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: true},
+		),
+		// Burndown granularity is a day, so snapshot more often than that and let the
+		// upsert collapse the extras: a worker restarted at 23:00 still records the
+		// day, and a missed day is a hole in a chart nobody can fill in later.
+		river.NewPeriodicJob(
+			river.PeriodicInterval(6*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) { return events.IterationSnapshotArgs{}, nil },
 			&river.PeriodicJobOpts{RunOnStart: true},
 		),
 	}

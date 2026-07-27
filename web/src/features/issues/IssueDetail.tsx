@@ -414,6 +414,10 @@ export function IssueDetail() {
             />
           </MetaRow>
 
+          <MetaRow label="Iteration">
+            <IterationControl issue={i} projectKey={projectKeyOfIssue} />
+          </MetaRow>
+
           <MetaRow label="Release">
             <ReleaseControl
               releaseId={i.release_id ?? null}
@@ -1368,6 +1372,58 @@ function SLALine({ label, due, state }: { label: string; due?: string; state: st
       <span className={`font-medium ${tone}`} title={new Date(due).toLocaleString()}>
         {state === "met" ? "met" : relativeDue(due)}
       </span>
+    </div>
+  );
+}
+
+/**
+ * IterationControl plans or unplans one issue.
+ *
+ * Only unfinished iterations are offered, plus whichever one the issue is already in:
+ * moving work into an iteration that is over is not planning, and hiding the current
+ * one would make the control lie about where the issue actually is.
+ */
+function IterationControl({ issue, projectKey }: { issue: Issue; projectKey: string }) {
+  const qc = useQueryClient();
+  const iterations = useQuery({
+    queryKey: ["iterations", projectKey],
+    queryFn: () => api.listIterations(projectKey),
+    enabled: !!projectKey,
+  });
+  const set = useMutation({
+    mutationFn: (id: string) => api.setIssueIteration(issue.key, id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["issue", issue.key] });
+      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: ["iterations", projectKey] });
+    },
+  });
+  const options = (iterations.data?.items ?? []).filter(
+    (it) => it.state !== "completed" || it.id === issue.iteration_id,
+  );
+
+  return (
+    <div className="relative">
+      <div className="flex h-[30px] items-center gap-2 rounded-md border border-hairline px-2">
+        <span className={`text-sm font-medium ${issue.iteration_id ? "text-ink" : "text-graphite-soft"}`}>
+          {issue.iteration || "Backlog"}
+        </span>
+        <IconChevronDown size={14} className="ml-auto text-graphite" />
+      </div>
+      <select
+        value={issue.iteration_id ?? ""}
+        onChange={(e) => set.mutate(e.target.value)}
+        aria-label="Iteration"
+        className="absolute inset-0 cursor-pointer opacity-0"
+      >
+        <option value="">Backlog</option>
+        {options.map((it) => (
+          <option key={it.id} value={it.id}>
+            {it.name}
+            {it.state === "active" ? " (current)" : ""}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

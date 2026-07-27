@@ -86,6 +86,15 @@ type SLASweepArgs struct{}
 func (SLASweepArgs) Kind() string                 { return "sla_sweep" }
 func (SLASweepArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: "default"} }
 
+// IterationSnapshotArgs is the daily job that records each active iteration's
+// remaining work. No payload — it snapshots whatever is active.
+type IterationSnapshotArgs struct{}
+
+func (IterationSnapshotArgs) Kind() string { return "iteration_snapshot" }
+func (IterationSnapshotArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: "default"}
+}
+
 // ObsIngestArgs → create/dedupe an issue from a logging/metrics alert.
 type ObsIngestArgs struct {
 	Source      string          `json:"source"` // logging|metrics

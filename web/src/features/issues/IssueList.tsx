@@ -39,6 +39,7 @@ const QUICK_FILTERS = [
   { label: "Snoozed", filter: "is:snoozed" },
   { label: "Overdue", filter: "is:open due:overdue" },
   { label: "Over budget", filter: "is:open over-budget:true" },
+  { label: "This iteration", filter: "is:open iteration:current" },
 ];
 
 const SORTS = [

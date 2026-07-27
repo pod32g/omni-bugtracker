@@ -88,6 +88,24 @@ type Repository interface {
 	SetIssueRank(ctx context.Context, id uuid.UUID, rank string) error
 	// NeighbourRanks resolves the ranks either side of a drop position.
 	NeighbourRanks(ctx context.Context, projectKey, beforeKey, afterKey string) (string, string, error)
+	// Iterations (time-boxed planning)
+	ListIterations(ctx context.Context, projectKey string) ([]domain.Iteration, error)
+	GetIteration(ctx context.Context, id uuid.UUID) (domain.Iteration, error)
+	CreateIteration(ctx context.Context, in IterationInput) (domain.Iteration, error)
+	UpdateIteration(ctx context.Context, id uuid.UUID, in UpdateIterationInput) (domain.Iteration, error)
+	DeleteIteration(ctx context.Context, id uuid.UUID) (bool, error)
+	// SetIssueIteration moves one issue in or out; nil removes it from any iteration.
+	SetIssueIteration(ctx context.Context, issueID uuid.UUID, iteration *uuid.UUID, actor uuid.UUID) error
+	// CarryOverIssues moves unfinished work between iterations, explicitly.
+	CarryOverIssues(ctx context.Context, from uuid.UUID, to *uuid.UUID) (int, error)
+	IterationBurndown(ctx context.Context, id uuid.UUID) ([]domain.BurndownPoint, error)
+	// SnapshotIterations records today's remaining work for every active iteration.
+	SnapshotIterations(ctx context.Context) (int, error)
+	IterationVelocity(ctx context.Context, projectKey string, limit int) ([]domain.Velocity, error)
+	// ResolveIteration turns an `iteration:` filter value (current/next/name/uuid)
+	// into an id; found=false means the filter must match nothing.
+	ResolveIteration(ctx context.Context, projectKey, ref string) (uuid.UUID, bool, error)
+
 	// Time tracking
 	ListTimeEntries(ctx context.Context, issueID uuid.UUID) ([]domain.TimeEntry, error)
 	LogTime(ctx context.Context, in TimeEntryInput) (domain.TimeEntry, error)
@@ -485,6 +503,25 @@ type UpdateProjectViewInput struct {
 	IsDefault   *bool
 }
 
+// IterationInput creates a time-boxed iteration. Dates are "YYYY-MM-DD".
+type IterationInput struct {
+	ProjectKey string
+	Name       string
+	StartsOn   string
+	EndsOn     string
+	Goal       string
+}
+
+// UpdateIterationInput is a partial edit; nil fields are unchanged. Setting State to
+// "active" stands down whichever iteration currently holds it — see UpdateIteration.
+type UpdateIterationInput struct {
+	Name     *string
+	StartsOn *string
+	EndsOn   *string
+	Goal     *string
+	State    *string
+}
+
 // TimeEntryInput logs one stretch of work. An empty SpentOn means today.
 type TimeEntryInput struct {
 	IssueID uuid.UUID
@@ -582,6 +619,18 @@ type IssueFilter struct {
 	// issues no policy applies to, which is not the same as "meeting its targets".
 	SLAStates []string
 	SLANone   bool
+	// IterationID scopes to one iteration; IterationNone matches unplanned issues.
+	// An unresolvable `iteration:current` sets NoIteration so it matches nothing
+	// rather than silently widening to the whole project.
+	IterationID   *uuid.UUID
+	IterationNone bool
+	// IterationRef is the unresolved `iteration:` value ("current", "next", a name
+	// or a uuid). ParseFilter records it; the handler resolves it against the store.
+	IterationRef string
+	// MatchNothing is set when a filter term resolved to nothing that exists. It has
+	// to be its own flag: dropping an unresolvable constraint would widen the result
+	// set to everything, which is the opposite of what was asked for.
+	MatchNothing bool
 	// Effort predicates from `estimate:`, `spent:` and `over-budget:`.
 	EstimateNone bool
 	EstimateAny  bool

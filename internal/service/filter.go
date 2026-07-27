@@ -157,6 +157,14 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 				fields[key] = "unknown value " + quoted(val) +
 					" — expected breached, at-risk, ok, met, or none"
 			}
+		case "iteration", "sprint":
+			// Recorded symbolically: "current" and "next" need the database, and
+			// ParseFilter is pure so it stays unit-testable. The handler resolves it.
+			if strings.EqualFold(val, "none") || strings.EqualFold(val, "backlog") {
+				f.IterationNone = true
+				continue
+			}
+			f.IterationRef = val
 		case "estimate":
 			switch strings.ToLower(val) {
 			case "none", "unset":
