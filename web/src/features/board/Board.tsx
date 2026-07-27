@@ -232,9 +232,13 @@ function Column({
       onDragOver={(e) => e.preventDefault()}
       // Dropping on the column background, not on a gap, means "the end".
       onDrop={onDropAt(issues.length)}
+      // The row is items-stretch, so columns already match the tallest one; the
+      // min-height only has to keep an all-empty board droppable. It used to reserve
+      // a full viewport per column, which is why a board with three empty columns was
+      // three screens of nothing.
       className={`flex w-[85vw] max-w-[300px] shrink-0 snap-start flex-col gap-3 rounded-lg border p-3 sm:w-[300px] ${
         overWip ? "border-critical/50 bg-critical-soft/30" : "border-hairline bg-panel"
-      } ${compact ? "min-h-[120px]" : "min-h-[calc(100vh-200px)]"}`}
+      } ${compact ? "min-h-[120px]" : "min-h-[180px]"}`}
     >
       <div className="flex items-center justify-between px-1">
         <span className="text-sm font-semibold text-ink" title={column.statuses.map((s) => statusLabel[s]).join(", ")}>
@@ -244,7 +248,11 @@ function Column({
           {column.wip_limit != null ? `${totalInColumn}/${column.wip_limit}` : issues.length}
         </span>
       </div>
-      <div className="flex flex-1 flex-col">
+      <div
+        className={`flex flex-1 flex-col ${
+          compact ? "" : "max-h-[calc(100vh-270px)] overflow-y-auto"
+        }`}
+      >
         {issues.map((i, index) => (
           <div key={i.id}>
             <DropGap onDrop={onDropAt(index)} />
@@ -282,7 +290,7 @@ function DropGap({ onDrop, last = false }: { onDrop: (e: DragEvent) => void; las
         setOver(false);
         onDrop(e);
       }}
-      className={`rounded transition-all ${over ? "my-1 h-6 bg-blueprint/30" : last ? "h-3" : "h-2"}`}
+      className={`rounded transition-all ${over ? "my-1 h-6 bg-blueprint/30" : last ? "h-2" : "h-1.5"}`}
     />
   );
 }
@@ -464,7 +472,7 @@ function BoardCard({ issue }: { issue: Issue }) {
         e.dataTransfer.setData("text/plain", issue.key);
         e.dataTransfer.effectAllowed = "move";
       }}
-      className="flex cursor-grab flex-col gap-2.5 rounded-md border border-hairline bg-paper p-3 transition hover:border-graphite active:cursor-grabbing"
+      className="flex cursor-grab flex-col gap-2 rounded-md border border-hairline bg-paper p-2.5 transition hover:border-graphite active:cursor-grabbing"
     >
       <div className="flex items-start gap-2">
         <SeverityBar severity={issue.severity} />
@@ -477,7 +485,7 @@ function BoardCard({ issue }: { issue: Issue }) {
       )}
       {issue.labels && issue.labels.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
-          {issue.labels.slice(0, 3).map((l) => (
+          {issue.labels.slice(0, 2).map((l) => (
             <LabelChip key={l} name={l} />
           ))}
         </div>
