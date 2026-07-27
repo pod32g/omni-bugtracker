@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
 import { statusLabel, statusTone } from "../../components/Badges";
 import { AssigneeSelect, ComponentsSelect, Field, LabelsInput, Modal, Select, TextInput, Textarea } from "./formFields";
+import { NewIssueFields } from "./CustomFields";
 
 const TYPES: IssueType[] = ["bug", "task", "feature", "improvement"];
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
@@ -111,6 +112,7 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
       // but confusing in the request; drop it so an unset field is simply absent.
       if (!body.due_at) delete body.due_at;
       if (!body.estimate) delete body.estimate;
+      if (body.fields && Object.keys(body.fields).length === 0) delete body.fields;
       const issue = await api.createIssue(projectKey, body);
       // Filing a duplicate on purpose is legitimate — it just has to be recorded, so
       // whoever triages it does not have to rediscover the connection.
@@ -176,6 +178,12 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
       <Field label="Description (Markdown)" className="mt-3">
         <Textarea value={form.description_md ?? ""} onChange={(v) => set("description_md", v)} rows={4} />
       </Field>
+      <NewIssueFields
+        projectKey={projectKey}
+        issueType={form.type}
+        values={form.fields ?? {}}
+        onChange={(fields) => set("fields", fields)}
+      />
       <Field label="Labels" className="mt-3">
         <LabelsInput projectKey={projectKey} value={form.labels ?? []} onChange={(v) => set("labels", v)} />
       </Field>

@@ -157,6 +157,15 @@ func ParseFilter(projectKey, raw, meUserID string) (IssueFilter, map[string]stri
 				fields[key] = "unknown value " + quoted(val) +
 					" — expected breached, at-risk, ok, met, or none"
 			}
+		case "field":
+			// `field:<key>:<value>` — the value half still contains a colon, which
+			// Cut already split off, so the two halves are reassembled here.
+			fieldKey, fieldVal, ok := strings.Cut(val, ":")
+			if !ok || strings.TrimSpace(fieldKey) == "" {
+				fields[key] = `expected field:<key>:<value>, e.g. field:severity_score:3`
+				continue
+			}
+			f.FieldTerms = append(f.FieldTerms, [2]string{fieldKey, fieldVal})
 		case "iteration", "sprint":
 			// Recorded symbolically: "current" and "next" need the database, and
 			// ParseFilter is pure so it stays unit-testable. The handler resolves it.

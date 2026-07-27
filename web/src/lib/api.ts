@@ -116,6 +116,8 @@ export interface NewIssue {
   due_at?: string;
   /** A duration like "2d" or "90m". On PATCH, "" clears it. */
   estimate?: string;
+  /** Custom field values keyed by field key; required ones are enforced on create. */
+  fields?: Record<string, unknown>;
 }
 
 // Sentinel assignee_id meaning "clear the assignee" on PATCH.
@@ -174,6 +176,40 @@ export interface TimeEntry {
   spent_on: string; // YYYY-MM-DD
   note?: string;
   created_at: string;
+}
+
+export type FieldType =
+  | "text"
+  | "number"
+  | "select"
+  | "multi_select"
+  | "date"
+  | "user"
+  | "checkbox"
+  | "url";
+
+export interface FieldDefinition {
+  id: string;
+  key: string;
+  label: string;
+  type: FieldType;
+  options: string[];
+  required: boolean;
+  /** Empty means the field applies to every issue type. */
+  applies_to: IssueType[];
+  help_text?: string;
+  position: number;
+  created_at: string;
+}
+
+/** One field's value on one issue. Clients switch on `type`, never on `key`. */
+export interface FieldValue {
+  key: string;
+  label: string;
+  type: FieldType;
+  /** null when defined but unset — different from "" or 0 or false. */
+  value: string | number | boolean | string[] | null;
+  user?: User;
 }
 
 export type IterationState = "planned" | "active" | "completed";
@@ -899,6 +935,37 @@ export const api = {
     body: { response_minutes?: number; resolution_minutes?: number; is_active?: boolean },
   ) => request<SLAPolicy>(`/sla-policies/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteSLAPolicy: (id: string) => request<void>(`/sla-policies/${id}`, { method: "DELETE" }),
+
+  listFieldDefinitions: (projectKey: string) =>
+    request<{ items: FieldDefinition[] }>(`/projects/${projectKey}/fields`),
+  createFieldDefinition: (
+    projectKey: string,
+    body: {
+      key: string;
+      label: string;
+      type: FieldType;
+      options?: string[];
+      required?: boolean;
+      applies_to?: string[];
+      help_text?: string;
+    },
+  ) =>
+    request<FieldDefinition>(`/projects/${projectKey}/fields`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateFieldDefinition: (
+    id: string,
+    body: { label?: string; options?: string[]; required?: boolean; applies_to?: string[]; help_text?: string },
+  ) => request<FieldDefinition>(`/fields/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteFieldDefinition: (id: string) => request<void>(`/fields/${id}`, { method: "DELETE" }),
+  listIssueFields: (issueKey: string) =>
+    request<{ items: FieldValue[] }>(`/issues/${issueKey}/fields`),
+  setIssueFields: (issueKey: string, values: Record<string, unknown>) =>
+    request<{ items: FieldValue[] }>(`/issues/${issueKey}/fields`, {
+      method: "PUT",
+      body: JSON.stringify(values),
+    }),
 
   listIterations: (projectKey: string) =>
     request<{ items: Iteration[] }>(`/projects/${projectKey}/iterations`),

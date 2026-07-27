@@ -534,6 +534,21 @@ func issueWhere(f service.IssueFilter) (string, []any) {
 	if f.DueAfter != nil {
 		add("(i.due_at IS NOT NULL AND i.due_at >= $%d)", *f.DueAfter)
 	}
+	// Custom fields. Each term is its own EXISTS so several are ANDed rather than
+	// fighting over one joined row — `field:team:infra field:tier:1` must mean both.
+	for _, fp := range f.FieldPredicates {
+		args = append(args, fp.DefinitionID)
+		defParam := len(args)
+		args = append(args, fp.Arg)
+		valParam := len(args)
+		match := fmt.Sprintf("v.%s = $%d%s", fp.Column, valParam, fp.Cast)
+		if fp.ArrayContains {
+			match = fmt.Sprintf("$%d = ANY(v.%s)", valParam, fp.Column)
+		}
+		where = append(where, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM issue_field_values v WHERE v.issue_id = i.id AND v.definition_id = $%d AND %s)",
+			defParam, match))
+	}
 	// MatchNothing is a resolved-to-nothing constraint (`iteration:current` with no
 	// active iteration). It has to narrow to empty, not disappear.
 	if f.MatchNothing {

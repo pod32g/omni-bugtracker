@@ -88,6 +88,19 @@ type Repository interface {
 	SetIssueRank(ctx context.Context, id uuid.UUID, rank string) error
 	// NeighbourRanks resolves the ranks either side of a drop position.
 	NeighbourRanks(ctx context.Context, projectKey, beforeKey, afterKey string) (string, string, error)
+	// Custom fields (project-scoped extra structure)
+	ListFieldDefinitions(ctx context.Context, projectKey string) ([]domain.FieldDefinition, error)
+	CreateFieldDefinition(ctx context.Context, in FieldDefinitionInput) (domain.FieldDefinition, error)
+	UpdateFieldDefinition(ctx context.Context, id uuid.UUID, in UpdateFieldDefinitionInput) (domain.FieldDefinition, error)
+	DeleteFieldDefinition(ctx context.Context, id uuid.UUID) (bool, error)
+	// IssueFieldValues returns every field that applies to the issue, set or not.
+	IssueFieldValues(ctx context.Context, issueID uuid.UUID) ([]domain.FieldValue, error)
+	// SetIssueFieldValues writes a batch; an empty value clears the field.
+	SetIssueFieldValues(ctx context.Context, issueID uuid.UUID, values map[string]any) error
+	// ResolveFieldFilter turns a `field:<key>:<value>` term into a SQL predicate, or
+	// a validation message when the key or the value does not fit the definition.
+	ResolveFieldFilter(ctx context.Context, projectKey, key, value string) (FieldPredicate, error)
+
 	// Iterations (time-boxed planning)
 	ListIterations(ctx context.Context, projectKey string) ([]domain.Iteration, error)
 	GetIteration(ctx context.Context, id uuid.UUID) (domain.Iteration, error)
@@ -503,6 +516,43 @@ type UpdateProjectViewInput struct {
 	IsDefault   *bool
 }
 
+// FieldDefinitionInput declares a custom field on a project.
+type FieldDefinitionInput struct {
+	ProjectKey string
+	Key        string
+	Label      string
+	Type       string
+	Options    []string
+	Required   bool
+	AppliesTo  []domain.IssueType
+	HelpText   string
+}
+
+// UpdateFieldDefinitionInput is a partial edit. Key and Type are deliberately absent:
+// the key is what saved searches reference, and changing the type would strand every
+// existing value in the wrong column.
+type UpdateFieldDefinitionInput struct {
+	Label     *string
+	Options   *[]string
+	Required  *bool
+	AppliesTo *[]domain.IssueType
+	HelpText  *string
+	Position  *int
+}
+
+// FieldPredicate is a resolved `field:<key>:<value>` term. Problem is set instead of
+// the rest when the term does not fit the definition, so the caller can answer 422
+// naming the field rather than letting a failed cast become a 500.
+type FieldPredicate struct {
+	DefinitionID  uuid.UUID
+	Type          string
+	Column        string
+	Cast          string
+	Arg           any
+	ArrayContains bool
+	Problem       string
+}
+
 // IterationInput creates a time-boxed iteration. Dates are "YYYY-MM-DD".
 type IterationInput struct {
 	ProjectKey string
@@ -631,6 +681,10 @@ type IssueFilter struct {
 	// to be its own flag: dropping an unresolvable constraint would widen the result
 	// set to everything, which is the opposite of what was asked for.
 	MatchNothing bool
+	// FieldTerms are unresolved `field:<key>:<value>` terms; the handler resolves
+	// them against the project's definitions. FieldPredicates is what issueWhere reads.
+	FieldTerms      [][2]string
+	FieldPredicates []FieldPredicate
 	// Effort predicates from `estimate:`, `spent:` and `over-budget:`.
 	EstimateNone bool
 	EstimateAny  bool

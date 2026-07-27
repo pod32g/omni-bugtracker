@@ -103,6 +103,12 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/projects/{key}/sla-policies", h.createSLAPolicy)
 	r.Patch("/sla-policies/{id}", h.updateSLAPolicy)
 	r.Delete("/sla-policies/{id}", h.deleteSLAPolicy)
+	r.Get("/projects/{key}/fields", h.listFieldDefinitions)
+	r.Post("/projects/{key}/fields", h.createFieldDefinition)
+	r.Patch("/fields/{id}", h.updateFieldDefinition)
+	r.Delete("/fields/{id}", h.deleteFieldDefinition)
+	r.Get("/issues/{issueKey}/fields", h.listIssueFields)
+	r.Put("/issues/{issueKey}/fields", h.setIssueFields)
 	r.Get("/projects/{key}/iterations", h.listIterations)
 	r.Post("/projects/{key}/iterations", h.createIteration)
 	r.Get("/projects/{key}/velocity", h.iterationVelocity)
@@ -1667,6 +1673,10 @@ func (h *httpHandlers) issueList(w http.ResponseWriter, r *http.Request, key str
 		return
 	}
 	h.resolveIterationFilter(r, &f)
+	if problems := h.resolveFieldFilters(r, &f); len(problems) > 0 {
+		httpapi.WriteValidation(w, problems)
+		return
+	}
 	f.Sort = r.URL.Query().Get("sort")
 	f.Limit = int32(atoiDefault(r.URL.Query().Get("limit"), 50))
 	// Paging: `total` in the response is the unpaged count, so clients page with
@@ -1713,6 +1723,7 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		EnvironmentMD   string           `json:"environment_md"`
 		DueAt           string           `json:"due_at"`
 		Estimate        string           `json:"estimate"`
+		Fields          map[string]any   `json:"fields"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -1732,9 +1743,22 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteValidation(w, map[string]string{"estimate": err.Error()})
 		return
 	}
+	// Required custom fields are enforced at filing time only — see ValidateFieldValues.
+	projectKey := chi.URLParam(r, "key")
+	defs, err := h.repo.ListFieldDefinitions(r.Context(), projectKey)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "load fields failed", err.Error())
+		return
+	}
+	if len(defs) > 0 {
+		if problems := ValidateFieldValues(defs, body.Type, body.Fields, true); len(problems) > 0 {
+			httpapi.WriteValidation(w, problems)
+			return
+		}
+	}
 	reporter, _ := uuid.Parse(p.UserID)
 	issue, err := h.issues.Create(r.Context(), CreateIssueInput{
-		ProjectKey: chi.URLParam(r, "key"), Type: body.Type, Title: body.Title,
+		ProjectKey: projectKey, Type: body.Type, Title: body.Title,
 		DescriptionMD: body.DescriptionMD, Severity: body.Severity, Priority: body.Priority,
 		ReporterID: reporter, AssigneeID: body.AssigneeID, Labels: body.Labels,
 		Components: body.Components, VersionAffected: body.VersionAffected,
@@ -1745,6 +1769,15 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
 		return
+	}
+	// Field values are written after the issue exists — they are keyed by issue id, so
+	// there is nothing to attach them to before the insert. A failure here is reported
+	// rather than swallowed, but the issue itself has already been filed and is not
+	// rolled back: losing somebody's bug report over a custom field would be worse.
+	if len(body.Fields) > 0 {
+		if err := h.repo.SetIssueFieldValues(r.Context(), issue.ID, body.Fields); err != nil {
+			h.log.Error("set field values on create", "issue", issue.Key, "err", err)
+		}
 	}
 	writeJSON(w, http.StatusCreated, issue)
 }

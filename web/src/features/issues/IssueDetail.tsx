@@ -40,6 +40,7 @@ import {
 import { IconBranch, IconChevronDown, IconCommit, IconEye, IconKebab, IconMilestone, IconPencil } from "../../components/icons";
 import { EditIssueForm } from "./EditIssueForm";
 import { ComponentsSelect } from "./formFields";
+import { CustomFieldsPanel } from "./CustomFields";
 
 const COMMENT_PAGE_SIZE = 50;
 const ACTIVITY_PAGE_SIZE = 50;
@@ -446,6 +447,8 @@ export function IssueDetail() {
           </MetaRow>
 
           <EffortControl issue={i} onEstimate={(estimate) => patch.mutate({ estimate })} />
+
+          <CustomFieldsPanel issueKey={i.key} projectKey={i.project_key} />
 
           {(i.version_fixed || i.version_affected) && (
             <MetaRow label="Version">

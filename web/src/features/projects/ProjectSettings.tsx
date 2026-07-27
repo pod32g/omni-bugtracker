@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, UNASSIGNED, type Component, type User } from "../../lib/api";
+import { api, UNASSIGNED, type Component, type FieldType, type User } from "../../lib/api";
 import { useProject } from "../../lib/project";
 import { AssigneeSelect } from "../issues/formFields";
 import { Avatar } from "../../components/Badges";
@@ -157,6 +157,8 @@ export function ProjectSettings() {
 
         <ComponentsSection projectKey={key} canManage={canManage} />
 
+        <FieldsSection projectKey={key} canManage={canManage} />
+
         <SLASection projectKey={key} canManage={canManage} />
 
         <MembersSection projectKey={key} canManage={canManage} />
@@ -310,6 +312,243 @@ function ComponentsSection({ projectKey, canManage }: { projectKey: string; canM
               if (window.confirm(`Delete component “${c.name}”? It is removed from all issues.`)) del.mutate(c.id);
             }}
           />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+const FIELD_TYPES: FieldType[] = [
+  "text",
+  "number",
+  "select",
+  "multi_select",
+  "date",
+  "user",
+  "checkbox",
+  "url",
+];
+
+const ISSUE_TYPES = ["bug", "task", "feature", "improvement"];
+
+function FieldsSection({ projectKey, canManage }: { projectKey: string; canManage: boolean }) {
+  const qc = useQueryClient();
+  const defs = useQuery({
+    queryKey: ["field-defs", projectKey],
+    queryFn: () => api.listFieldDefinitions(projectKey),
+  });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["field-defs", projectKey] });
+
+  const [label, setLabel] = useState("");
+  const [fieldKey, setFieldKey] = useState("");
+  const [type, setType] = useState<FieldType>("text");
+  const [options, setOptions] = useState("");
+  const [required, setRequired] = useState(false);
+  const [appliesTo, setAppliesTo] = useState<string[]>([]);
+  // The key is derived from the label until somebody edits it directly — nobody wants
+  // to type "customer_tier" by hand, and the key is what filters reference forever.
+  const [keyTouched, setKeyTouched] = useState(false);
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.createFieldDefinition(projectKey, {
+        key: fieldKey,
+        label: label.trim(),
+        type,
+        options: options
+          .split(",")
+          .map((o) => o.trim())
+          .filter(Boolean),
+        required,
+        applies_to: appliesTo,
+      }),
+    onSuccess: () => {
+      setLabel("");
+      setFieldKey("");
+      setOptions("");
+      setRequired(false);
+      setAppliesTo([]);
+      setKeyTouched(false);
+      invalidate();
+    },
+  });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteFieldDefinition(id), onSuccess: invalidate });
+  const update = useMutation({
+    mutationFn: ({ id, required }: { id: string; required: boolean }) =>
+      api.updateFieldDefinition(id, { required }),
+    onSuccess: invalidate,
+  });
+
+  const needsOptions = type === "select" || type === "multi_select";
+  const items = defs.data?.items ?? [];
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold text-ink">Custom fields</h2>
+        <p className="text-sm leading-relaxed text-graphite">
+          Extra structure this project needs and the built-in shape does not have. Unlike
+          labels, a field has a type, can be required, and can be filtered exactly:{" "}
+          <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-ink">
+            field:customer_tier:enterprise
+          </code>
+          .
+        </p>
+        <p className="text-sm leading-relaxed text-graphite-soft">
+          The key and type are fixed once created — the key is what saved searches
+          reference, and a type change would strand every existing value.
+        </p>
+      </div>
+
+      {canManage && (
+        <div className="flex flex-col gap-3 rounded-md border border-hairline bg-panel/50 p-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="grow text-sm">
+              <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+                Label
+              </span>
+              <input
+                value={label}
+                onChange={(e) => {
+                  setLabel(e.target.value);
+                  if (!keyTouched) {
+                    setFieldKey(
+                      e.target.value
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, "_")
+                        .replace(/^_+|_+$/g, "")
+                        .slice(0, 39),
+                    );
+                  }
+                }}
+                placeholder="Customer tier"
+                className="h-9 w-full rounded-md border border-hairline bg-paper px-3 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+                Key
+              </span>
+              <input
+                value={fieldKey}
+                onChange={(e) => {
+                  setKeyTouched(true);
+                  setFieldKey(e.target.value);
+                }}
+                className="h-9 w-40 rounded-md border border-hairline bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-blueprint"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+                Type
+              </span>
+              <select
+                value={type}
+                onChange={(e) => setType(e.target.value as FieldType)}
+                className="h-9 rounded-md border border-hairline bg-paper px-2 text-sm text-ink"
+              >
+                {FIELD_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t.replace("_", " ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex h-9 items-center gap-2 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={required}
+                onChange={(e) => setRequired(e.target.checked)}
+                className="accent-blueprint"
+              />
+              Required
+            </label>
+            <button
+              disabled={!label.trim() || !fieldKey || (needsOptions && !options.trim()) || create.isPending}
+              onClick={() => create.mutate()}
+              className="flex h-9 items-center gap-1.5 rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+            >
+              <IconPlus size={15} />
+              Add
+            </button>
+          </div>
+          {needsOptions && (
+            <label className="text-sm">
+              <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+                Options (comma separated)
+              </span>
+              <input
+                value={options}
+                onChange={(e) => setOptions(e.target.value)}
+                placeholder="free, pro, enterprise"
+                className="h-9 w-full rounded-md border border-hairline bg-paper px-3 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
+              />
+            </label>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
+              Applies to
+            </span>
+            {ISSUE_TYPES.map((t) => {
+              const on = appliesTo.includes(t);
+              return (
+                <button
+                  key={t}
+                  onClick={() => setAppliesTo(on ? appliesTo.filter((x) => x !== t) : [...appliesTo, t])}
+                  className={`rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize transition ${
+                    on
+                      ? "border-blueprint bg-blueprint-soft text-blueprint"
+                      : "border-hairline text-graphite hover:border-graphite hover:text-ink"
+                  }`}
+                >
+                  {t}
+                </button>
+              );
+            })}
+            {appliesTo.length === 0 && (
+              <span className="text-xs text-graphite-soft">none selected = every type</span>
+            )}
+          </div>
+          {create.isError && <p className="text-sm text-critical">{(create.error as Error).message}</p>}
+        </div>
+      )}
+
+      <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
+        {defs.isLoading && <div className="p-4 text-sm text-graphite">Loading…</div>}
+        {defs.isSuccess && items.length === 0 && (
+          <div className="p-4 text-sm text-graphite-soft">No custom fields.</div>
+        )}
+        {items.map((d) => (
+          <div key={d.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+            <span className="text-sm font-medium text-ink">{d.label}</span>
+            <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-graphite">{d.key}</code>
+            <span className="text-xs text-graphite">{d.type.replace("_", " ")}</span>
+            {d.options.length > 0 && (
+              <span className="text-xs text-graphite-soft">{d.options.join(" · ")}</span>
+            )}
+            {d.applies_to.length > 0 && (
+              <span className="text-xs text-graphite-soft">{d.applies_to.join(", ")} only</span>
+            )}
+            {canManage && (
+              <span className="ml-auto flex items-center gap-3 text-xs font-semibold">
+                <button
+                  onClick={() => update.mutate({ id: d.id, required: !d.required })}
+                  className={d.required ? "text-blueprint" : "text-graphite"}
+                >
+                  {d.required ? "Required" : "Optional"}
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm(`Delete “${d.label}”? Every value stored for it is removed.`))
+                      del.mutate(d.id);
+                  }}
+                  className="text-graphite transition hover:text-critical"
+                >
+                  Delete
+                </button>
+              </span>
+            )}
+          </div>
         ))}
       </div>
     </section>
