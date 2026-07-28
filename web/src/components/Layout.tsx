@@ -149,18 +149,32 @@ function MobileBar({ onOpenNav, onSearch }: { onOpenNav: () => void; onSearch: (
   );
 }
 
+const isUnauthorized = (e: unknown) => e instanceof ApiError && e.status === 401;
+
 /**
  * useUnread polls the inbox count. Polling rather than SSE for now: 30s is well inside
  * the latency anybody expects from a notification badge, and it needs no connection to
  * keep alive through a deploy.
+ *
+ * Polling stops when the session is gone, which it did not used to. `me` is only fetched
+ * once, so a tab left open past expiry keeps its cached user, keeps rendering the shell,
+ * and keeps this hook mounted — it polled every 30s forever, and because each 401 also
+ * triggers a token refresh that 401s in turn, one abandoned tab was ~5,700 failed
+ * requests a day. A 401 here has already survived that refresh attempt, so it means the
+ * session really is dead: stop asking, and re-check `me` so the app shows the sign-in
+ * screen instead of a live-looking shell with a badge that can never update.
  */
 function useUnread() {
+  const qc = useQueryClient();
   const inbox = useQuery({
     queryKey: ["notifications", "badge"],
     queryFn: () => api.notifications(true, 1),
-    refetchInterval: 30_000,
+    refetchInterval: (q) => (isUnauthorized(q.state.error) ? false : 30_000),
     retry: false,
   });
+  useEffect(() => {
+    if (isUnauthorized(inbox.error)) qc.invalidateQueries({ queryKey: ["me"] });
+  }, [inbox.error, qc]);
   return inbox.data?.unread ?? 0;
 }
 

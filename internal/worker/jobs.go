@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,7 +34,7 @@ type eventWorker struct {
 func (w *eventWorker) Work(ctx context.Context, job *river.Job[events.DomainEventArgs]) error {
 	client := river.ClientFromContext[pgx.Tx](ctx)
 	ev := job.Args
-	w.d.Logger.Info("dispatch", "event", ev.EventType, "issue", ev.IssueID)
+	w.logEvent(ctx, ev)
 
 	// Notify on every issue event; automation always evaluates.
 	//
@@ -62,6 +63,32 @@ func (w *eventWorker) Work(ctx context.Context, job *river.Job[events.DomainEven
 		}
 	}
 	return nil
+}
+
+// logEvent writes the domain event itself to the log — the record of what the tracker
+// actually did, as opposed to which HTTP endpoints were touched doing it.
+//
+// The outbox already carries every meaningful thing that happens (an issue filed, a
+// status moved, a comment posted, an SLA breached) and the dispatcher sees all of it,
+// so this is the one place that can narrate the system in domain terms. It used to log
+// "dispatch" with a bare issue UUID, which is why the log read as machine exhaust: the
+// events were there, we just never wrote them down in a form anyone could follow.
+//
+// The key lookup costs one indexed read on an already low-volume path (domain events
+// fire on real activity, and this job inserts several others anyway). Worth it: "BUG-64"
+// is legible where "60f375df-1341-4ef4-9f8a-01a851e33860" is not. A missing issue is not
+// worth a word — it was deleted between the write and this job, which is ordinary.
+func (w *eventWorker) logEvent(ctx context.Context, ev events.DomainEventArgs) {
+	attrs := []any{"event", ev.EventType}
+	if id, err := uuid.Parse(ev.IssueID); err == nil {
+		if issue, err := w.d.Store.GetIssueByID(ctx, id); err == nil {
+			attrs = append(attrs, "issue", issue.Key, "status", issue.Status)
+		}
+	}
+	if ev.ActorID != "" {
+		attrs = append(attrs, "actor", ev.ActorID)
+	}
+	w.d.Logger.Info(ev.EventType, attrs...)
 }
 
 // fanOutMentions turns newly recorded @mentions into their own notification, separate
@@ -337,6 +364,16 @@ func (w *webhookWorker) Work(ctx context.Context, job *river.Job[events.WebhookJ
 		status = "dead"
 	}
 	w.markDelivery(ctx, job.Args.DeliveryID, status, code)
+	// A hook that has run out of retries is silently no longer integrated with anything.
+	// That was recorded in webhook_deliveries and nowhere else, so it was only ever found
+	// by someone going to look. Retries in progress are a warning; giving up is an error.
+	level := slog.LevelWarn
+	if status == "dead" {
+		level = slog.LevelError
+	}
+	w.d.Logger.Log(ctx, level, "webhook_delivery_"+status,
+		"webhook", job.Args.WebhookID, "event", job.Args.EventType,
+		"url", url, "attempt", job.Attempt, "code", code, "err", err)
 	if err != nil {
 		return err
 	}
@@ -428,6 +465,16 @@ func (w *automationWorker) Work(ctx context.Context, job *river.Job[events.Autom
 		}
 		_ = w.d.Store.RecordAutomationRun(ctx, rule.ID, issue.ID, status, []byte(logLine))
 		w.d.Metrics.JobsProcessed.WithLabelValues("automation", status).Inc()
+		// A rule firing changes an issue with no human behind it, so it is exactly the
+		// kind of thing you go to the log to explain afterwards ("why did this reassign
+		// itself?"). The automation_runs table has it, but only if you know to look.
+		if actErr != nil {
+			w.d.Logger.Error("automation_rule_failed", "rule", rule.Name, "issue", issue.Key,
+				"event", job.Args.EventType, "actions_applied", applied, "err", actErr)
+		} else if applied > 0 {
+			w.d.Logger.Info("automation_rule_applied", "rule", rule.Name, "issue", issue.Key,
+				"event", job.Args.EventType, "actions_applied", applied)
+		}
 		// Refresh the issue so subsequent rules see prior rules' effects.
 		if updated, err := w.d.Store.GetIssueByID(ctx, issue.ID); err == nil {
 			issue = updated
