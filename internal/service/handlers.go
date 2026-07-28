@@ -48,6 +48,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	h := &httpHandlers{issues: issues, repo: repo, pub: pub, log: logger, cfg: cfg, attachDir: attachDir, maxUpload: maxUploadMB << 20}
 
 	r := chi.NewRouter()
+	r.Get("/limits", h.limits)
 	r.Get("/me", h.me)
 	r.Get("/settings/archive", h.getArchiveSettings)
 	r.Put("/settings/archive", h.updateArchiveSettings)

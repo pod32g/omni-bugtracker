@@ -545,6 +545,26 @@ export class ApiError extends Error {
   }
 }
 
+// Server limits change only on redeploy, so fetch them once per page load rather than
+// before every upload. Cached as the promise, not the value, so N files dropped at once
+// share one request. Cleared on failure so a blip does not poison the rest of the session.
+let limitsInFlight: Promise<{ max_upload_bytes: number }> | null = null;
+function cachedLimits(): Promise<{ max_upload_bytes: number }> {
+  if (!limitsInFlight) {
+    limitsInFlight = api.limits().catch((e) => {
+      limitsInFlight = null;
+      throw e;
+    });
+  }
+  return limitsInFlight;
+}
+
+function formatBytes(n: number): string {
+  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(n < 10 << 20 ? 1 : 0)} MB`;
+  if (n >= 1 << 10) return `${Math.round(n / (1 << 10))} KB`;
+  return `${n} bytes`;
+}
+
 // Browser auth is a first-party httpOnly session cookie set by /auth/callback, so no
 // token handling is needed here. An optional localStorage token still works for
 // programmatic/API-token use.
@@ -899,9 +919,29 @@ export const api = {
     ),
   commits: (issueKey: string) => request<LinkedCommit[]>(`/issues/${issueKey}/commits`),
   listAttachments: (issueKey: string) => request<{ items: Attachment[] }>(`/issues/${issueKey}/attachments`),
+  limits: () => request<{ max_upload_bytes: number }>("/limits"),
+
   // Multipart upload — bypasses request() because the browser must set the
   // multipart boundary itself; keeps the same silent-refresh-on-401 behavior.
   uploadAttachment: async (issueKey: string, file: File): Promise<Attachment> => {
+    // Ask before pushing. Uploading a 40MB video over a slow link only to be told no is
+    // a bad trade when one cached GET settles it, and it keeps the rejection message
+    // ours: an oversize body can be stopped by the reverse proxy rather than the API,
+    // and a proxy answers 413 with an HTML error page, so `res.json()` below throws and
+    // the user is left reading the bare HTTP reason phrase with no idea what the limit
+    // is. Failing to reach /limits is not a reason to block the upload — let the server
+    // be the judge, as it was before.
+    try {
+      const { max_upload_bytes } = await cachedLimits();
+      if (max_upload_bytes > 0 && file.size > max_upload_bytes) {
+        throw new ApiError(
+          413,
+          `${file.name} is ${formatBytes(file.size)}; the limit is ${formatBytes(max_upload_bytes)}.`,
+        );
+      }
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 413) throw e;
+    }
     const doFetch = () => {
       const fd = new FormData();
       fd.append("file", file, file.name);

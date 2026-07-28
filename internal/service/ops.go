@@ -14,6 +14,17 @@ import (
 // answerable without SSH.
 var startedAt = time.Now()
 
+// limits publishes the server-side bounds a client has to respect before it can act.
+// Chiefly the upload cap: the uploader wants to reject an oversize file before spending
+// a minute pushing it, and the only alternative to asking is hardcoding a second copy of
+// the number in the SPA, which then silently disagrees with the server the first time
+// storage.max_upload_mb is tuned. Cheap, no auth beyond the router's, no DB.
+func (h *httpHandlers) limits(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"max_upload_bytes": h.maxUpload,
+	})
+}
+
 // ops serves the operator view. Admin-only: queue contents name the work the instance is
 // doing, and delivery URLs are integration detail.
 func (h *httpHandlers) ops(w http.ResponseWriter, r *http.Request) {
