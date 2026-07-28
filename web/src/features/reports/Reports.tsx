@@ -68,16 +68,25 @@ export function Reports() {
       )}
 
       {report.data && (
-        <div className="flex flex-col gap-8 px-4 py-6 md:px-9">
+        <div className="flex flex-col gap-5 px-4 py-6 md:px-9">
           <Percentiles r={report.data} />
+          {/* The flow chart is a time series and wants the width. The other two are
+              short bar lists that were each taking a full-width band for a handful of
+              rows, so they pair up from xl. gap-8 between four stacked sections was
+              96px of nothing on its own. */}
           <FlowChart flow={report.data.flow} />
-          <AgeChart age={report.data.age} />
-          <ThroughputChart items={report.data.throughput} />
+          <div className="grid gap-5 xl:grid-cols-2">
+            <AgeChart age={report.data.age} />
+            <ThroughputChart items={report.data.throughput} />
+          </div>
         </div>
       )}
     </div>
   );
 }
+
+// Below this many resolved/responded issues, p50 and p90 collapse to the same value.
+const MIN_PERCENTILE_SAMPLE = 5;
 
 /** A duration is a headline, not a chart — four numbers with their sample size. */
 function Percentiles({ r }: { r: Report }) {
@@ -94,7 +103,15 @@ function Percentiles({ r }: { r: Report }) {
           <p className="font-mono text-[10px] uppercase tracking-caps text-graphite-soft">{t.label}</p>
           <p className="mt-1.5 text-2xl font-bold text-ink">{t.n === 0 ? "—" : formatHours(t.hours)}</p>
           <p className="mt-0.5 text-xs text-graphite-soft">
-            {t.n === 0 ? "nothing in range" : `over ${t.n} ${t.n === 1 ? "issue" : "issues"}`}
+            {t.n === 0
+              ? "nothing in range"
+              : `over ${t.n} ${t.n === 1 ? "issue" : "issues"}`}
+            {/* Below a handful of samples the median and the p90 are the same number,
+                and presenting them as two statistics implies a spread that was never
+                measured. */}
+            {t.n > 0 && t.n < MIN_PERCENTILE_SAMPLE && (
+              <span className="text-graphite-soft"> — too few to be a percentile</span>
+            )}
           </p>
         </div>
       ))}
@@ -115,7 +132,9 @@ function FlowChart({ flow }: { flow: Report["flow"] }) {
   // the same ~200px on a desktop pane with the geometry intact.
   const w = 1200;
   const h = 200;
-  const pad = { l: 32, r: 56, t: 12, b: 24 };
+  // r leaves room for the direct labels at the line ends. At 56 "31 resolved" ran
+  // past the viewBox and was clipped mid-word.
+  const pad = { l: 32, r: 88, t: 12, b: 24 };
   const max = Math.max(4, ...flow.map((p) => Math.max(p.created, p.resolved)));
   const x = (i: number) => pad.l + (i * (w - pad.l - pad.r)) / Math.max(1, flow.length - 1);
   const y = (v: number) => pad.t + (1 - v / max) * (h - pad.t - pad.b);
@@ -123,6 +142,9 @@ function FlowChart({ flow }: { flow: Report["flow"] }) {
     flow.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`).join(" ");
 
   const last = flow[flow.length - 1];
+  // Half the vertical separation each label needs, applied in opposite directions.
+  // Zero when the ends are already far enough apart to read.
+  const labelNudge = Math.abs(y(last.created) - y(last.resolved)) < 11 ? 6 : 0;
 
   return (
     <ChartFrame
@@ -152,11 +174,14 @@ function FlowChart({ flow }: { flow: Report["flow"] }) {
         <path d={path("created")} fill="none" className="stroke-blueprint" strokeWidth={2} strokeLinejoin="round" />
         <path d={path("resolved")} fill="none" className="stroke-resolved" strokeWidth={2} strokeLinejoin="round" />
 
-        {/* Direct labels at the right-hand end, so identity survives without the legend. */}
-        <text x={w - pad.r + 6} y={y(last.created) + 3} className="fill-blueprint text-[10px] font-medium">
+        {/* Direct labels at the right-hand end, so identity survives without the legend.
+            Nudged apart when the two series finish at the same value — otherwise a week
+            where nothing was created and nothing resolved draws "0 created" straight on
+            top of "0 resolved" and neither is readable. */}
+        <text x={w - pad.r + 6} y={y(last.created) + 3 - labelNudge} className="fill-blueprint text-[10px] font-medium">
           {last.created} created
         </text>
-        <text x={w - pad.r + 6} y={y(last.resolved) + 3} className="fill-resolved text-[10px] font-medium">
+        <text x={w - pad.r + 6} y={y(last.resolved) + 3 + labelNudge} className="fill-resolved text-[10px] font-medium">
           {last.resolved} resolved
         </text>
 
