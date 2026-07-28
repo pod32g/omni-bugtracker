@@ -50,8 +50,11 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r := chi.NewRouter()
 	r.Get("/limits", h.limits)
 	r.Get("/me", h.me)
+	r.Patch("/me", h.updateMe)
 	r.Get("/settings/archive", h.getArchiveSettings)
 	r.Put("/settings/archive", h.updateArchiveSettings)
+	r.Get("/settings/integrations", h.getIntegrationSettings)
+	r.Put("/settings/integrations", h.updateIntegrationSettings)
 	r.Get("/me/tokens", h.listTokens)
 	r.Post("/me/tokens", h.createToken)
 	r.Delete("/me/tokens/{id}", h.revokeToken)
@@ -61,8 +64,10 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Put("/me/notification-prefs", h.putNotificationPrefs)
 	r.Get("/me/saved-searches", h.listSavedSearches)
 	r.Post("/me/saved-searches", h.saveSavedSearch)
+	r.Patch("/me/saved-searches/{id}", h.updateSavedSearch)
 	r.Delete("/me/saved-searches/{id}", h.deleteSavedSearch)
 	r.Post("/me/saved-searches/{id}/share", h.shareSavedSearch)
+	r.Get("/views", h.listAllViews)
 	r.Get("/projects/{key}/views", h.listProjectViews)
 	r.Post("/projects/{key}/views", h.createProjectView)
 	r.Patch("/views/{id}", h.updateProjectView)
@@ -97,6 +102,10 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Post("/projects/{key}/rename-key", h.renameProjectKey)
 	r.Delete("/projects/{key}", h.archiveProject)
 	r.Get("/projects/{key}/labels", h.listLabels)
+	r.Post("/projects/{key}/labels", h.createLabel)
+	r.Patch("/labels/{id}", h.updateLabel)
+	r.Delete("/labels/{id}", h.deleteLabel)
+	r.Post("/labels/{id}/merge", h.mergeLabel)
 	r.Get("/projects/{key}/components", h.listComponents)
 	r.Post("/projects/{key}/components", h.createComponent)
 	r.Patch("/components/{id}", h.updateComponent)
@@ -218,8 +227,65 @@ var projectKeyRe = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,9}$`)
 func (h *httpHandlers) me(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id": p.UserID, "email": p.Email, "display_name": p.DisplayName, "role": p.Role,
+		"id": p.UserID, "email": p.Email, "display_name": p.DisplayName,
+		"avatar_url": p.AvatarURL, "role": p.Role,
 	})
+}
+
+// updateMe is self-service profile editing. Only the two fields a person owns about
+// themselves — email comes from Omni-Identity and role is an admin's decision, so
+// neither is settable here regardless of who is asking.
+func (h *httpHandlers) updateMe(w http.ResponseWriter, r *http.Request) {
+	uid, err := uuid.Parse(auth.FromContext(r.Context()).UserID)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad principal", "")
+		return
+	}
+	var body struct {
+		DisplayName *string `json:"display_name"`
+		AvatarURL   *string `json:"avatar_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	fields := map[string]string{}
+	if body.DisplayName != nil {
+		name := strings.TrimSpace(*body.DisplayName)
+		switch {
+		case name == "":
+			// Blank would render as an empty byline everywhere the name appears.
+			fields["display_name"] = "required — omit the field to leave it unchanged"
+		case len([]rune(name)) > 80:
+			fields["display_name"] = "must be 80 characters or fewer"
+		}
+		body.DisplayName = &name
+	}
+	// An empty avatar_url is meaningful: it clears a custom avatar and falls back to
+	// the generated initials.
+	if body.AvatarURL != nil {
+		url := strings.TrimSpace(*body.AvatarURL)
+		if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			fields["avatar_url"] = "must be an http(s) URL, or empty to clear it"
+		}
+		body.AvatarURL = &url
+	}
+	if len(fields) > 0 {
+		httpapi.WriteValidation(w, fields)
+		return
+	}
+	if body.DisplayName == nil && body.AvatarURL == nil {
+		httpapi.WriteValidation(w, map[string]string{"body": "nothing to update"})
+		return
+	}
+	user, err := h.repo.UpdateUserProfile(r.Context(), uid, UpdateProfileInput{
+		DisplayName: body.DisplayName, AvatarURL: body.AvatarURL,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
 }
 
 // ── personal API tokens (self-service) ──
@@ -473,6 +539,181 @@ func (h *httpHandlers) updateArchiveSettings(w http.ResponseWriter, r *http.Requ
 	h.audit(r, AuditSettingsUpdated, "settings", "archive", "auto-archive",
 		map[string]any{"auto_after_days": body.AutoAfterDays})
 	writeJSON(w, http.StatusOK, map[string]any{"auto_after_days": body.AutoAfterDays})
+}
+
+// ── inbound integration settings ──
+
+// inboundStatus is one inbound integration as the UI shows it. The secret itself is
+// never in here — only whether one exists and where it came from. An integration
+// that is enabled with no secret is the failure this view exists to make visible:
+// it rejects every delivery with a 503 and otherwise says so nowhere.
+type inboundStatus struct {
+	Source      string `json:"source"`
+	Enabled     bool   `json:"enabled"`
+	HasSecret   bool   `json:"has_secret"`
+	EnabledFrom string `json:"enabled_from"` // settings | config
+	SecretFrom  string `json:"secret_from"`  // settings | config | none
+	Endpoint    string `json:"endpoint"`
+	Healthy     bool   `json:"healthy"`
+}
+
+// integrationEndpoints maps a source to the path its provider posts to.
+var integrationEndpoints = map[string]string{
+	"git":     "/api/v1/integrations/git/events",
+	"logging": "/api/v1/integrations/logging/alerts",
+	"metrics": "/api/v1/integrations/metrics/alerts",
+}
+
+func (h *httpHandlers) integrationStatus(ctx context.Context) ([]inboundStatus, error) {
+	stored, err := GetInboundSettings(ctx, h.repo)
+	if err != nil {
+		return nil, err
+	}
+	var baseURL string
+	if h.cfg != nil {
+		baseURL = strings.TrimSuffix(h.cfg.Server.BaseURL, "/")
+	}
+	out := make([]inboundStatus, 0, len(InboundSources))
+	for _, source := range InboundSources {
+		var cfgIntegrations config.Integrations
+		if h.cfg != nil {
+			cfgIntegrations = h.cfg.Integrations
+		}
+		base := ConfiguredInbound(cfgIntegrations, source)
+		st := inboundStatus{
+			Source:      source,
+			Enabled:     base.Enabled,
+			HasSecret:   base.WebhookSecret != "",
+			EnabledFrom: "config",
+			SecretFrom:  "config",
+			Endpoint:    baseURL + integrationEndpoints[source],
+		}
+		if ov, ok := stored[source]; ok {
+			if ov.Enabled != nil {
+				st.Enabled, st.EnabledFrom = *ov.Enabled, "settings"
+			}
+			if ov.WebhookSecret != nil {
+				st.HasSecret, st.SecretFrom = *ov.WebhookSecret != "", "settings"
+			}
+		}
+		if !st.HasSecret {
+			st.SecretFrom = "none"
+		}
+		// Disabled is a decision; enabled-without-a-secret is a misconfiguration.
+		st.Healthy = !st.Enabled || st.HasSecret
+		out = append(out, st)
+	}
+	return out, nil
+}
+
+func (h *httpHandlers) getIntegrationSettings(w http.ResponseWriter, r *http.Request) {
+	if !auth.FromContext(r.Context()).Can(auth.PermAdmin) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing admin:all")
+		return
+	}
+	inbound, err := h.integrationStatus(r.Context())
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "read failed", err.Error())
+		return
+	}
+	// Outbound delivery is reported but not editable: the client is built once at
+	// boot with its base URL and timeout, and where Omni-Notify lives is deployment
+	// topology like the database DSN — bootstrap config, not a runtime setting.
+	notify := map[string]any{"enabled": false}
+	if h.cfg != nil {
+		notify = map[string]any{
+			"enabled":  h.cfg.Integrations.Notify.Enabled,
+			"base_url": h.cfg.Integrations.Notify.BaseURL,
+			"timeout":  h.cfg.Integrations.Notify.Timeout.String(),
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"inbound": inbound, "notify": notify})
+}
+
+// updateIntegrationSettings patches the override for each source named in the body
+// and leaves the others alone. Omitted fields keep what is already stored, so saving
+// the enabled toggle cannot silently drop a secret the form never showed. Handing a
+// decision back to config.yaml is explicit: an empty `webhook_secret` clears the
+// secret override, and `"reset": true` drops the source's override entirely.
+func (h *httpHandlers) updateIntegrationSettings(w http.ResponseWriter, r *http.Request) {
+	if !auth.FromContext(r.Context()).Can(auth.PermAdmin) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing admin:all")
+		return
+	}
+	var body map[string]struct {
+		Enabled       *bool   `json:"enabled"`
+		WebhookSecret *string `json:"webhook_secret"`
+		Reset         bool    `json:"reset"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	for source := range body {
+		if _, ok := integrationEndpoints[source]; !ok {
+			httpapi.WriteValidation(w, map[string]string{
+				source: "unknown integration — expected one of " + strings.Join(InboundSources, ", "),
+			})
+			return
+		}
+	}
+	stored, err := GetInboundSettings(r.Context(), h.repo)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "read failed", err.Error())
+		return
+	}
+	changed := map[string]any{}
+	for source, patch := range body {
+		if patch.Reset {
+			delete(stored, source)
+			changed[source] = map[string]any{"reset": true}
+			continue
+		}
+		ov := stored[source]
+		if patch.Enabled != nil {
+			ov.Enabled = patch.Enabled
+		}
+		if patch.WebhookSecret != nil {
+			if secret := strings.TrimSpace(*patch.WebhookSecret); secret != "" {
+				ov.WebhookSecret = &secret
+			} else {
+				ov.WebhookSecret = nil
+			}
+		}
+		// The secret's value never reaches the audit log — only that it moved.
+		changed[source] = map[string]any{
+			"enabled":       patch.Enabled,
+			"secret_action": secretAction(patch.WebhookSecret),
+		}
+		if ov.Enabled == nil && ov.WebhookSecret == nil {
+			delete(stored, source)
+			continue
+		}
+		stored[source] = ov
+	}
+	if err := SetInboundSettings(r.Context(), h.repo, stored); err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "save failed", err.Error())
+		return
+	}
+	h.audit(r, AuditSettingsUpdated, "settings", "integrations", "inbound integrations", changed)
+
+	inbound, err := h.integrationStatus(r.Context())
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "read failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"inbound": inbound})
+}
+
+func secretAction(secret *string) string {
+	switch {
+	case secret == nil:
+		return "unchanged"
+	case strings.TrimSpace(*secret) == "":
+		return "cleared"
+	default:
+		return "set"
+	}
 }
 
 // dashboard aggregates health metrics. `?project=KEY` scopes every figure to one
@@ -1281,13 +1522,206 @@ func (h *httpHandlers) archiveProject(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ── labels ──
+
 func (h *httpHandlers) listLabels(w http.ResponseWriter, r *http.Request) {
 	labels, err := h.repo.ListLabels(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
 		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
 		return
 	}
+	if labels == nil {
+		labels = []domain.Label{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": labels})
+}
+
+var labelColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// validateLabelBody checks the fields shared by create and update. Nil fields are
+// "leave alone" on update, and absent on create.
+func validateLabelBody(name, color *string) map[string]string {
+	fields := map[string]string{}
+	if name != nil {
+		switch trimmed := strings.TrimSpace(*name); {
+		case trimmed == "":
+			fields["name"] = "required"
+		case len([]rune(trimmed)) > 50:
+			fields["name"] = "must be 50 characters or fewer"
+		}
+	}
+	if color != nil && *color != "" && !labelColorRe.MatchString(*color) {
+		fields["color"] = "must be a hex colour like #8b5cf6"
+	}
+	return fields
+}
+
+// authorizeLabel resolves a label id and checks the caller may curate it: project
+// labels need project:manage on their project, global ones need admin — editing a
+// label every project can see is an install-wide change. Writes its own errors.
+func (h *httpHandlers) authorizeLabel(w http.ResponseWriter, r *http.Request, rawID string) (uuid.UUID, bool) {
+	id, err := uuid.Parse(rawID)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad label id", "")
+		return uuid.Nil, false
+	}
+	key, found, err := h.repo.LabelScope(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "lookup failed", err.Error())
+		return uuid.Nil, false
+	}
+	if !found {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such label")
+		return uuid.Nil, false
+	}
+	p := auth.FromContext(r.Context())
+	if key == "" {
+		if !p.Can(auth.PermAdmin) {
+			httpapi.WriteProblem(w, http.StatusForbidden, "forbidden",
+				"this label is global — editing it needs admin:all")
+			return uuid.Nil, false
+		}
+		return id, true
+	}
+	if !h.canOnProject(r.Context(), p, key, auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func (h *httpHandlers) createLabel(w http.ResponseWriter, r *http.Request) {
+	key := strings.ToUpper(chi.URLParam(r, "key"))
+	if !h.canOnProject(r.Context(), auth.FromContext(r.Context()), key, auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage")
+		return
+	}
+	if _, err := h.repo.GetProjectByKey(r.Context(), key); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project")
+		return
+	}
+	var body struct {
+		Name        string `json:"name"`
+		Color       string `json:"color"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if fields := validateLabelBody(&body.Name, &body.Color); len(fields) > 0 {
+		httpapi.WriteValidation(w, fields)
+		return
+	}
+	label, err := h.repo.CreateLabel(r.Context(), CreateLabelInput{
+		ProjectKey:  key,
+		Name:        strings.TrimSpace(body.Name),
+		Color:       body.Color,
+		Description: strings.TrimSpace(body.Description),
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "create failed",
+			"a label with that name may already exist here: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, label)
+}
+
+func (h *httpHandlers) updateLabel(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeLabel(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	var body struct {
+		Name        *string `json:"name"`
+		Color       *string `json:"color"`
+		Description *string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if fields := validateLabelBody(body.Name, body.Color); len(fields) > 0 {
+		httpapi.WriteValidation(w, fields)
+		return
+	}
+	if body.Name != nil {
+		trimmed := strings.TrimSpace(*body.Name)
+		body.Name = &trimmed
+	}
+	label, err := h.repo.UpdateLabel(r.Context(), UpdateLabelInput{
+		ID: id, Name: body.Name, Color: body.Color, Description: body.Description,
+	})
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusConflict, "update failed",
+			"a label with that name may already exist here: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, label)
+}
+
+func (h *httpHandlers) deleteLabel(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeLabel(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	deleted, err := h.repo.DeleteLabel(r.Context(), id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		return
+	}
+	if !deleted {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such label")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// mergeLabel folds one label into another — the fix for the three spellings of
+// "regression" that implicit label creation produces. Both sides are authorized
+// separately, and they must share a scope: merging across projects would leave
+// issues carrying a label their own project has never heard of.
+func (h *httpHandlers) mergeLabel(w http.ResponseWriter, r *http.Request) {
+	source, ok := h.authorizeLabel(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	var body struct {
+		IntoID string `json:"into_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	target, ok := h.authorizeLabel(w, r, body.IntoID)
+	if !ok {
+		return
+	}
+	if source == target {
+		httpapi.WriteProblem(w, http.StatusConflict, "invalid merge", "a label cannot be merged into itself")
+		return
+	}
+	sourceKey, _, err := h.repo.LabelScope(r.Context(), source)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "lookup failed", err.Error())
+		return
+	}
+	targetKey, _, err := h.repo.LabelScope(r.Context(), target)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "lookup failed", err.Error())
+		return
+	}
+	if sourceKey != targetKey {
+		httpapi.WriteProblem(w, http.StatusConflict, "invalid merge",
+			"both labels must belong to the same project (or both be global)")
+		return
+	}
+	label, err := h.repo.MergeLabels(r.Context(), source, target)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "merge failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, label)
 }
 
 // authorizeEntityManage parses {id}, resolves the owning project of an

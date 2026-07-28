@@ -45,7 +45,16 @@ type Repository interface {
 	// || '-' || number), so every issue re-labels automatically; a collision with an
 	// existing key returns an error (enforced by the UNIQUE constraint).
 	RenameProjectKey(ctx context.Context, oldKey, newKey string) (domain.Project, error)
+	// Labels. ListLabels returns a project's own labels plus the global ones.
+	// LabelScope resolves the owning project of a label; a global label reports an
+	// empty key with found=true, so the two cases stay distinguishable.
 	ListLabels(ctx context.Context, projectKey string) ([]domain.Label, error)
+	LabelScope(ctx context.Context, id uuid.UUID) (projectKey string, found bool, err error)
+	CreateLabel(ctx context.Context, in CreateLabelInput) (domain.Label, error)
+	UpdateLabel(ctx context.Context, in UpdateLabelInput) (domain.Label, error)
+	DeleteLabel(ctx context.Context, id uuid.UUID) (bool, error)
+	// MergeLabels moves every issue off source onto target and deletes source.
+	MergeLabels(ctx context.Context, sourceID, targetID uuid.UUID) (domain.Label, error)
 
 	// Components (project-scoped areas of ownership)
 	ListComponents(ctx context.Context, projectKey string) ([]domain.Component, error)
@@ -212,12 +221,17 @@ type Repository interface {
 	// Shared views are project-scoped saved searches: the same rows, owned by a
 	// project rather than a person.
 	ListProjectViews(ctx context.Context, projectKey string) ([]domain.SavedSearch, error)
+	// ListSharedViews spans every project, for curating them in one place.
+	ListSharedViews(ctx context.Context) ([]domain.SavedSearch, error)
 	CreateProjectView(ctx context.Context, in ProjectViewInput) (domain.SavedSearch, error)
 	UpdateProjectView(ctx context.Context, in UpdateProjectViewInput) (domain.SavedSearch, error)
 	DeleteProjectView(ctx context.Context, id uuid.UUID) (bool, error)
 	GetViewProjectKey(ctx context.Context, id uuid.UUID) (string, error)
 	ShareSavedSearch(ctx context.Context, userID, id uuid.UUID, projectKey string) (domain.SavedSearch, error)
 	UpsertSavedSearch(ctx context.Context, userID uuid.UUID, name, query string) (domain.SavedSearch, error)
+	// UpdateSavedSearch edits a personal view in place — the only way to rename one,
+	// since upsert-by-name would create a second view instead.
+	UpdateSavedSearch(ctx context.Context, userID uuid.UUID, in UpdateSavedSearchInput) (domain.SavedSearch, error)
 	DeleteSavedSearch(ctx context.Context, userID, id uuid.UUID) (bool, error)
 
 	// Watchers (issue subscriptions; auto-watch on report/comment/assign)
@@ -280,6 +294,9 @@ type Repository interface {
 	Report(ctx context.Context, f ReportFilter) (domain.Report, error)
 	ListUsers(ctx context.Context, limit int32) ([]domain.User, error)
 	UpdateUserRole(ctx context.Context, userID uuid.UUID, role domain.Role) (domain.User, error)
+	// UpdateUserProfile writes the fields a user owns about themselves and marks the
+	// profile overridden so the next OIDC login stops mirroring over them.
+	UpdateUserProfile(ctx context.Context, userID uuid.UUID, in UpdateProfileInput) (domain.User, error)
 
 	// Git integration
 	UpsertCommit(ctx context.Context, in CommitInput) (uuid.UUID, error)
@@ -320,6 +337,13 @@ type UpsertUserParams struct {
 	AvatarURL   string
 }
 
+// UpdateProfileInput is a self-service profile edit. A nil field is left unchanged;
+// email and role are deliberately absent — the IdP owns one and admins own the other.
+type UpdateProfileInput struct {
+	DisplayName *string
+	AvatarURL   *string
+}
+
 type TokenPrincipal struct {
 	TokenID uuid.UUID
 	User    domain.User
@@ -330,6 +354,23 @@ type CreateProjectInput struct {
 	Key           string
 	Name          string
 	DescriptionMD string
+}
+
+// CreateLabelInput creates a label ahead of use. An empty ProjectKey makes it global.
+type CreateLabelInput struct {
+	ProjectKey  string
+	Name        string
+	Color       string
+	Description string
+}
+
+// UpdateLabelInput edits a label in place; nil fields are left alone. Renaming is the
+// point of it — every issue carrying the label follows the rename.
+type UpdateLabelInput struct {
+	ID          uuid.UUID
+	Name        *string
+	Color       *string
+	Description *string
 }
 
 type CreateComponentInput struct {
@@ -521,6 +562,15 @@ type UpdateProjectViewInput struct {
 	Sort        *string
 	Position    *int
 	IsDefault   *bool
+}
+
+// UpdateSavedSearchInput is a partial edit to a personal view; nil fields unchanged.
+type UpdateSavedSearchInput struct {
+	ID          uuid.UUID
+	Name        *string
+	Query       *string
+	Description *string
+	Sort        *string
 }
 
 // IssueTemplateInput creates a template.

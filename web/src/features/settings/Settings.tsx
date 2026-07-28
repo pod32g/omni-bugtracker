@@ -1,1004 +1,129 @@
-import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, TOKEN_SCOPES, type AutomationRule, type User } from "../../lib/api";
-import { timeAgo } from "../../lib/activity";
-import { Avatar } from "../../components/Badges";
-import { IconPlus } from "../../components/icons";
+import { useQuery } from "@tanstack/react-query";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { api } from "../../lib/api";
 
-const ROLES = ["owner", "admin", "maintainer", "member", "reporter", "bot"];
+// Settings used to be one scrolling column of eight cards, which worked while there
+// were three. Sections are routed (/settings/<slug>) so a link goes to the thing
+// rather than to the top of everything, and so the page only fetches what it shows —
+// the operations poll and the audit query no longer run for someone editing their
+// notification preferences.
+
+type Access = "all" | "manage" | "admin";
+
+export interface SettingsSection {
+  slug: string;
+  label: string;
+  group: string;
+  access: Access;
+}
+
+export const SETTINGS_SECTIONS: SettingsSection[] = [
+  { slug: "profile", label: "Profile", group: "Account", access: "all" },
+  { slug: "notifications", label: "Notifications", group: "Account", access: "all" },
+  { slug: "tokens", label: "API tokens", group: "Account", access: "all" },
+  { slug: "views", label: "Saved views", group: "Account", access: "all" },
+  { slug: "labels", label: "Labels", group: "Workspace", access: "manage" },
+  { slug: "automation", label: "Automation", group: "Workspace", access: "manage" },
+  { slug: "webhooks", label: "Webhooks", group: "Workspace", access: "manage" },
+  { slug: "members", label: "Members", group: "Workspace", access: "admin" },
+  { slug: "integrations", label: "Integrations", group: "Operations", access: "admin" },
+  { slug: "archive", label: "Auto-archive", group: "Operations", access: "admin" },
+  { slug: "operations", label: "Operations", group: "Operations", access: "admin" },
+  { slug: "audit", label: "Audit log", group: "Operations", access: "admin" },
+];
+
+const MANAGE_ROLES = ["owner", "admin", "maintainer"];
+const ADMIN_ROLES = ["owner", "admin"];
+
+export function canAccess(section: SettingsSection, role?: string): boolean {
+  switch (section.access) {
+    case "admin":
+      return ADMIN_ROLES.includes(role ?? "");
+    case "manage":
+      return MANAGE_ROLES.includes(role ?? "");
+    default:
+      return true;
+  }
+}
 
 export function Settings() {
-  const qc = useQueryClient();
-  const tokens = useQuery({ queryKey: ["tokens"], queryFn: () => api.listTokens() });
-  const [name, setName] = useState("");
-  const [scopes, setScopes] = useState<string[]>([]); // empty = inherit the full role
-  const [created, setCreated] = useState<string | null>(null); // plaintext, shown once
-  const [copied, setCopied] = useState(false);
-
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
-  const canManageRoles = ["owner", "admin"].includes(me.data?.role ?? "");
-  const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers(), enabled: canManageRoles });
-  const setUserRole = useMutation({
-    mutationFn: ({ id, role }: { id: string; role: string }) => api.updateUserRole(id, role),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
-  });
+  const role = me.data?.role;
+  const { pathname } = useLocation();
 
-  const create = useMutation({
-    mutationFn: () => api.createToken(name.trim(), scopes),
-    onSuccess: (t) => {
-      setCreated(t.token);
-      setName("");
-      setScopes([]);
-      qc.invalidateQueries({ queryKey: ["tokens"] });
-    },
-  });
-  const revoke = useMutation({
-    mutationFn: (id: string) => api.revokeToken(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["tokens"] }),
-  });
-
-  const copy = () => {
-    if (!created) return;
-    navigator.clipboard?.writeText(created).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
-
-  const items = tokens.data?.items ?? [];
+  const visible = SETTINGS_SECTIONS.filter((s) => canAccess(s, role));
+  const groups = visible.reduce<Record<string, SettingsSection[]>>((acc, s) => {
+    (acc[s.group] ??= []).push(s);
+    return acc;
+  }, {});
+  const current = visible.find((s) => pathname === `/settings/${s.slug}`);
 
   return (
     <div>
-      <div className="sticky top-0 z-10 flex flex-col gap-1.5 border-b border-hairline bg-paper/80 px-4 md:px-9 pb-5 pt-7 backdrop-blur">
+      <div className="sticky top-0 z-10 flex flex-col gap-1.5 border-b border-hairline bg-paper/80 px-4 pb-5 pt-7 backdrop-blur md:px-9">
         <h1 className="text-[30px] font-bold leading-none tracking-[-0.02em] text-ink">Settings</h1>
-        <p className="font-mono text-xs uppercase tracking-[0.06em] text-graphite">Account · API access</p>
+        <p className="font-mono text-xs uppercase tracking-[0.06em] text-graphite">
+          {current ? `${current.group} · ${current.label}` : "Account · Workspace · Operations"}
+        </p>
       </div>
 
-      <div className="flex max-w-3xl flex-col gap-6 px-4 md:px-9 py-8">
-        <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
-          <div className="flex flex-col gap-1">
-            <h2 className="text-base font-semibold text-ink">API tokens</h2>
-            <p className="text-sm leading-relaxed text-graphite">
-              Call the API with a token as{" "}
-              <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-ink">Authorization: Bearer obt_…</code>.
-              A token authenticates as your account. Leave the scopes empty and it inherits your role in
-              full; tick scopes to restrict it — scopes can only narrow what your role already allows.
-            </p>
-          </div>
-
-          {created && (
-            <div className="flex flex-col gap-2 rounded-md border border-resolved-border bg-resolved-soft p-4">
-              <span className="font-mono text-[10px] font-medium uppercase tracking-caps text-resolved">
-                New token — copy it now, you won't see it again
-              </span>
-              <div className="flex items-center gap-2">
-                <code className="grow overflow-x-auto rounded-md border border-hairline bg-paper px-3 py-2 font-mono text-sm text-ink">
-                  {created}
-                </code>
-                <button
-                  onClick={copy}
-                  className="shrink-0 rounded-md bg-blueprint px-3 py-2 text-sm font-semibold text-paper transition hover:opacity-90"
-                >
-                  {copied ? "Copied" : "Copy"}
-                </button>
-                <button onClick={() => setCreated(null)} className="shrink-0 px-2 text-sm text-graphite hover:text-ink">
-                  Done
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="flex items-end gap-3">
-            <label className="grow text-sm">
-              <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
-                Token name
-              </span>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && name.trim()) create.mutate();
-                }}
-                placeholder="e.g. ci-bot, laptop, filing script"
-                className="w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint"
-              />
-            </label>
-            <button
-              disabled={!name.trim() || create.isPending}
-              onClick={() => create.mutate()}
-              className="flex h-10 items-center gap-1.5 rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
-            >
-              <IconPlus size={15} />
-              {create.isPending ? "Creating…" : "Create token"}
-            </button>
-          </div>
-          <div className="flex flex-col gap-2">
-            <span className="font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
-              Scopes {scopes.length === 0 && "· none selected (full access as you)"}
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {TOKEN_SCOPES.map((sc) => {
-                const on = scopes.includes(sc);
-                return (
-                  <button
-                    key={sc}
-                    onClick={() => setScopes((cur) => (on ? cur.filter((v) => v !== sc) : [...cur, sc]))}
-                    className={`rounded-full border px-2.5 py-1 font-mono text-[11px] transition ${
-                      on
-                        ? "border-blueprint bg-blueprint-soft text-blueprint"
-                        : "border-hairline text-graphite-soft hover:border-graphite hover:text-graphite"
-                    }`}
+      <div className="flex flex-col gap-6 px-4 py-8 md:flex-row md:gap-9 md:px-9">
+        {/* On a phone the rail becomes a scrolling strip of links rather than a
+            column that pushes the actual settings off the first screen. */}
+        <nav className="-mx-4 shrink-0 overflow-x-auto px-4 md:sticky md:top-[104px] md:mx-0 md:w-48 md:self-start md:overflow-visible md:px-0">
+          <div className="flex gap-1.5 md:flex-col md:gap-0.5">
+            {Object.entries(groups).map(([group, sections]) => (
+              <div key={group} className="flex gap-1.5 md:flex-col md:gap-0.5">
+                <div className="hidden px-2 pb-1 pt-3 font-mono text-[10px] font-medium uppercase tracking-caps text-graphite-soft first:pt-0 md:block">
+                  {group}
+                </div>
+                {sections.map((s) => (
+                  <NavLink
+                    key={s.slug}
+                    to={s.slug}
+                    className={({ isActive }) =>
+                      `whitespace-nowrap rounded-md px-2.5 py-2 text-sm transition ${
+                        isActive
+                          ? "bg-blueprint-soft font-semibold text-blueprint"
+                          : "font-medium text-graphite hover:bg-panel hover:text-ink"
+                      }`
+                    }
                   >
-                    {sc}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          {create.isError && <p className="text-sm text-critical">{(create.error as Error).message}</p>}
-
-          <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
-            {tokens.isLoading && <div className="p-4 text-sm text-graphite">Loading…</div>}
-            {tokens.isSuccess && items.length === 0 && (
-              <div className="p-4 text-sm text-graphite-soft">No tokens yet.</div>
-            )}
-            {items.map((t) => (
-              <div key={t.id} className="flex items-center gap-3 p-3.5">
-                <div className="grow">
-                  <div className="text-sm font-medium text-ink">{t.name}</div>
-                  <div className="font-mono text-xs text-graphite-soft">
-                    created {timeAgo(t.created_at)} ·{" "}
-                    {t.last_used_at ? `last used ${timeAgo(t.last_used_at)}` : "never used"} ·{" "}
-                    {t.scopes?.length ? t.scopes.join(" ") : "full access"}
-                  </div>
-                </div>
-                <button
-                  disabled={revoke.isPending}
-                  onClick={() => {
-                    if (window.confirm(`Revoke "${t.name}"? Any client using it stops working immediately.`))
-                      revoke.mutate(t.id);
-                  }}
-                  className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-critical transition hover:border-critical disabled:opacity-50"
-                >
-                  Revoke
-                </button>
+                    {s.label}
+                  </NavLink>
+                ))}
               </div>
             ))}
           </div>
-        </section>
+        </nav>
 
-        <NotificationPrefsSection />
-        {canManageRoles && <AutoArchiveSection />}
-        {canManageRoles && <OpsSection />}
-        {canManageRoles && <AuditSection />}
-
-        {["owner", "admin", "maintainer"].includes(me.data?.role ?? "") && (
-          <>
-            <AutomationSection />
-            <WebhooksSection />
-          </>
-        )}
-
-        {canManageRoles && (
-          <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
-            <div className="flex flex-col gap-1">
-              <h2 className="text-base font-semibold text-ink">Members</h2>
-              <p className="text-sm leading-relaxed text-graphite">
-                Roles set what each user can do. <span className="text-ink">Owner/admin</span> manage everything
-                including roles; <span className="text-ink">maintainer</span> manages projects;{" "}
-                <span className="text-ink">member</span> files &amp; works issues;{" "}
-                <span className="text-ink">reporter</span> only reports; <span className="text-ink">bot</span> is for
-                automation.
-              </p>
-            </div>
-            <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
-              {users.isLoading && <div className="p-4 text-sm text-graphite">Loading…</div>}
-              {users.data?.items.map((u: User) => (
-                <div key={u.id} className="flex items-center gap-3 p-3.5">
-                  <Avatar user={u} size={28} />
-                  <div className="min-w-0 grow">
-                    <div className="truncate text-sm font-medium text-ink">
-                      {u.display_name || u.email}
-                      {u.id === me.data?.id && (
-                        <span className="ml-2 text-xs font-normal text-graphite-soft">(you)</span>
-                      )}
-                    </div>
-                    <div className="truncate text-xs text-graphite-soft">{u.email}</div>
-                  </div>
-                  <RoleSelect
-                    value={u.role ?? "member"}
-                    disabled={u.id === me.data?.id || setUserRole.isPending}
-                    onChange={(role) => setUserRole.mutate({ id: u.id, role })}
-                  />
-                </div>
-              ))}
-            </div>
-            {setUserRole.isError && <p className="text-sm text-critical">{(setUserRole.error as Error).message}</p>}
-          </section>
-        )}
+        <div className="flex min-w-0 max-w-3xl grow flex-col gap-6">
+          <Outlet />
+        </div>
       </div>
     </div>
   );
 }
 
-function RoleSelect({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: string;
-  onChange: (role: string) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <select
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
-      aria-label="Role"
-      title={disabled ? "You can't change your own role" : "Change role"}
-      className="shrink-0 rounded-md border border-hairline bg-paper px-2.5 py-1.5 text-sm capitalize text-ink outline-none focus:border-blueprint disabled:opacity-60"
-    >
-      {ROLES.map((r) => (
-        <option key={r} value={r}>
-          {r}
-        </option>
-      ))}
-    </select>
-  );
-}
-
 /**
- * OpsSection is the operator view. The queue does the real work — event fan-out, notify,
- * webhooks, indexing, automation, git ingest — and none of it was visible from inside the
- * app: when notify was failing against an unreachable host, nothing in the product said
- * so. Refreshes on an interval because a stuck queue is a thing you watch, not a thing
- * you reload for.
+ * RequireAccess guards a section reached by URL rather than by the nav — the nav
+ * already hides what you can't use, but a bookmark or a pasted link shouldn't render
+ * an admin panel that then fails every request with a 403.
  */
-function OpsSection() {
-  const ops = useQuery({ queryKey: ["ops"], queryFn: () => api.ops(), refetchInterval: 15_000, retry: false });
-  const d = ops.data;
+export function RequireAccess({ section, children }: { section: string; children: React.ReactNode }) {
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
+  const meta = SETTINGS_SECTIONS.find((s) => s.slug === section);
 
-  // Anything not completed is work outstanding; retryable and discarded are the two
-  // that mean something is wrong rather than merely pending.
-  const stuck = (d?.queues ?? []).filter((q) => q.state === "retryable" || q.state === "discarded");
+  if (me.isLoading || !meta) return null;
+  if (canAccess(meta, me.data?.role)) return <>{children}</>;
 
   return (
-    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
-      <div>
-        <h2 className="text-base font-bold text-ink">Operations</h2>
-        <p className="mt-1 text-sm text-graphite">
-          Background queue and outbound delivery health. Refreshes every 15s.
-          {d?.process && (
-            <span className="ml-1 font-mono text-xs text-graphite-soft">
-              up {Math.floor(d.process.uptime_seconds / 60)}m · {d.process.go_version} ·{" "}
-              {d.process.goroutines} goroutines
-            </span>
-          )}
-        </p>
-      </div>
-
-      {ops.isError && <p className="text-sm text-critical">{(ops.error as Error).message}</p>}
-      {d?.queue_error && (
-        <p className="rounded-md border border-critical/40 bg-critical-soft/40 p-3 text-sm text-critical">
-          Queue tables unreadable: {d.queue_error}
-        </p>
-      )}
-
-      {stuck.length > 0 && (
-        <p className="rounded-md border border-critical/40 bg-critical-soft/40 p-3 text-sm text-critical">
-          {stuck.map((q) => `${q.count} ${q.state} on ${q.queue}`).join(" · ")}
-        </p>
-      )}
-
-      <div className="flex flex-wrap gap-2">
-        {(d?.queues ?? []).map((q) => (
-          <span
-            key={`${q.queue}-${q.state}`}
-            className={`rounded-md border px-2.5 py-1 font-mono text-xs ${
-              q.state === "retryable" || q.state === "discarded"
-                ? "border-critical/40 bg-critical-soft/40 text-critical"
-                : "border-hairline text-graphite"
-            }`}
-          >
-            {q.queue} · {q.state} {q.count}
-          </span>
-        ))}
-        {d?.queues.length === 0 && <span className="text-sm text-graphite-soft">Queue is empty.</span>}
-      </div>
-
-      {(d?.failures ?? []).length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <p className="font-mono text-[10px] uppercase tracking-caps text-graphite-soft">Recent failures</p>
-          {d!.failures.map((f, i) => (
-            <div key={i} className="flex items-baseline gap-2 text-xs">
-              <span className="w-32 shrink-0 truncate font-mono text-graphite">{f.kind}</span>
-              <span className="shrink-0 font-mono text-graphite-soft">try {f.attempt}</span>
-              <span className="min-w-0 grow truncate text-critical" title={f.error}>
-                {f.error}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {(d?.deliveries ?? []).length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <p className="font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
-            Webhook deliveries · last 24h
-          </p>
-          {d!.deliveries.map((w) => (
-            <div key={w.url} className="flex items-baseline gap-2 text-xs">
-              <span className="min-w-0 grow truncate font-mono text-graphite" title={w.url}>
-                {w.url}
-              </span>
-              <span className={w.succeeded === w.total ? "text-resolved" : "text-critical"}>
-                {w.succeeded}/{w.total}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+    <section className="flex flex-col gap-1 rounded-lg border border-hairline bg-paper p-6">
+      <h2 className="text-base font-semibold text-ink">{meta.label}</h2>
+      <p className="text-sm text-graphite">
+        This section needs the {meta.access === "admin" ? "owner or admin" : "maintainer, admin or owner"} role. You're
+        signed in as {me.data?.role ?? "unknown"}.
+      </p>
     </section>
-  );
-}
-
-// How each event reads in settings, and the order they appear in — most consequential
-// first, so the two people care about are at the top rather than alphabetised into the
-// middle.
-const EVENT_LABELS: [string, string][] = [
-  ["user.mentioned", "Someone mentions me"],
-  ["issue.assigned", "An issue is assigned to me"],
-  ["comment.created", "Someone comments on an issue I follow"],
-  ["issue.status_changed", "Status changes"],
-  ["issue.resolved", "An issue is resolved"],
-  ["issue.closed", "An issue is closed"],
-  ["issue.reopened", "An issue is reopened"],
-  ["issue.created", "A new issue is filed"],
-  ["issue.woke", "A snoozed issue comes back"],
-  ["issue.updated", "Fields or labels are edited"],
-  ["issue.archived", "An issue is archived"],
-  ["issue.unarchived", "An issue is unarchived"],
-  ["issue.linked", "Issues are linked"],
-];
-
-const CHANNELS: [string, string][] = [
-  ["off", "Off"],
-  ["inbox", "Inbox"],
-  ["push", "Push"],
-  ["both", "Both"],
-];
-
-/**
- * NotificationPrefsSection edits per-event routing. Saving an event back to its default
- * deletes the stored row rather than freezing a copy of it, so a later change to the
- * defaults still reaches anyone who never disagreed.
- */
-function NotificationPrefsSection() {
-  const qc = useQueryClient();
-  const prefs = useQuery({ queryKey: ["notification-prefs"], queryFn: () => api.notificationPrefs() });
-  const save = useMutation({
-    mutationFn: (channels: Record<string, string>) => api.setNotificationPrefs(channels),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-prefs"] }),
-  });
-
-  const channels = prefs.data?.channels ?? {};
-  const defaults = prefs.data?.defaults ?? {};
-
-  return (
-    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
-      <div>
-        <h2 className="text-base font-bold text-ink">Notifications</h2>
-        <p className="mt-1 text-sm text-graphite">
-          What reaches you, and where. <span className="font-medium">Inbox</span> is in-app;{" "}
-          <span className="font-medium">push</span> goes out through Omni-Notify. Muting a single
-          issue is on the issue itself — you stay a watcher, it just stops talking.
-        </p>
-      </div>
-      {prefs.isError && <p className="text-sm text-critical">{(prefs.error as Error).message}</p>}
-      <div className="flex flex-col divide-y divide-hairline">
-        {EVENT_LABELS.map(([event, label]) => (
-          <div key={event} className="flex items-center gap-3 py-2">
-            <span className="min-w-0 grow text-sm text-ink">{label}</span>
-            {channels[event] !== defaults[event] && (
-              <span className="shrink-0 font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
-                changed
-              </span>
-            )}
-            <select
-              value={channels[event] ?? "inbox"}
-              disabled={save.isPending}
-              onChange={(e) => save.mutate({ ...channels, [event]: e.target.value })}
-              aria-label={label}
-              className="h-8 shrink-0 rounded-md border border-hairline bg-paper px-2 text-sm text-ink outline-none focus:border-blueprint disabled:opacity-60"
-            >
-              {CHANNELS.map(([v, l]) => (
-                <option key={v} value={v}>
-                  {l}
-                </option>
-              ))}
-            </select>
-          </div>
-        ))}
-      </div>
-      {save.isError && <p className="text-sm text-critical">{(save.error as Error).message}</p>}
-    </section>
-  );
-}
-
-/**
- * AuditSection is the admin view of the append-only log. Read-only by construction —
- * there is no edit or delete path on the server either, because a log somebody can
- * quietly amend is not evidence of anything.
- */
-function AuditSection() {
-  const [action, setAction] = useState("");
-  const log = useQuery({ queryKey: ["audit", action], queryFn: () => api.audit({ action: action || undefined }) });
-
-  const items = log.data?.items ?? [];
-
-  return (
-    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-base font-bold text-ink">Audit log</h2>
-          <p className="mt-1 text-sm text-graphite">
-            Privileged actions: role changes, tokens, project and membership changes, webhooks,
-            automation rules, settings. Append-only.
-          </p>
-        </div>
-        <select
-          value={action}
-          onChange={(e) => setAction(e.target.value)}
-          aria-label="Filter by action"
-          className="h-9 rounded-md border border-hairline bg-paper px-2.5 text-sm text-ink outline-none focus:border-blueprint"
-        >
-          <option value="">All actions</option>
-          {(log.data?.actions ?? []).map((a) => (
-            <option key={a} value={a}>
-              {a}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {log.isError && <p className="text-sm text-critical">{(log.error as Error).message}</p>}
-      {log.isSuccess && items.length === 0 && (
-        <p className="text-sm text-graphite-soft">Nothing recorded yet.</p>
-      )}
-
-      {items.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-hairline font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
-                <th className="py-2 pr-3 font-medium">When</th>
-                <th className="py-2 pr-3 font-medium">Who</th>
-                <th className="py-2 pr-3 font-medium">Action</th>
-                <th className="py-2 pr-3 font-medium">Target</th>
-                <th className="py-2 font-medium">Detail</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((e) => (
-                <tr key={e.id} className="border-b border-hairline last:border-b-0 align-top">
-                  <td className="whitespace-nowrap py-2 pr-3 font-mono text-xs text-graphite-soft">
-                    {timeAgo(e.created_at)}
-                  </td>
-                  <td className="py-2 pr-3">
-                    <span className="text-ink">{e.actor_name || e.actor_email}</span>
-                    {/* A privileged change made by a script is a different fact from one
-                        made in a browser, so the log says which. */}
-                    {e.via_token && (
-                      <span className="ml-1.5 rounded-sm bg-panel px-1 py-0.5 font-mono text-[10px] text-graphite-soft">
-                        token
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-3 font-mono text-xs text-blueprint">{e.action}</td>
-                  <td className="py-2 pr-3 text-graphite">{e.target_label || e.target_id || e.target_type}</td>
-                  <td className="py-2 font-mono text-xs text-graphite-soft">
-                    {e.details && Object.keys(e.details).length > 0 ? JSON.stringify(e.details) : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-// Outbound webhooks admin: create, toggle, delete, and inspect deliveries.
-export function WebhooksSection() {
-  const qc = useQueryClient();
-  const hooks = useQuery({ queryKey: ["webhooks"], queryFn: () => api.listWebhooks() });
-  const [url, setUrl] = useState("");
-  const [secret, setSecret] = useState("");
-  const [events, setEvents] = useState("");
-  const [expanded, setExpanded] = useState<string | null>(null);
-
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["webhooks"] });
-  const create = useMutation({
-    mutationFn: () =>
-      api.createWebhook({
-        url: url.trim(),
-        secret: secret.trim() || undefined,
-        events: events.trim() ? events.split(",").map((e) => e.trim()).filter(Boolean) : undefined,
-      }),
-    onSuccess: () => {
-      setUrl("");
-      setSecret("");
-      setEvents("");
-      invalidate();
-    },
-  });
-  const toggle = useMutation({
-    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) => api.updateWebhook(id, { is_active }),
-    onSuccess: invalidate,
-  });
-  const del = useMutation({ mutationFn: (id: string) => api.deleteWebhook(id), onSuccess: invalidate });
-
-  const items = hooks.data?.items ?? [];
-  const inputClass =
-    "w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint";
-
-  return (
-    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-base font-semibold text-ink">Webhooks</h2>
-        <p className="text-sm leading-relaxed text-graphite">
-          POST issue events to external services. Payloads are JSON; when a secret is set, requests carry an{" "}
-          <code className="rounded bg-panel px-1 py-0.5 font-mono text-xs text-ink">X-OBT-Signature</code>{" "}
-          HMAC-SHA256 header. Failed deliveries retry with backoff (8 attempts).
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[2fr_1fr_1fr_auto]">
-        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/hook" className={inputClass} />
-        <input value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Secret (optional)" className={inputClass} />
-        <input value={events} onChange={(e) => setEvents(e.target.value)} placeholder="events (empty = all)" className={inputClass} title="Comma-separated, e.g. issue.created,comment.created" />
-        <button
-          disabled={!/^https?:\/\//.test(url.trim()) || create.isPending}
-          onClick={() => create.mutate()}
-          className="h-[38px] rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
-        >
-          Add
-        </button>
-      </div>
-      {create.isError && <p className="text-sm text-critical">{(create.error as Error).message}</p>}
-
-      <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
-        {hooks.isSuccess && items.length === 0 && (
-          <div className="p-4 text-sm text-graphite-soft">No webhooks yet.</div>
-        )}
-        {items.map((w) => (
-          <div key={w.id} className="flex flex-col">
-            <div className="flex items-center gap-3 p-3.5">
-              <span className={`h-2 w-2 shrink-0 rounded-full ${w.is_active ? "bg-resolved" : "bg-hairline"}`} />
-              <div className="min-w-0 grow">
-                <div className="truncate font-mono text-sm text-ink">{w.url}</div>
-                <div className="font-mono text-xs text-graphite-soft">
-                  {w.events.length ? w.events.join(", ") : "all events"}
-                  {w.project_key ? ` · ${w.project_key}` : " · all projects"}
-                  {w.has_secret ? " · signed" : ""}
-                </div>
-              </div>
-              <button
-                onClick={() => setExpanded(expanded === w.id ? null : w.id)}
-                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink"
-              >
-                Deliveries
-              </button>
-              <button
-                onClick={() => toggle.mutate({ id: w.id, is_active: !w.is_active })}
-                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink"
-              >
-                {w.is_active ? "Disable" : "Enable"}
-              </button>
-              <button
-                onClick={() => {
-                  if (window.confirm("Delete this webhook? Delivery history goes with it.")) del.mutate(w.id);
-                }}
-                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-critical transition hover:border-critical"
-              >
-                Delete
-              </button>
-            </div>
-            {expanded === w.id && <DeliveryLog webhookId={w.id} />}
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function DeliveryLog({ webhookId }: { webhookId: string }) {
-  const qc = useQueryClient();
-  const deliveries = useQuery({
-    queryKey: ["webhook-deliveries", webhookId],
-    queryFn: () => api.listWebhookDeliveries(webhookId),
-    refetchInterval: 5000,
-  });
-  const redeliver = useMutation({
-    mutationFn: (deliveryId: string) => api.redeliverWebhook(webhookId, deliveryId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["webhook-deliveries", webhookId] }),
-  });
-  const items = deliveries.data?.items ?? [];
-  const tone: Record<string, string> = {
-    success: "text-resolved",
-    failed: "text-critical",
-    dead: "text-critical",
-    pending: "text-graphite-soft",
-  };
-  return (
-    <div className="flex flex-col gap-1 border-t border-hairline bg-panel/50 px-4 py-3">
-      {items.length === 0 && <span className="text-xs text-graphite-soft">No deliveries yet.</span>}
-      {items.map((d) => (
-        <div key={d.id} className="flex items-center gap-3 font-mono text-xs">
-          <span className={`w-16 font-semibold uppercase ${tone[d.status]}`}>{d.status}</span>
-          <span className="w-40 truncate text-graphite">{d.event_type}</span>
-          <span className="text-graphite-soft">
-            {d.response_code ? `HTTP ${d.response_code}` : "—"} · try {d.attempt} · {timeAgo(d.created_at)}
-          </span>
-          <span className="grow" />
-          {(d.status === "failed" || d.status === "dead") && (
-            <button
-              disabled={redeliver.isPending}
-              onClick={() => redeliver.mutate(d.id)}
-              className="text-blueprint hover:underline disabled:opacity-50"
-            >
-              Redeliver
-            </button>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Automation rules admin: when <event> [+ conditions] then <action>.
-const RULE_EVENTS = ["issue.created", "comment.created", "issue.status_changed", "issue.resolved", "issue.reopened", "*"];
-const ACTION_KINDS = [
-  { kind: "set_priority", label: "set priority to", values: ["p0", "p1", "p2", "p3"] },
-  { kind: "set_severity", label: "set severity to", values: ["critical", "high", "medium", "low"] },
-  { kind: "add_label", label: "add label", values: null },
-  { kind: "set_status", label: "transition to", values: ["in_progress", "blocked", "ready_for_review", "resolved", "closed", "reopened"] },
-  { kind: "add_comment", label: "comment", values: null },
-];
-
-function AutoArchiveSection() {
-  const qc = useQueryClient();
-  const settings = useQuery({ queryKey: ["archive-settings"], queryFn: () => api.getArchiveSettings() });
-  const [enabled, setEnabled] = useState(false);
-  const [days, setDays] = useState("30");
-
-  // Seed the form from the current setting (auto_after_days: 0 = disabled).
-  useEffect(() => {
-    if (!settings.data) return;
-    const d = settings.data.auto_after_days;
-    setEnabled(d > 0);
-    if (d > 0) setDays(String(d));
-  }, [settings.data]);
-
-  const save = useMutation({
-    mutationFn: (autoAfterDays: number) => api.setArchiveSettings(autoAfterDays),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["archive-settings"] }),
-  });
-
-  const parsedDays = Math.max(1, parseInt(days, 10) || 0);
-  const apply = () => save.mutate(enabled ? parsedDays : 0);
-
-  return (
-    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-base font-semibold text-ink">Auto-archive</h2>
-        <p className="text-sm leading-relaxed text-graphite">
-          Automatically archive issues that have stayed closed for a while — they drop out of lists and search but stay
-          recoverable under the <span className="font-mono text-xs">is:archived</span> filter. Runs once a day.
-        </p>
-      </div>
-
-      <label className="flex items-center gap-2.5 text-sm text-ink">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => setEnabled(e.target.checked)}
-          className="h-4 w-4 accent-blueprint"
-        />
-        Enable auto-archive
-      </label>
-
-      <div className={`flex items-center gap-2 text-sm ${enabled ? "text-ink" : "pointer-events-none opacity-50"}`}>
-        <span>Archive issues closed more than</span>
-        <input
-          type="number"
-          min={1}
-          value={days}
-          disabled={!enabled}
-          onChange={(e) => setDays(e.target.value)}
-          className="w-20 rounded-md border border-hairline bg-paper px-2.5 py-1.5 text-sm text-ink outline-none focus:border-blueprint"
-        />
-        <span>days ago.</span>
-      </div>
-
-      {save.isError && <p className="text-sm text-critical">{(save.error as Error).message}</p>}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={apply}
-          disabled={save.isPending || settings.isLoading}
-          className="rounded-md bg-blueprint px-4 py-2 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
-        >
-          {save.isPending ? "Saving…" : "Save changes"}
-        </button>
-        <span className="text-sm text-graphite-soft">
-          {settings.data == null
-            ? ""
-            : settings.data.auto_after_days > 0
-              ? `Currently archiving issues closed over ${settings.data.auto_after_days} days ago.`
-              : "Currently disabled."}
-        </span>
-      </div>
-    </section>
-  );
-}
-
-export function AutomationSection() {
-  const qc = useQueryClient();
-  const rules = useQuery({ queryKey: ["automation-rules"], queryFn: () => api.listAutomationRules() });
-  const runs = useQuery({ queryKey: ["automation-runs"], queryFn: () => api.listAutomationRuns(), refetchInterval: 10000 });
-
-  const [name, setName] = useState("");
-  const [event, setEvent] = useState("issue.created");
-  const [condSeverity, setCondSeverity] = useState("");
-  const [actionKind, setActionKind] = useState("set_priority");
-  const [actionValue, setActionValue] = useState("p1");
-
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["automation-rules"] });
-  const create = useMutation({
-    mutationFn: () =>
-      api.createAutomationRule({
-        name: name.trim(),
-        trigger: { event, conditions: condSeverity ? { severity: condSeverity } : undefined },
-        actions: [{ kind: actionKind, value: actionValue.trim() }],
-      }),
-    onSuccess: () => {
-      setName("");
-      invalidate();
-    },
-  });
-  const toggle = useMutation({
-    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) => api.updateAutomationRule(id, { is_active }),
-    onSuccess: invalidate,
-  });
-  const edit = useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: Parameters<typeof api.updateAutomationRule>[1] }) =>
-      api.updateAutomationRule(id, patch),
-    onSuccess: () => {
-      setEditingId(null);
-      invalidate();
-    },
-  });
-  const del = useMutation({ mutationFn: (id: string) => api.deleteAutomationRule(id), onSuccess: invalidate });
-
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const items = rules.data?.items ?? [];
-  const kindMeta = ACTION_KINDS.find((k) => k.kind === actionKind)!;
-  const inputClass =
-    "rounded-md border border-hairline bg-paper px-2.5 py-2 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint";
-
-  return (
-    <section className="flex flex-col gap-4 rounded-lg border border-hairline bg-paper p-6">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-base font-semibold text-ink">Automation</h2>
-        <p className="text-sm leading-relaxed text-graphite">
-          When an event fires (optionally filtered), the Automation bot applies actions — e.g. new critical bugs get
-          P0, or reopened issues get a triage label. Bot actions never re-trigger rules.
-        </p>
-      </div>
-
-      <div className="flex flex-wrap items-end gap-2">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Rule name" className={`${inputClass} w-40`} />
-        <span className="pb-2 text-sm text-graphite-soft">when</span>
-        <select value={event} onChange={(e) => setEvent(e.target.value)} className={inputClass}>
-          {RULE_EVENTS.map((ev) => (
-            <option key={ev} value={ev}>{ev === "*" ? "any event" : ev}</option>
-          ))}
-        </select>
-        <select value={condSeverity} onChange={(e) => setCondSeverity(e.target.value)} className={inputClass} title="Optional severity condition">
-          <option value="">any severity</option>
-          {["critical", "high", "medium", "low"].map((s) => (
-            <option key={s} value={s}>severity {s}</option>
-          ))}
-        </select>
-        <span className="pb-2 text-sm text-graphite-soft">then</span>
-        <select
-          value={actionKind}
-          onChange={(e) => {
-            const meta = ACTION_KINDS.find((k) => k.kind === e.target.value)!;
-            setActionKind(e.target.value);
-            setActionValue(meta.values ? meta.values[0] : "");
-          }}
-          className={inputClass}
-        >
-          {ACTION_KINDS.map((k) => (
-            <option key={k.kind} value={k.kind}>{k.label}</option>
-          ))}
-        </select>
-        {kindMeta.values ? (
-          <select value={actionValue} onChange={(e) => setActionValue(e.target.value)} className={inputClass}>
-            {kindMeta.values.map((v) => (
-              <option key={v} value={v}>{v}</option>
-            ))}
-          </select>
-        ) : (
-          <input value={actionValue} onChange={(e) => setActionValue(e.target.value)} placeholder="value…" className={`${inputClass} w-36`} />
-        )}
-        <button
-          disabled={!name.trim() || !actionValue.trim() || create.isPending}
-          onClick={() => create.mutate()}
-          className="h-[38px] rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
-        >
-          Add rule
-        </button>
-      </div>
-      {create.isError && <p className="text-sm text-critical">{(create.error as Error).message}</p>}
-
-      <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
-        {rules.isSuccess && items.length === 0 && <div className="p-4 text-sm text-graphite-soft">No rules yet.</div>}
-        {items.map((r) => (
-          <div key={r.id} className="flex flex-col">
-            <div className="flex items-center gap-3 p-3.5">
-              <span className={`h-2 w-2 shrink-0 rounded-full ${r.is_active ? "bg-resolved" : "bg-hairline"}`} />
-              <div className="min-w-0 grow">
-                <div className="text-sm font-medium text-ink">{r.name}</div>
-                <div className="truncate font-mono text-xs text-graphite-soft">
-                  when {r.trigger.event}
-                  {r.trigger.conditions && Object.entries(r.trigger.conditions).map(([k, v]) => ` · ${k}=${v}`)}
-                  {" → "}
-                  {r.actions.map((a) => `${a.kind}:${a.value}`).join(", ")}
-                  {r.project_key ? ` · ${r.project_key}` : " · all projects"}
-                </div>
-              </div>
-              <button
-                onClick={() => setEditingId(editingId === r.id ? null : r.id)}
-                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink"
-              >
-                {editingId === r.id ? "Close" : "Edit"}
-              </button>
-              <button
-                onClick={() => toggle.mutate({ id: r.id, is_active: !r.is_active })}
-                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-graphite transition hover:border-graphite hover:text-ink"
-              >
-                {r.is_active ? "Disable" : "Enable"}
-              </button>
-              <button
-                onClick={() => {
-                  if (window.confirm(`Delete rule “${r.name}”?`)) del.mutate(r.id);
-                }}
-                className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-sm text-critical transition hover:border-critical"
-              >
-                Delete
-              </button>
-            </div>
-            {editingId === r.id && (
-              <RuleEditor
-                rule={r}
-                pending={edit.isPending}
-                error={edit.error as Error | null}
-                onSave={(patch) => edit.mutate({ id: r.id, patch })}
-                onCancel={() => setEditingId(null)}
-              />
-            )}
-          </div>
-        ))}
-      </div>
-
-      {(runs.data?.items.length ?? 0) > 0 && (
-        <div className="flex flex-col gap-1">
-          <span className="font-mono text-[10px] font-medium uppercase tracking-caps text-graphite-soft">
-            Recent runs
-          </span>
-          {runs.data!.items.slice(0, 8).map((run) => (
-            <div key={run.id} className="flex items-center gap-3 font-mono text-xs">
-              <span className={`w-14 font-semibold uppercase ${run.status === "matched" ? "text-resolved" : "text-critical"}`}>
-                {run.status}
-              </span>
-              <span className="w-44 truncate text-graphite">{run.rule_name}</span>
-              <span className="text-blueprint">{run.issue_key}</span>
-              <span className="text-graphite-soft">{timeAgo(run.ran_at)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-// RuleEditor edits a rule's actual logic — name, trigger event, severity condition
-// and its action. Without it the UI could only toggle a rule on and off, so fixing a
-// mistyped rule meant deleting and recreating it.
-function RuleEditor({
-  rule,
-  pending,
-  error,
-  onSave,
-  onCancel,
-}: {
-  rule: AutomationRule;
-  pending: boolean;
-  error: Error | null;
-  onSave: (patch: Parameters<typeof api.updateAutomationRule>[1]) => void;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState(rule.name);
-  const [event, setEvent] = useState(rule.trigger.event);
-  const [severity, setSeverity] = useState(rule.trigger.conditions?.severity ?? "");
-  const [kind, setKind] = useState(rule.actions[0]?.kind ?? "set_priority");
-  const [value, setValue] = useState(rule.actions[0]?.value ?? "");
-
-  const meta = ACTION_KINDS.find((k) => k.kind === kind) ?? ACTION_KINDS[0];
-  const inputClass =
-    "rounded-md border border-hairline bg-paper px-2.5 py-2 text-sm text-ink outline-none placeholder:text-graphite-soft focus:border-blueprint";
-
-  return (
-    <div className="flex flex-col gap-2 border-t border-hairline bg-panel/50 p-3.5">
-      <div className="flex flex-wrap items-end gap-2">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Rule name" className={`${inputClass} w-40`} />
-        <span className="pb-2 text-sm text-graphite-soft">when</span>
-        <select value={event} onChange={(e) => setEvent(e.target.value)} className={inputClass}>
-          {RULE_EVENTS.map((ev) => (
-            <option key={ev} value={ev}>{ev === "*" ? "any event" : ev}</option>
-          ))}
-        </select>
-        <select value={severity} onChange={(e) => setSeverity(e.target.value)} className={inputClass}>
-          <option value="">any severity</option>
-          {["critical", "high", "medium", "low"].map((sv) => (
-            <option key={sv} value={sv}>severity {sv}</option>
-          ))}
-        </select>
-        <span className="pb-2 text-sm text-graphite-soft">then</span>
-        <select
-          value={kind}
-          onChange={(e) => {
-            const m = ACTION_KINDS.find((k) => k.kind === e.target.value)!;
-            setKind(e.target.value);
-            setValue(m.values ? m.values[0] : "");
-          }}
-          className={inputClass}
-        >
-          {ACTION_KINDS.map((k) => (
-            <option key={k.kind} value={k.kind}>{k.label}</option>
-          ))}
-        </select>
-        {meta.values ? (
-          <select value={value} onChange={(e) => setValue(e.target.value)} className={inputClass}>
-            {meta.values.map((v) => (
-              <option key={v} value={v}>{v}</option>
-            ))}
-          </select>
-        ) : (
-          <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="value…" className={`${inputClass} w-36`} />
-        )}
-        <button
-          disabled={!name.trim() || !value.trim() || pending}
-          onClick={() =>
-            onSave({
-              name: name.trim(),
-              trigger: { event, conditions: severity ? { severity } : undefined },
-              actions: [{ kind, value: value.trim() }],
-            })
-          }
-          className="h-[38px] rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
-        >
-          {pending ? "Saving…" : "Save rule"}
-        </button>
-        <button onClick={onCancel} className="h-[38px] px-3 text-sm text-graphite transition hover:text-ink">
-          Cancel
-        </button>
-      </div>
-      {error && <p className="text-sm text-critical">{error.message}</p>}
-    </div>
   );
 }

@@ -20,6 +20,7 @@ type Principal struct {
 	IdentitySub string
 	Email       string
 	DisplayName string
+	AvatarURL   string
 	Role        domain.Role
 	Scopes      []string // for API tokens
 	ViaToken    bool

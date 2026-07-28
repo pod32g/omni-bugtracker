@@ -35,6 +35,65 @@ func (h *httpHandlers) listProjectViews(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// listAllViews is the install-wide list, for curating shared views in one place.
+// Reviewing them one project at a time is why nobody reviews them.
+func (h *httpHandlers) listAllViews(w http.ResponseWriter, r *http.Request) {
+	items, err := h.repo.ListSharedViews(r.Context())
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []domain.SavedSearch{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// updateSavedSearch edits one of the caller's personal views. Saving under a new name
+// would leave the old one behind, so renaming needs its own path.
+func (h *httpHandlers) updateSavedSearch(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	userID, _ := uuid.Parse(p.UserID)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", "invalid view id")
+		return
+	}
+	var body struct {
+		Name        *string `json:"name"`
+		Query       *string `json:"query"`
+		Description *string `json:"description"`
+		Sort        *string `json:"sort"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.Name != nil {
+		trimmed := strings.TrimSpace(*body.Name)
+		if trimmed == "" {
+			httpapi.WriteValidation(w, map[string]string{"name": "cannot be empty"})
+			return
+		}
+		body.Name = &trimmed
+	}
+	// Personal views span every project, so the filter is parsed unscoped.
+	if body.Query != nil {
+		if _, bad := ParseFilter("", *body.Query, p.UserID); len(bad) > 0 {
+			httpapi.WriteValidation(w, bad)
+			return
+		}
+	}
+	view, err := h.repo.UpdateSavedSearch(r.Context(), userID, UpdateSavedSearchInput{
+		ID: id, Name: body.Name, Query: body.Query, Description: body.Description, Sort: body.Sort,
+	})
+	if err != nil {
+		writeNotFoundOrError(w, err, "saved search", "update failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 func (h *httpHandlers) createProjectView(w http.ResponseWriter, r *http.Request) {
 	p := auth.FromContext(r.Context())
 	key := chi.URLParam(r, "key")

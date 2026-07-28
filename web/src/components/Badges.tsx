@@ -137,10 +137,28 @@ export function Avatar({ user, size = 28 }: { user?: User; size?: number }) {
   return (
     <span
       title={user.display_name || user.email}
-      className="grid shrink-0 place-items-center bg-chip font-mono font-semibold text-white"
+      className="grid shrink-0 place-items-center overflow-hidden bg-chip font-mono font-semibold text-white"
       style={{ width: size, height: size, borderRadius: radius, fontSize }}
     >
-      {initials(user)}
+      {/* The image sits over the initials rather than replacing them, so a URL that
+          404s or a host that blocks hotlinking degrades to the initials underneath
+          instead of leaving a blank square. */}
+      {user.avatar_url ? (
+        <>
+          <span className="col-start-1 row-start-1">{initials(user)}</span>
+          <img
+            src={user.avatar_url}
+            alt=""
+            loading="lazy"
+            className="col-start-1 row-start-1 h-full w-full object-cover"
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
+          />
+        </>
+      ) : (
+        initials(user)
+      )}
     </span>
   );
 }

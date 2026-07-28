@@ -27,6 +27,7 @@ func (a *Auth) AuthenticateToken(ctx context.Context, tokenHash []byte) (*auth.P
 		IdentitySub: tp.User.IdentitySub,
 		Email:       tp.User.Email,
 		DisplayName: tp.User.DisplayName,
+		AvatarURL:   tp.User.AvatarURL,
 		Role:        tp.User.Role,
 		Scopes:      tp.Scopes,
 		ViaToken:    true,
@@ -52,6 +53,7 @@ func (a *Auth) SyncUser(ctx context.Context, c *auth.Claims) (*auth.Principal, e
 		IdentitySub: u.IdentitySub,
 		Email:       u.Email,
 		DisplayName: u.DisplayName,
+		AvatarURL:   u.AvatarURL,
 		Role:        u.Role,
 	}, nil
 }

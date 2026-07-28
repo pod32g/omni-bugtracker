@@ -1,0 +1,79 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, type User } from "../../../lib/api";
+import { Avatar } from "../../../components/Badges";
+import { Card, ErrorLine } from "../ui";
+
+const ROLES = ["owner", "admin", "maintainer", "member", "reporter", "bot"];
+
+export function MembersSection() {
+  const qc = useQueryClient();
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.me() });
+  const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
+  const setUserRole = useMutation({
+    mutationFn: ({ id, role }: { id: string; role: string }) => api.updateUserRole(id, role),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+  });
+
+  return (
+    <Card
+      title="Members"
+      description={
+        <>
+          Roles set what each user can do. <span className="text-ink">Owner/admin</span> manage everything including
+          roles; <span className="text-ink">maintainer</span> manages projects; <span className="text-ink">member</span>{" "}
+          files &amp; works issues; <span className="text-ink">reporter</span> only reports;{" "}
+          <span className="text-ink">bot</span> is for automation.
+        </>
+      }
+    >
+      <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
+        {users.isLoading && <div className="p-4 text-sm text-graphite">Loading…</div>}
+        {users.data?.items.map((u: User) => (
+          <div key={u.id} className="flex items-center gap-3 p-3.5">
+            <Avatar user={u} size={28} />
+            <div className="min-w-0 grow">
+              <div className="truncate text-sm font-medium text-ink">
+                {u.display_name || u.email}
+                {u.id === me.data?.id && <span className="ml-2 text-xs font-normal text-graphite-soft">(you)</span>}
+              </div>
+              <div className="truncate text-xs text-graphite-soft">{u.email}</div>
+            </div>
+            <RoleSelect
+              value={u.role ?? "member"}
+              disabled={u.id === me.data?.id || setUserRole.isPending}
+              onChange={(role) => setUserRole.mutate({ id: u.id, role })}
+            />
+          </div>
+        ))}
+      </div>
+      <ErrorLine error={setUserRole.error} />
+    </Card>
+  );
+}
+
+function RoleSelect({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (role: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label="Role"
+      title={disabled ? "You can't change your own role" : "Change role"}
+      className="shrink-0 rounded-md border border-hairline bg-paper px-2.5 py-1.5 text-sm capitalize text-ink outline-none focus:border-blueprint disabled:opacity-60"
+    >
+      {ROLES.map((r) => (
+        <option key={r} value={r}>
+          {r}
+        </option>
+      ))}
+    </select>
+  );
+}

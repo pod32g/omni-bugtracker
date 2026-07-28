@@ -68,7 +68,7 @@ func main() {
 	// The generated OpenAPI strict handlers are wired here once `make generate` runs.
 	handlers := service.NewHTTPHandlers(store, publisher, logger, cfg)
 	authFlow := service.NewOIDC(cfg.Identity, store, logger).Router()
-	integrations := service.NewIntegrationHandlers(publisher, cfg.Integrations, logger)
+	integrations := service.NewIntegrationHandlers(publisher, store, cfg.Integrations, logger)
 
 	router := httpapi.NewRouter(httpapi.Deps{
 		Cfg:            cfg,

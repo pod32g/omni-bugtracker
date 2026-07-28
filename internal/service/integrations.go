@@ -21,22 +21,42 @@ const maxWebhookBody = 5 << 20 // 5 MiB
 // and observability alert sources). They authenticate via HMAC, not bearer tokens.
 type IntegrationHandlers struct {
 	pub    *events.Publisher
+	repo   Repository
 	cfg    config.Integrations
 	logger *slog.Logger
 }
 
-func NewIntegrationHandlers(pub *events.Publisher, cfg config.Integrations, logger *slog.Logger) *IntegrationHandlers {
-	return &IntegrationHandlers{pub: pub, cfg: cfg, logger: logger}
+func NewIntegrationHandlers(pub *events.Publisher, repo Repository, cfg config.Integrations, logger *slog.Logger) *IntegrationHandlers {
+	return &IntegrationHandlers{pub: pub, repo: repo, cfg: cfg, logger: logger}
+}
+
+// resolve reads the effective settings for one inbound source and writes the
+// operator-facing error when the integration is unusable. A failed settings read
+// fails closed: not knowing whether a secret was rotated or the source switched
+// off is not a reason to accept a delivery that can create issues.
+func (h *IntegrationHandlers) resolve(w http.ResponseWriter, r *http.Request, source string) (config.Inbound, bool) {
+	inbound, err := EffectiveInbound(r.Context(), h.repo, h.cfg, source)
+	if err != nil {
+		h.logger.Error("integration settings unreadable", "source", source, "err", err)
+		httpapi.WriteProblem(w, http.StatusServiceUnavailable, "settings unavailable",
+			"could not read the "+source+" integration settings")
+		return config.Inbound{}, false
+	}
+	if !inbound.Enabled {
+		httpapi.WriteProblem(w, http.StatusNotImplemented, source+" integration disabled", "")
+		return config.Inbound{}, false
+	}
+	if !requireSecret(w, source, inbound.WebhookSecret) {
+		return config.Inbound{}, false
+	}
+	return inbound, true
 }
 
 // GitEvents receives commit/PR webhooks (GitHub-compatible), verifies the HMAC signature,
 // and enqueues a git-ingest job. Parsing/linking happens asynchronously in the worker.
 func (h *IntegrationHandlers) GitEvents(w http.ResponseWriter, r *http.Request) {
-	if !h.cfg.Git.Enabled {
-		httpapi.WriteProblem(w, http.StatusNotImplemented, "git integration disabled", "")
-		return
-	}
-	if !requireSecret(w, "git", h.cfg.Git.WebhookSecret) {
+	inbound, ok := h.resolve(w, r, "git")
+	if !ok {
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody))
@@ -44,7 +64,7 @@ func (h *IntegrationHandlers) GitEvents(w http.ResponseWriter, r *http.Request) 
 		httpapi.WriteProblem(w, http.StatusBadRequest, "read body", err.Error())
 		return
 	}
-	if !validSignature(r, body, h.cfg.Git.WebhookSecret) {
+	if !validSignature(r, body, inbound.WebhookSecret) {
 		httpapi.WriteProblem(w, http.StatusUnauthorized, "invalid signature", "")
 		return
 	}
@@ -73,18 +93,8 @@ func (h *IntegrationHandlers) GitEvents(w http.ResponseWriter, r *http.Request) 
 // the obs-ingest worker which creates or bumps the matching issue.
 func (h *IntegrationHandlers) ObsAlertsHandler(source string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var inbound config.Inbound
-		switch source {
-		case "logging":
-			inbound = h.cfg.Logging
-		default:
-			inbound = h.cfg.Metrics
-		}
-		if !inbound.Enabled {
-			httpapi.WriteProblem(w, http.StatusNotImplemented, source+" ingestion disabled", "")
-			return
-		}
-		if !requireSecret(w, source, inbound.WebhookSecret) {
+		inbound, ok := h.resolve(w, r, source)
+		if !ok {
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody))

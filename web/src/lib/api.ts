@@ -59,6 +59,28 @@ export interface Label {
   id: string;
   name: string;
   color: string;
+  description?: string;
+  /** How many issues carry the label — what says whether it's load-bearing. */
+  issue_count: number;
+  /** Global labels belong to no project and take admin to edit. */
+  is_global: boolean;
+}
+
+/** One inbound integration's live state, as Settings shows it. Secrets never leave the server. */
+export interface InboundIntegration {
+  source: "git" | "logging" | "metrics";
+  enabled: boolean;
+  has_secret: boolean;
+  enabled_from: "settings" | "config";
+  secret_from: "settings" | "config" | "none";
+  endpoint: string;
+  /** False when it's switched on with no secret — every delivery is rejected. */
+  healthy: boolean;
+}
+
+export interface IntegrationSettings {
+  inbound: InboundIntegration[];
+  notify: { enabled: boolean; base_url?: string; timeout?: string };
 }
 
 export interface Component {
@@ -620,6 +642,9 @@ export const session = {
 
 export const api = {
   me: () => request<User>("/me"),
+  /** Self-service profile edit. Email and role aren't settable — the IdP owns one, admins the other. */
+  updateMe: (patch: { display_name?: string; avatar_url?: string }) =>
+    request<User>("/me", { method: "PATCH", body: JSON.stringify(patch) }),
   listUsers: () => request<{ items: User[] }>("/users"),
   updateUserRole: (id: string, role: string) =>
     request<User>(`/users/${id}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
@@ -657,6 +682,27 @@ export const api = {
     request<ApiToken & { token: string }>("/me/tokens", { method: "POST", body: JSON.stringify({ name, scopes }) }),
   revokeToken: (id: string) => request<void>(`/me/tokens/${id}`, { method: "DELETE" }),
   listLabels: (projectKey: string) => request<{ items: Label[] }>(`/projects/${projectKey}/labels`),
+  createLabel: (projectKey: string, body: { name: string; color?: string; description?: string }) =>
+    request<Label>(`/projects/${projectKey}/labels`, { method: "POST", body: JSON.stringify(body) }),
+  updateLabel: (id: string, patch: { name?: string; color?: string; description?: string }) =>
+    request<Label>(`/labels/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteLabel: (id: string) => request<void>(`/labels/${id}`, { method: "DELETE" }),
+  /** Fold `id` into `intoId`: every issue follows, then `id` is gone. Same project (or both global). */
+  mergeLabel: (id: string, intoId: string) =>
+    request<Label>(`/labels/${id}/merge`, { method: "POST", body: JSON.stringify({ into_id: intoId }) }),
+  getIntegrationSettings: () => request<IntegrationSettings>("/settings/integrations"),
+  /**
+   * Patches the sources you name and leaves the rest alone. Omitting a field keeps the
+   * stored value; `webhook_secret: ""` clears the override and falls back to config.yaml,
+   * as does `reset: true` for the whole source.
+   */
+  setIntegrationSettings: (
+    patch: Record<string, { enabled?: boolean; webhook_secret?: string; reset?: boolean }>,
+  ) =>
+    request<{ inbound: InboundIntegration[] }>("/settings/integrations", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
   listComponents: (projectKey: string) => request<{ items: Component[] }>(`/projects/${projectKey}/components`),
   createComponent: (projectKey: string, body: { name: string; description_md?: string; lead_id?: string }) =>
     request<Component>(`/projects/${projectKey}/components`, { method: "POST", body: JSON.stringify(body) }),
@@ -800,7 +846,14 @@ export const api = {
   listSavedSearches: () => request<{ items: SavedSearch[] }>("/me/saved-searches"),
   saveSavedSearch: (name: string, query: string) =>
     request<SavedSearch>("/me/saved-searches", { method: "POST", body: JSON.stringify({ name, query }) }),
+  /** The only way to rename a personal view — saving under a new name creates a second one. */
+  updateSavedSearch: (
+    id: string,
+    patch: { name?: string; query?: string; description?: string; sort?: string },
+  ) => request<SavedSearch>(`/me/saved-searches/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteSavedSearch: (id: string) => request<void>(`/me/saved-searches/${id}`, { method: "DELETE" }),
+  /** Every shared view across every project, for curating them in one place. */
+  listAllViews: () => request<{ items: SavedSearch[] }>("/views"),
   listWatchers: (issueKey: string) =>
     request<{ items: User[]; watching: boolean }>(`/issues/${issueKey}/watchers`),
   watchIssue: (issueKey: string) => request<void>(`/issues/${issueKey}/watchers/me`, { method: "PUT" }),

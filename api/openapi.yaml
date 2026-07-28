@@ -37,6 +37,26 @@ paths:
       operationId: getMe
       responses:
         "200": { description: current user, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+    patch:
+      tags: [system]
+      operationId: updateMe
+      description: >
+        Self-service profile edit. Only the fields a person owns about themselves —
+        email comes from Omni-Identity and role is an admin's decision. Setting either
+        field stops the identity token overwriting it on the next sign-in. An omitted
+        field is unchanged; an empty avatar_url clears it back to generated initials.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string, maxLength: 80 }
+                avatar_url: { type: string, description: "http(s) URL, or empty to clear" }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
 
   /me/tokens:
     get:
@@ -98,12 +118,52 @@ paths:
         in: path
         required: true
         schema: { type: string, format: uuid }
+    patch:
+      tags: [search]
+      operationId: updateSavedSearch
+      description: >
+        Edits one of the caller's personal views in place. This is the only way to
+        rename one — the upsert above keys on the name, so saving under a new one
+        would leave the original behind. A changed query is parsed before it is
+        stored. Omitted fields are unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                query: { type: string, description: "filter-grammar string" }
+                description: { type: string }
+                sort: { type: string }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/SavedSearch" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
     delete:
       tags: [search]
       operationId: deleteSavedSearch
       responses:
         "204": { description: deleted }
         "404": { $ref: "#/components/responses/Problem" }
+
+  /views:
+    get:
+      tags: [search]
+      operationId: listSharedViews
+      description: >
+        Every shared view across every project, for curating them in one place.
+        Reviewing them one project at a time is why nobody reviews them.
+      responses:
+        "200":
+          description: shared views
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/SavedSearch" } }
 
   /users/{id}/role:
     parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -211,6 +271,102 @@ paths:
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Issue" } } } }
         "422": { $ref: "#/components/responses/Problem" }
+
+  /projects/{key}/labels:
+    parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
+    get:
+      tags: [projects]
+      operationId: listLabels
+      description: "The project's own labels plus the global ones, each with its issue count."
+      responses:
+        "200":
+          description: labels
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Label" } }
+    post:
+      tags: [projects]
+      operationId: createLabel
+      description: >
+        Creates a label ahead of use. Labels otherwise appear the moment someone types
+        one on an issue, which is how a project accumulates three spellings of the same
+        word. Needs project:manage.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 50 }
+                color: { type: string, pattern: "^#[0-9a-fA-F]{6}$" }
+                description: { type: string }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Label" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { description: "a label with that name already exists in this scope", content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+
+  /labels/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    patch:
+      tags: [projects]
+      operationId: updateLabel
+      description: >
+        Renames or recolours a label; every issue carrying it follows. Project labels
+        need project:manage on their project; a global label is offered in every
+        project, so editing one needs admin:all.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 50 }
+                color: { type: string, pattern: "^#[0-9a-fA-F]{6}$" }
+                description: { type: string }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Label" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [projects]
+      operationId: deleteLabel
+      description: "Removes the label. The issues carrying it survive and simply stop carrying it."
+      responses:
+        "204": { description: deleted }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /labels/{id}/merge:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [projects]
+      operationId: mergeLabel
+      description: >
+        Folds this label into another: every issue carrying it moves across (issues
+        already carrying the target keep one label, not two), then this label is
+        deleted. Both must be in the same project, or both global — merging across
+        projects would leave issues carrying a label their project has never heard of.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [into_id]
+              properties:
+                into_id: { type: string, format: uuid, description: "the label that survives" }
+      responses:
+        "200": { description: "the surviving label", content: { application/json: { schema: { $ref: "#/components/schemas/Label" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { description: "same label, or different scopes", content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
 
   /projects/{key}/components:
     parameters: [{ $ref: "#/components/parameters/ProjectKey" }]
@@ -1043,6 +1199,49 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/ObservabilityAlert" } } }
       responses: { "202": { description: accepted } }
 
+  /settings/integrations:
+    get:
+      tags: [system, integrations]
+      operationId: getIntegrationSettings
+      description: >
+        What the inbound integrations are actually doing right now. Admin only. The
+        signing secrets are never returned — only whether one is set and whether it
+        came from config.yaml or from this endpoint. Outbound delivery (Omni-Notify)
+        is reported read-only: its client is built at startup and where it lives is
+        bootstrap config.
+      responses:
+        "200": { description: settings, content: { application/json: { schema: { $ref: "#/components/schemas/IntegrationSettings" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      tags: [system, integrations]
+      operationId: updateIntegrationSettings
+      description: >
+        Patches the sources named in the body and leaves the others alone; the change
+        applies to the next delivery, with no redeploy. Omitted fields keep what is
+        stored, so saving the enabled toggle cannot silently drop a secret the form
+        never showed. An empty webhook_secret clears the secret override, and
+        "reset": true drops the source's override entirely — both hand the decision
+        back to config.yaml.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: { $ref: "#/components/schemas/InboundIntegrationPatch" }
+              propertyNames: { enum: [git, logging, metrics] }
+      responses:
+        "200":
+          description: updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  inbound: { type: array, items: { $ref: "#/components/schemas/InboundIntegration" } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
   /dashboards/overview:
     get:
       tags: [dashboards]
@@ -1408,7 +1607,61 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         query: { type: string }
+        description: { type: string }
+        sort: { type: string }
+        is_shared: { type: boolean, description: "owned by a project rather than a person" }
+        is_default: { type: boolean }
+        project_key: { type: string, description: "empty for personal views" }
+        position: { type: integer }
+        author: { $ref: "#/components/schemas/User" }
         created_at: { type: string, format: date-time }
+
+    Label:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        color: { type: string }
+        description: { type: string }
+        issue_count: { type: integer, description: "how many issues carry it" }
+        is_global:
+          type: boolean
+          description: "belongs to no project, offered in every one; editing takes admin:all"
+
+    InboundIntegration:
+      type: object
+      description: "One HMAC-authenticated inbound endpoint's live state."
+      properties:
+        source: { type: string, enum: [git, logging, metrics] }
+        enabled: { type: boolean }
+        has_secret: { type: boolean, description: "the secret itself is never returned" }
+        enabled_from: { type: string, enum: [settings, config] }
+        secret_from: { type: string, enum: [settings, config, none] }
+        endpoint: { type: string, description: "the URL the provider posts to" }
+        healthy:
+          type: boolean
+          description: >
+            False when enabled with no secret — the endpoint fails closed and rejects
+            every delivery with a 503, which is otherwise invisible from inside the app.
+
+    InboundIntegrationPatch:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        webhook_secret: { type: string, description: "empty clears the override and falls back to config.yaml" }
+        reset: { type: boolean, description: "drop this source's override entirely" }
+
+    IntegrationSettings:
+      type: object
+      properties:
+        inbound: { type: array, items: { $ref: "#/components/schemas/InboundIntegration" } }
+        notify:
+          type: object
+          description: "Outbound delivery, read-only — bootstrap config, not a runtime setting."
+          properties:
+            enabled: { type: boolean }
+            base_url: { type: string }
+            timeout: { type: string }
 
     SearchHit:
       type: object

@@ -35,6 +35,9 @@ func (s *Store) UpsertUser(ctx context.Context, in service.UpsertUserParams) (do
 	// COALESCE(NULLIF(...,'')) keeps existing profile fields when a caller (e.g. the
 	// per-request middleware validating an access token that carries no email/name)
 	// upserts with empty values — only the OIDC callback's id_token enrichment fills them.
+	// Once the user has set their own name/avatar (profile_overridden), the identity
+	// token stops winning: mirroring it back on every login would undo the edit each
+	// time they sign in. Email stays IdP-owned either way — it identifies them.
 	// Bootstrap: the very first user to sign in on a fresh install becomes owner, so
 	// there's always an admin without hand-editing the DB. Everyone else defaults to member.
 	const q = `
@@ -43,8 +46,10 @@ func (s *Store) UpsertUser(ctx context.Context, in service.UpsertUserParams) (do
 		        CASE WHEN NOT EXISTS (SELECT 1 FROM users) THEN 'owner'::app_role ELSE 'member'::app_role END)
 		ON CONFLICT (identity_sub) DO UPDATE
 		  SET email        = COALESCE(NULLIF(EXCLUDED.email, ''), users.email),
-		      display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), users.display_name),
-		      avatar_url   = COALESCE(NULLIF(EXCLUDED.avatar_url, ''), users.avatar_url),
+		      display_name = CASE WHEN users.profile_overridden THEN users.display_name
+		                          ELSE COALESCE(NULLIF(EXCLUDED.display_name, ''), users.display_name) END,
+		      avatar_url   = CASE WHEN users.profile_overridden THEN users.avatar_url
+		                          ELSE COALESCE(NULLIF(EXCLUDED.avatar_url, ''), users.avatar_url) END,
 		      last_seen_at = now(), updated_at = now()
 		RETURNING id, identity_sub, email, display_name, avatar_url, role`
 	var u domain.User
@@ -97,27 +102,6 @@ func (s *Store) ListProjects(ctx context.Context, limit, offset int32) ([]domain
 			return nil, err
 		}
 		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) ListLabels(ctx context.Context, projectKey string) ([]domain.Label, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT l.id, l.name, l.color FROM labels l
-		 LEFT JOIN projects p ON p.id = l.project_id
-		 WHERE l.project_id IS NULL OR p.key = $1
-		 ORDER BY l.name`, projectKey)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []domain.Label
-	for rows.Next() {
-		var l domain.Label
-		if err := rows.Scan(&l.ID, &l.Name, &l.Color); err != nil {
-			return nil, err
-		}
-		out = append(out, l)
 	}
 	return out, rows.Err()
 }
@@ -1288,6 +1272,23 @@ func (s *Store) ListUsers(ctx context.Context, limit int32) ([]domain.User, erro
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// UpdateUserProfile writes the fields a user owns about themselves. Setting either
+// one marks the profile overridden, which is what stops the next OIDC login from
+// mirroring the id_token's name back over it. A nil field is left alone.
+func (s *Store) UpdateUserProfile(ctx context.Context, userID uuid.UUID, in service.UpdateProfileInput) (domain.User, error) {
+	const q = `UPDATE users
+	              SET display_name       = COALESCE($2, display_name),
+	                  avatar_url         = COALESCE($3, avatar_url),
+	                  profile_overridden = TRUE,
+	                  updated_at         = now()
+	            WHERE id = $1
+	        RETURNING id, identity_sub, email, display_name, avatar_url, role`
+	var u domain.User
+	err := s.pool.QueryRow(ctx, q, userID, in.DisplayName, in.AvatarURL).
+		Scan(&u.ID, &u.IdentitySub, &u.Email, &u.DisplayName, &u.AvatarURL, &u.Role)
+	return u, err
 }
 
 func (s *Store) UpdateUserRole(ctx context.Context, userID uuid.UUID, role domain.Role) (domain.User, error) {

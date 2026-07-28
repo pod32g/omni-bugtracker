@@ -19,9 +19,16 @@ type Comment struct {
 }
 
 type Label struct {
-	ID    uuid.UUID `json:"id"`
-	Name  string    `json:"name"`
-	Color string    `json:"color"`
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Color       string    `json:"color"`
+	Description string    `json:"description,omitempty"`
+	// IssueCount is how many issues carry the label — the number that says whether
+	// a label is load-bearing or a typo somebody made once.
+	IssueCount int `json:"issue_count"`
+	// IsGlobal labels belong to no project and are offered in every one; editing
+	// them is an install-wide change, so it takes admin rather than project:manage.
+	IsGlobal bool `json:"is_global"`
 }
 
 type LinkedCommit struct {

@@ -59,6 +59,38 @@ func (s *Store) ListSavedSearches(ctx context.Context, userID uuid.UUID) ([]doma
 	return collectViews(rows)
 }
 
+// ListSharedViews returns every shared view, across all projects. Settings curates
+// them in one list; hunting for a stale view project by project is how they go stale.
+// Project visibility matches ListProjects — any authenticated user sees them.
+func (s *Store) ListSharedViews(ctx context.Context) ([]domain.SavedSearch, error) {
+	rows, err := s.pool.Query(ctx, selectView+`
+		WHERE ss.is_shared ORDER BY COALESCE(p.key, ''), ss.position, lower(ss.name)`)
+	if err != nil {
+		return nil, err
+	}
+	return collectViews(rows)
+}
+
+// UpdateSavedSearch edits one of the caller's personal views. Upserting by name can
+// create and replace but never rename — this is the path that can.
+func (s *Store) UpdateSavedSearch(ctx context.Context, userID uuid.UUID, in service.UpdateSavedSearchInput) (domain.SavedSearch, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE saved_searches SET
+		   name        = COALESCE($3, name),
+		   query       = COALESCE($4, query),
+		   description = COALESCE($5, description),
+		   sort        = COALESCE($6, sort)
+		 WHERE id = $1 AND user_id = $2 AND NOT is_shared`,
+		in.ID, userID, in.Name, in.Query, in.Description, in.Sort)
+	if err != nil {
+		return domain.SavedSearch{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.SavedSearch{}, pgx.ErrNoRows
+	}
+	return scanView(s.pool.QueryRow(ctx, selectView+` WHERE ss.id = $1`, in.ID))
+}
+
 // ListProjectViews returns a project's shared views in their pinned order.
 func (s *Store) ListProjectViews(ctx context.Context, projectKey string) ([]domain.SavedSearch, error) {
 	rows, err := s.pool.Query(ctx, selectView+`
