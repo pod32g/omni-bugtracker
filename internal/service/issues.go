@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -93,7 +94,10 @@ func (s *Issues) List(ctx context.Context, f IssueFilter) ([]domain.Issue, int, 
 }
 
 // Transition validates the workflow edge, applies it, and emits the right event.
-func (s *Issues) Transition(ctx context.Context, id uuid.UUID, from, to domain.IssueStatus, actor uuid.UUID) (domain.Issue, error) {
+// A non-empty comment is recorded against the issue in the same transaction and
+// emits comment.created too, so watchers hear about the explanation and not just
+// the state change.
+func (s *Issues) Transition(ctx context.Context, id uuid.UUID, from, to domain.IssueStatus, actor uuid.UUID, comment string) (domain.Issue, error) {
 	if !domain.CanTransition(from, to) {
 		return domain.Issue{}, ErrInvalidTransition
 	}
@@ -108,12 +112,23 @@ func (s *Issues) Transition(ctx context.Context, id uuid.UUID, from, to domain.I
 	}
 
 	changes, _ := json.Marshal(map[string]any{"status": map[string]string{"from": string(from), "to": string(to)}})
-	return s.repo.TransitionIssue(ctx, id, to, actor, func(tx pgx.Tx) error {
-		return s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
+	commented := strings.TrimSpace(comment) != ""
+	return s.repo.TransitionIssue(ctx, id, to, actor, comment, changes, func(tx pgx.Tx) error {
+		if err := s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
 			EventType: eventType,
 			IssueID:   id.String(),
 			ActorID:   actor.String(),
 			Payload:   changes,
+		}); err != nil {
+			return err
+		}
+		if !commented {
+			return nil
+		}
+		return s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
+			EventType: events.IssueCommented,
+			IssueID:   id.String(),
+			ActorID:   actor.String(),
 		})
 	})
 }

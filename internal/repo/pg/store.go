@@ -579,7 +579,14 @@ func issueWhere(f service.IssueFilter) (string, []any) {
 	return strings.Join(where, " AND "), args
 }
 
-func (s *Store) TransitionIssue(ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID, publish service.PublishFn) (domain.Issue, error) {
+// TransitionIssue moves an issue to a new status. A non-empty comment is recorded
+// as a comment on the issue in the same transaction, so a transition and the
+// reason for it can never land apart — either both are visible or neither is.
+// changes is stored on the activity row; pass nil for none.
+func (s *Store) TransitionIssue(
+	ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID,
+	comment string, changes []byte, publish service.PublishFn,
+) (domain.Issue, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return domain.Issue{}, err
@@ -603,8 +610,15 @@ func (s *Store) TransitionIssue(ctx context.Context, id uuid.UUID, to domain.Iss
 	if tag.RowsAffected() == 0 {
 		return domain.Issue{}, pgx.ErrNoRows
 	}
-	if err := recordActivity(ctx, tx, id, actor, "issue.status_changed", "issue", id); err != nil {
+	// The from/to pair goes on the activity row: a timeline entry that says only
+	// "status changed" cannot be read back into what actually happened.
+	if err := recordActivityChanges(ctx, tx, id, actor, "issue.status_changed", "issue", id, changes); err != nil {
 		return domain.Issue{}, err
+	}
+	if strings.TrimSpace(comment) != "" {
+		if _, err := addCommentTx(ctx, tx, id, actor, comment); err != nil {
+			return domain.Issue{}, fmt.Errorf("transition comment: %w", err)
+		}
 	}
 	if publish != nil {
 		if err := publish(tx); err != nil {
@@ -917,6 +931,28 @@ func (s *Store) AddComment(ctx context.Context, issueID, author uuid.UUID, body 
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	c, err := addCommentTx(ctx, tx, issueID, author, body)
+	if err != nil {
+		return domain.Comment{}, err
+	}
+	if publish != nil {
+		if err := publish(tx); err != nil {
+			return domain.Comment{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Comment{}, err
+	}
+	return c, nil
+}
+
+// addCommentTx writes a comment and everything that has to happen alongside it,
+// inside a transaction the caller owns. Factored out of AddComment so a comment
+// made as part of another change — a status transition explaining itself — is
+// atomic with that change and picks up identical semantics: a comment that
+// skipped mention-syncing or auto-watch would be a second-class comment, and the
+// difference would only show up as someone not being notified.
+func addCommentTx(ctx context.Context, tx pgx.Tx, issueID, author uuid.UUID, body string) (domain.Comment, error) {
 	var c domain.Comment
 	c.IssueID = issueID
 	c.BodyMD = body
@@ -951,14 +987,6 @@ func (s *Store) AddComment(ctx context.Context, issueID, author uuid.UUID, body 
 	}
 	if err := syncMentions(ctx, tx, issueID, &c.ID, author, body); err != nil {
 		return domain.Comment{}, fmt.Errorf("sync mentions: %w", err)
-	}
-	if publish != nil {
-		if err := publish(tx); err != nil {
-			return domain.Comment{}, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return domain.Comment{}, err
 	}
 	return c, nil
 }

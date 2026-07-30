@@ -540,7 +540,9 @@ func (w *automationWorker) applyActions(ctx context.Context, issue domain.Issue,
 			if !domain.CanTransition(issue.Status, to) {
 				err = errors.New("invalid transition " + string(issue.Status) + " -> " + a.Value)
 			} else {
-				_, err = w.d.Store.TransitionIssue(ctx, issue.ID, to, botID, publish)
+				changes, _ := json.Marshal(map[string]any{
+					"status": map[string]string{"from": string(issue.Status), "to": string(to)}})
+				_, err = w.d.Store.TransitionIssue(ctx, issue.ID, to, botID, "", changes, publish)
 			}
 		case "add_comment":
 			_, err = w.d.Store.AddComment(ctx, issue.ID, botID, a.Value, publish)

@@ -2,6 +2,8 @@ package pg
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -9,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/omni/bugtracker/internal/domain"
 )
 
 // These tests exercise the SQL itself against a real Postgres, because the class of bug
@@ -343,4 +347,141 @@ func TestIntegrationClaimSLAEscalationsIsExactlyOnce(t *testing.T) {
 	if len(second) != 0 {
 		t.Errorf("second sweep re-claimed %d escalations; each (issue, kind) must be claimed once", len(second))
 	}
+}
+
+// TestIntegrationTransitionIssueComment is the regression test for the API
+// accepting a `comment` on a transition and silently discarding it. It also
+// pins the two properties that made the fix worth doing at the repo layer
+// rather than as a second call from the handler: the comment is atomic with the
+// status change, and the activity row records what the status actually became.
+func TestIntegrationTransitionIssueComment(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := &Store{pool: pool}
+
+	seed := func(t *testing.T) (issueID, actorID uuid.UUID) {
+		t.Helper()
+		suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+		var projectID uuid.UUID
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO users (identity_sub, email, display_name, role)
+			 VALUES ($1, $2, $3, 'owner') RETURNING id`,
+			"test:"+suffix, suffix+"@test.local", "tester-"+suffix).Scan(&actorID); err != nil {
+			t.Fatalf("seed user: %v", err)
+		}
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO projects (key, name) VALUES ($1, 'Transition Test') RETURNING id`,
+			"X"+strings.ToUpper(suffix[:4])).Scan(&projectID); err != nil {
+			t.Fatalf("seed project: %v", err)
+		}
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO issues (project_id, number, type, title, status, priority, reporter_id)
+			 VALUES ($1, 1, 'bug', 'transition target', 'open', 'p2', $2) RETURNING id`,
+			projectID, actorID).Scan(&issueID); err != nil {
+			t.Fatalf("seed issue: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+			_, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, actorID)
+		})
+		return issueID, actorID
+	}
+
+	commentBodies := func(t *testing.T, issueID uuid.UUID) []string {
+		t.Helper()
+		rows, err := pool.Query(ctx,
+			`SELECT body_md FROM comments WHERE issue_id = $1 AND deleted_at IS NULL`, issueID)
+		if err != nil {
+			t.Fatalf("read comments: %v", err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var b string
+			if err := rows.Scan(&b); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			out = append(out, b)
+		}
+		return out
+	}
+
+	changesOf := func(t *testing.T, issueID uuid.UUID, verb string) string {
+		t.Helper()
+		var changes []byte
+		if err := pool.QueryRow(ctx,
+			`SELECT changes FROM activity WHERE issue_id = $1 AND verb = $2
+			 ORDER BY occurred_at DESC LIMIT 1`, issueID, verb).Scan(&changes); err != nil {
+			t.Fatalf("read activity %s: %v", verb, err)
+		}
+		return string(changes)
+	}
+
+	t.Run("comment is recorded", func(t *testing.T) {
+		issueID, actorID := seed(t)
+		changes := []byte(`{"status":{"from":"open","to":"resolved"}}`)
+		issue, err := store.TransitionIssue(ctx, issueID, domain.StatusResolved, actorID,
+			"fixed in a0cf1ff", changes, nil)
+		if err != nil {
+			t.Fatalf("transition: %v", err)
+		}
+		if issue.Status != domain.StatusResolved {
+			t.Fatalf("status = %q", issue.Status)
+		}
+		got := commentBodies(t, issueID)
+		if len(got) != 1 || got[0] != "fixed in a0cf1ff" {
+			t.Fatalf("comment not recorded: %#v", got)
+		}
+		// The timeline must say what the status became, not just that it changed.
+		// Compare parsed, since jsonb round-trips with its own spacing and key order.
+		var recorded struct {
+			Status struct{ From, To string } `json:"status"`
+		}
+		raw := changesOf(t, issueID, "issue.status_changed")
+		if err := json.Unmarshal([]byte(raw), &recorded); err != nil {
+			t.Fatalf("activity changes not JSON: %s", raw)
+		}
+		if recorded.Status.From != "open" || recorded.Status.To != "resolved" {
+			t.Fatalf("activity changes = %s", raw)
+		}
+		// The comment gets a timeline entry of its own, exactly as AddComment would.
+		if changesOf(t, issueID, "comment.created") == "" {
+			t.Fatal("no comment.created activity entry")
+		}
+	})
+
+	t.Run("empty and whitespace comments create nothing", func(t *testing.T) {
+		for _, body := range []string{"", "   ", "\n\t "} {
+			issueID, actorID := seed(t)
+			if _, err := store.TransitionIssue(ctx, issueID, domain.StatusResolved, actorID,
+				body, nil, nil); err != nil {
+				t.Fatalf("transition: %v", err)
+			}
+			if got := commentBodies(t, issueID); len(got) != 0 {
+				t.Fatalf("body %q produced comments: %#v", body, got)
+			}
+		}
+	})
+
+	// The reason this belongs in one transaction: if publishing fails after the
+	// status update, neither the status change nor its explanation may survive.
+	t.Run("a failure rolls back both", func(t *testing.T) {
+		issueID, actorID := seed(t)
+		boom := errors.New("publish exploded")
+		_, err := store.TransitionIssue(ctx, issueID, domain.StatusResolved, actorID,
+			"should not survive", nil, func(pgx.Tx) error { return boom })
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want %v", err, boom)
+		}
+		var status string
+		if err := pool.QueryRow(ctx, `SELECT status FROM issues WHERE id = $1`, issueID).Scan(&status); err != nil {
+			t.Fatalf("read status: %v", err)
+		}
+		if status != "open" {
+			t.Errorf("status committed despite failure: %q", status)
+		}
+		if got := commentBodies(t, issueID); len(got) != 0 {
+			t.Errorf("comment committed despite failure: %#v", got)
+		}
+	})
 }

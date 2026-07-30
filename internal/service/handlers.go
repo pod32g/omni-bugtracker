@@ -2341,7 +2341,7 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 				fail(issue.Key, "forbidden (transition)")
 				continue
 			}
-			if _, err := h.issues.Transition(r.Context(), issue.ID, issue.Status, *body.Status, actor); err != nil {
+			if _, err := h.issues.Transition(r.Context(), issue.ID, issue.Status, *body.Status, actor, ""); err != nil {
 				fail(issue.Key, "transition: "+err.Error())
 				continue
 			}
@@ -2671,6 +2671,10 @@ func (h *httpHandlers) transition(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		To domain.IssueStatus `json:"to"`
+		// Optional note explaining the transition, recorded as a comment on the
+		// issue. The contract has always advertised this; until it was decoded
+		// here the field was accepted and silently thrown away.
+		Comment string `json:"comment"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
@@ -2681,8 +2685,14 @@ func (h *httpHandlers) transition(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", err.Error())
 		return
 	}
+	// Leaving a comment is a separate permission from moving the issue, and the
+	// caller needs both to do both.
+	if strings.TrimSpace(body.Comment) != "" && !h.canOnProject(r.Context(), p, projectKey, auth.PermCommentCreate) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing comment:create")
+		return
+	}
 	actor, _ := uuid.Parse(p.UserID)
-	updated, err := h.issues.Transition(r.Context(), issue.ID, issue.Status, body.To, actor)
+	updated, err := h.issues.Transition(r.Context(), issue.ID, issue.Status, body.To, actor, body.Comment)
 	if err == ErrInvalidTransition {
 		httpapi.WriteProblem(w, http.StatusConflict, "invalid transition",
 			string(issue.Status)+" → "+string(body.To))

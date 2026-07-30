@@ -86,7 +86,7 @@ type Repository interface {
 	// FindSimilarIssues ranks a project's live issues against a query built from a
 	// draft title, for duplicate detection at filing time.
 	FindSimilarIssues(ctx context.Context, projectKey, query, excludeKey string, limit int32) ([]domain.SimilarIssue, error)
-	TransitionIssue(ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID, publish PublishFn) (domain.Issue, error)
+	TransitionIssue(ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID, comment string, changes []byte, publish PublishFn) (domain.Issue, error)
 	UpdateIssue(ctx context.Context, id, actor uuid.UUID, in UpdateIssueInput, publish PublishFn) (domain.Issue, error)
 	MoveIssue(ctx context.Context, id, actor uuid.UUID, targetProjectKey string, publish PublishFn) (domain.Issue, error)
 	SoftDeleteIssue(ctx context.Context, id, actor uuid.UUID, publish PublishFn) error
