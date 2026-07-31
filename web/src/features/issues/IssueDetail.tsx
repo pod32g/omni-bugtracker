@@ -247,7 +247,12 @@ export function IssueDetail() {
 
       {/* Body */}
       <div className="mx-auto grid w-full max-w-[1160px] lg:grid-cols-[minmax(0,1fr)_320px]">
-        <article className="flex flex-col gap-8 px-6 py-9 sm:px-8 lg:px-10">
+        {/* min-w-0: as a grid item the article's automatic minimum size is its
+            min-content width, which a pasted stack trace makes enormous. The lg
+            template says minmax(0,1fr) and so was safe on a wide screen; below it
+            there is no template at all, and any long code block stretched the whole
+            column off the side of a phone. */}
+        <article className="flex min-w-0 flex-col gap-8 px-6 py-9 sm:px-8 lg:px-10">
           <header className="flex flex-col gap-3.5">
             <div className="flex flex-wrap items-center gap-2.5">
               <SeverityPill severity={i.severity} />
@@ -1369,11 +1374,22 @@ export function toggleTaskAt(body: string, index: number, checked: boolean): str
   return lines.join("\n");
 }
 
+/**
+ * Callout is one half of the expected/actual pair.
+ *
+ * min-w-0 is load-bearing. A flex item's automatic minimum size is its content's
+ * min-content width, and a pasted log line is one unbreakable run — so the Actual
+ * card grew to the width of the longest line (2600px against a 630px row), slid
+ * under the metadata sidebar, and squeezed Expected down to one word per line. The
+ * code block already scrolls; it just needed to be allowed to.
+ */
 function Callout({ tone, label, body }: { tone: "resolved" | "critical"; label: string; body: string }) {
   const border = tone === "resolved" ? "border-l-resolved" : "border-l-critical";
   const text = tone === "resolved" ? "text-resolved" : "text-critical";
   return (
-    <div className={`flex grow basis-0 flex-col gap-2 rounded-md border-l-[3px] bg-panel/50 px-4 py-3.5 ${border}`}>
+    <div
+      className={`flex min-w-0 grow basis-0 flex-col gap-2 rounded-md border-l-[3px] bg-panel/50 px-4 py-3.5 ${border}`}
+    >
       <span className={`font-mono text-[10px] font-medium uppercase tracking-caps ${text}`}>{label}</span>
       <Markdown body={body} className="markdown text-[14px] leading-[1.55]" />
     </div>
