@@ -31,38 +31,58 @@ type eventWorker struct {
 	d Deps
 }
 
+// Work fans one domain event out into downstream jobs, in a single transaction.
+//
+// The transaction is the point. This used to be four independent non-transactional
+// inserts, so a failure at webhook 3 of 5 returned an error and River retried the
+// whole job: notify was enqueued twice, automation was evaluated twice (and rules can
+// post the same bot comment again), and hooks 1 and 2 were re-delivered with *fresh*
+// deliveryIDs — changing the one handle a receiver has to dedupe on, so a correct
+// consumer could not tell it was the same delivery. Rolling the partial fan-out back
+// means a retry produces exactly one of everything.
 func (w *eventWorker) Work(ctx context.Context, job *river.Job[events.DomainEventArgs]) error {
 	client := river.ClientFromContext[pgx.Tx](ctx)
 	ev := job.Args
 	w.logEvent(ctx, ev)
 
+	if ev.IssueID == "" {
+		return nil
+	}
+
+	tx, err := w.d.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
 	// Notify on every issue event; automation always evaluates.
 	//
 	// There is no search-index fan-out: search is Postgres FTS over generated tsvector
 	// columns, maintained by the database itself, so there is nothing to project.
-	if ev.IssueID != "" {
-		if _, err := client.Insert(ctx, events.NotifyJobArgs{
-			EventType: ev.EventType, IssueID: ev.IssueID, ActorID: ev.ActorID,
-		}, nil); err != nil {
-			return err
-		}
-		if _, err := client.Insert(ctx, events.AutomationJobArgs{
-			EventType: ev.EventType, IssueID: ev.IssueID, ActorID: ev.ActorID,
-		}, nil); err != nil {
-			return err
-		}
-		if err := w.fanOutMentions(ctx, client, ev); err != nil {
-			return err
-		}
+	if _, err := client.InsertTx(ctx, tx, events.NotifyJobArgs{
+		EventType: ev.EventType, IssueID: ev.IssueID, ActorID: ev.ActorID,
+	}, nil); err != nil {
+		return err
+	}
+	if _, err := client.InsertTx(ctx, tx, events.AutomationJobArgs{
+		EventType: ev.EventType, IssueID: ev.IssueID, ActorID: ev.ActorID,
+	}, nil); err != nil {
+		return err
 	}
 	// Fan out to subscribed webhooks: active hooks whose event filter matches
 	// (empty filter = everything) and whose project scope covers the issue.
-	if ev.IssueID != "" {
-		if err := w.fanOutWebhooks(ctx, client, ev); err != nil {
-			return err
-		}
+	if err := w.fanOutWebhooks(ctx, client, tx, ev); err != nil {
+		return err
 	}
-	return nil
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	// Mentions run after the commit above, on their own transaction, because the claim
+	// they make is independent: they must be told exactly once regardless of how many
+	// events an issue produces, and folding them in here would tie that guarantee to
+	// this event's success.
+	return w.fanOutMentions(ctx, client, ev)
 }
 
 // logEvent writes the domain event itself to the log — the record of what the tracker
@@ -103,25 +123,27 @@ func (w *eventWorker) fanOutMentions(ctx context.Context, client *river.Client[p
 	if err != nil {
 		return nil //nolint:nilerr
 	}
-	recipients, err := w.d.Store.ClaimPendingMentions(ctx, issueID)
-	if err != nil || len(recipients) == 0 {
+	// Enqueued inside the claim: stamping notified_at is a promise that somebody will
+	// be told, and making that promise in one transaction while keeping it in another
+	// meant a failure in between consumed the mention with nothing to show for it.
+	_, err = w.d.Store.ClaimPendingMentions(ctx, issueID, func(tx pgx.Tx, recipients []string) error {
+		_, err := client.InsertTx(ctx, tx, events.NotifyJobArgs{
+			EventType:  events.UserMentioned,
+			IssueID:    ev.IssueID,
+			ActorID:    ev.ActorID,
+			Recipients: recipients,
+		}, nil)
 		return err
-	}
-	_, err = client.Insert(ctx, events.NotifyJobArgs{
-		EventType:  events.UserMentioned,
-		IssueID:    ev.IssueID,
-		ActorID:    ev.ActorID,
-		Recipients: recipients,
-	}, nil)
+	})
 	return err
 }
 
-func (w *eventWorker) fanOutWebhooks(ctx context.Context, client *river.Client[pgx.Tx], ev events.DomainEventArgs) error {
+func (w *eventWorker) fanOutWebhooks(ctx context.Context, client *river.Client[pgx.Tx], tx pgx.Tx, ev events.DomainEventArgs) error {
 	issueID, err := uuid.Parse(ev.IssueID)
 	if err != nil {
 		return nil //nolint:nilerr // non-issue events don't fan out
 	}
-	rows, err := w.d.DB.Query(ctx, `
+	rows, err := tx.Query(ctx, `
 		SELECT w.id FROM webhooks w
 		WHERE w.is_active
 		  AND (cardinality(w.events) = 0 OR $2 = ANY(w.events))
@@ -161,12 +183,12 @@ func (w *eventWorker) fanOutWebhooks(ctx context.Context, client *river.Client[p
 
 	for _, hookID := range hookIDs {
 		var deliveryID uuid.UUID
-		if err := w.d.DB.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			INSERT INTO webhook_deliveries (webhook_id, event_type, payload)
 			VALUES ($1, $2, $3) RETURNING id`, hookID, ev.EventType, payload).Scan(&deliveryID); err != nil {
 			return err
 		}
-		if _, err := client.Insert(ctx, events.WebhookJobArgs{
+		if _, err := client.InsertTx(ctx, tx, events.WebhookJobArgs{
 			WebhookID: hookID.String(), DeliveryID: deliveryID.String(),
 			EventType: ev.EventType, Payload: payload,
 		}, nil); err != nil {
@@ -595,24 +617,26 @@ type wakeSnoozedWorker struct {
 }
 
 func (w *wakeSnoozedWorker) Work(ctx context.Context, _ *river.Job[events.WakeSnoozedArgs]) error {
-	ids, err := w.d.Store.WakeSnoozedIssues(ctx)
+	client := river.ClientFromContext[pgx.Tx](ctx)
+
+	ids, err := w.d.Store.WakeSnoozedIssues(ctx, func(tx pgx.Tx, ids []uuid.UUID) error {
+		for _, id := range ids {
+			// A woken issue is back in everyone's queue, which is the whole point of
+			// the snooze — so say so, through the same fan-out every other event uses,
+			// and inside the transaction that cleared it so the two cannot disagree.
+			if _, err := client.InsertTx(ctx, tx, events.DomainEventArgs{
+				EventType: events.IssueWoke, IssueID: id.String(),
+			}, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	if len(ids) == 0 {
-		return nil
-	}
-	w.d.Logger.Info("woke snoozed issues", "count", len(ids))
-
-	client := river.ClientFromContext[pgx.Tx](ctx)
-	for _, id := range ids {
-		// A woken issue is back in everyone's queue, which is the whole point of the
-		// snooze — so say so, through the same fan-out every other event uses.
-		if _, err := client.Insert(ctx, events.DomainEventArgs{
-			EventType: events.IssueWoke, IssueID: id.String(),
-		}, nil); err != nil {
-			return err
-		}
+	if len(ids) > 0 {
+		w.d.Logger.Info("woke snoozed issues", "count", len(ids))
 	}
 	return nil
 }
@@ -627,33 +651,38 @@ type slaSweepWorker struct {
 }
 
 func (w *slaSweepWorker) Work(ctx context.Context, _ *river.Job[events.SLASweepArgs]) error {
-	claims, err := w.d.Store.ClaimSLAEscalations(ctx)
+	client := river.ClientFromContext[pgx.Tx](ctx)
+
+	// The announcements are enqueued inside the claiming transaction, so the claim and
+	// the telling either both happen or neither does. Enqueuing afterwards meant that
+	// an insert failing on escalation 7 of 20 left 13 breaches marked as escalated and
+	// announced to nobody, and the next sweep skipped them for exactly that reason.
+	claims, err := w.d.Store.ClaimSLAEscalations(ctx, func(tx pgx.Tx, claims []service.SLAEscalation) error {
+		for _, c := range claims {
+			eventType := events.IssueSLAWarning
+			if strings.HasSuffix(c.Kind, "_breached") {
+				eventType = events.IssueSLABreached
+			}
+			// The kind ("response_warning") rides in the payload rather than in the
+			// event type: a webhook subscriber filtering on issue.sla_breached wants
+			// both targets, and one that cares which can read it.
+			payload, err := json.Marshal(map[string]string{"target": c.Kind})
+			if err != nil {
+				return err
+			}
+			if _, err := client.InsertTx(ctx, tx, events.DomainEventArgs{
+				EventType: eventType, IssueID: c.IssueID.String(), Payload: payload,
+			}, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	if len(claims) == 0 {
-		return nil
-	}
-	w.d.Logger.Info("sla sweep", "escalations", len(claims))
-
-	client := river.ClientFromContext[pgx.Tx](ctx)
-	for _, c := range claims {
-		eventType := events.IssueSLAWarning
-		if strings.HasSuffix(c.Kind, "_breached") {
-			eventType = events.IssueSLABreached
-		}
-		// The kind ("response_warning") rides in the payload rather than in the event
-		// type: a webhook subscriber filtering on issue.sla_breached wants both
-		// targets, and one that cares which can read it.
-		payload, err := json.Marshal(map[string]string{"target": c.Kind})
-		if err != nil {
-			return err
-		}
-		if _, err := client.Insert(ctx, events.DomainEventArgs{
-			EventType: eventType, IssueID: c.IssueID.String(), Payload: payload,
-		}, nil); err != nil {
-			return err
-		}
+	if len(claims) > 0 {
+		w.d.Logger.Info("sla sweep", "escalations", len(claims))
 	}
 	return nil
 }

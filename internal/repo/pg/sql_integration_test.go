@@ -334,19 +334,40 @@ func TestIntegrationClaimSLAEscalationsIsExactlyOnce(t *testing.T) {
 		}
 	})
 
-	first, err := s.ClaimSLAEscalations(ctx)
+	first, err := s.ClaimSLAEscalations(ctx, nil)
 	if err != nil {
 		t.Fatalf("first sweep: %v", err)
 	}
 	if len(first) == 0 {
 		t.Skip("no issues past an SLA threshold in this database — nothing to claim")
 	}
-	second, err := s.ClaimSLAEscalations(ctx)
+	second, err := s.ClaimSLAEscalations(ctx, nil)
 	if err != nil {
 		t.Fatalf("second sweep: %v", err)
 	}
 	if len(second) != 0 {
 		t.Errorf("second sweep re-claimed %d escalations; each (issue, kind) must be claimed once", len(second))
+	}
+
+	// The claim is only worth making if it can be announced. An enqueue that fails
+	// must take the claim with it, or the escalation is recorded as told and never
+	// told — which the next sweep will not fix, because it skips claimed rows.
+	if _, err := pool.Exec(ctx, `DELETE FROM issue_sla_events`); err != nil {
+		t.Fatalf("reset for rollback check: %v", err)
+	}
+	boom := errors.New("enqueue exploded")
+	if _, err := s.ClaimSLAEscalations(ctx, func(pgx.Tx, []service.SLAEscalation) error {
+		return boom
+	}); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want %v", err, boom)
+	}
+	again, err := s.ClaimSLAEscalations(ctx, nil)
+	if err != nil {
+		t.Fatalf("sweep after rollback: %v", err)
+	}
+	if len(again) != len(first) {
+		t.Errorf("after a failed enqueue %d escalations are re-claimable, want %d — the "+
+			"rest were consumed with nobody told", len(again), len(first))
 	}
 }
 

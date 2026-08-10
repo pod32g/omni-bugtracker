@@ -158,12 +158,14 @@ type Repository interface {
 	DeleteSLAPolicy(ctx context.Context, id uuid.UUID) (bool, error)
 	// ClaimSLAEscalations atomically claims each (issue, threshold) crossing exactly
 	// once, so a warning cannot re-fire on every worker run.
-	ClaimSLAEscalations(ctx context.Context) ([]SLAEscalation, error)
+	// enqueue runs inside the claiming transaction, so a claim that cannot be
+	// announced is rolled back rather than silently swallowed.
+	ClaimSLAEscalations(ctx context.Context, enqueue func(pgx.Tx, []SLAEscalation) error) ([]SLAEscalation, error)
 
 	// SetIssueSnooze hides an issue until a time, or wakes it when until is nil.
 	SetIssueSnooze(ctx context.Context, id, actor uuid.UUID, until *time.Time, note string, publish PublishFn) (domain.Issue, error)
 	// WakeSnoozedIssues clears every snooze that has come due, returning the ids.
-	WakeSnoozedIssues(ctx context.Context) ([]uuid.UUID, error)
+	WakeSnoozedIssues(ctx context.Context, enqueue func(pgx.Tx, []uuid.UUID) error) ([]uuid.UUID, error)
 	// ArchiveStaleClosed archives every non-archived issue closed more than `days`
 	// ago (attributed to actor). Returns how many were archived. Used by auto-archive.
 	ArchiveStaleClosed(ctx context.Context, days int, actor uuid.UUID) (int, error)
@@ -262,7 +264,7 @@ type Repository interface {
 	// ClaimPendingMentions stamps and returns the email addresses of everyone newly
 	// @mentioned on an issue. The claim is the stamp, so a mention notifies exactly
 	// once however many events fire for the issue.
-	ClaimPendingMentions(ctx context.Context, issueID uuid.UUID) ([]string, error)
+	ClaimPendingMentions(ctx context.Context, issueID uuid.UUID, enqueue func(pgx.Tx, []string) error) ([]string, error)
 	// ListReferencedBy returns the issues whose prose mentions this one. Derived from
 	// the text on every write, unlike relations, which are created deliberately.
 	ListReferencedBy(ctx context.Context, issueID uuid.UUID) ([]domain.IssueReference, error)
