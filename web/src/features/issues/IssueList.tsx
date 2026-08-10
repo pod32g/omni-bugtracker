@@ -10,6 +10,7 @@ import {
   type SavedSearch,
 } from "../../lib/api";
 import { useProject } from "../../lib/project";
+import { issueKeys } from "../../lib/queryKeys";
 import { useShortcut } from "../../lib/shortcuts";
 import { timeAgo } from "../../lib/activity";
 import { sameUnit } from "../../lib/duration";
@@ -95,7 +96,7 @@ export function IssueList() {
   // Paged: a project can have far more issues than one page (the API caps at 200 per
   // request), so "Load more" fetches the next offset and appends.
   const issues = useInfiniteQuery({
-    queryKey: ["issues", projectKey, filter, sort],
+    queryKey: issueKeys.list(projectKey, filter, sort),
     queryFn: ({ pageParam }) => api.listIssues(projectKey, filter, sort, PAGE_SIZE, pageParam),
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
@@ -819,7 +820,7 @@ function BulkBar({ ids, projectKey, onDone }: { ids: string[]; projectKey: strin
   const run = useMutation({
     mutationFn: (body: Parameters<typeof api.bulkUpdateIssues>[0]) => api.bulkUpdateIssues(body),
     onSuccess: (res) => {
-      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: issueKeys.all });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       if (res.failed.length > 0)
         window.alert(

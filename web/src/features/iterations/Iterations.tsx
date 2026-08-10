@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type BurndownPoint, type Iteration, type Velocity } from "../../lib/api";
 import { useProject } from "../../lib/project";
+import { issueKeys } from "../../lib/queryKeys";
 import { formatMinutes, sameUnit } from "../../lib/duration";
 import { IconPlus } from "../../components/icons";
 
@@ -35,7 +36,7 @@ export function Iterations() {
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["iterations", projectKey] });
     qc.invalidateQueries({ queryKey: ["velocity", projectKey] });
-    qc.invalidateQueries({ queryKey: ["issues"] });
+    qc.invalidateQueries({ queryKey: issueKeys.all });
   };
 
   const items = iterations.data?.items ?? [];

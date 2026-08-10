@@ -9,6 +9,7 @@ const EVENT_LABELS: [string, string][] = [
   ["user.mentioned", "Someone mentions me"],
   ["issue.assigned", "An issue is assigned to me"],
   ["comment.created", "Someone comments on an issue I follow"],
+  ["comment.edited", "A comment I was mentioned in is edited"],
   ["issue.status_changed", "Status changes"],
   ["issue.resolved", "An issue is resolved"],
   ["issue.closed", "An issue is closed"],

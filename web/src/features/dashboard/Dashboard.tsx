@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 import { api, type DashboardOverview, type Issue } from "../../lib/api";
 import { useProject } from "../../lib/project";
+import { issueKeys } from "../../lib/queryKeys";
 import { describeActivity, timeAgo } from "../../lib/activity";
 import { formatMinutes } from "../../lib/duration";
 import { Avatar, PriorityText, StatusDot, StatusPill } from "../../components/Badges";
@@ -209,7 +210,7 @@ function IssueGadget({
   emptyText: string;
 }) {
   const issues = useQuery({
-    queryKey: ["issues", projectKey, filter, ""],
+    queryKey: issueKeys.gadget(projectKey, filter, GADGET_ROWS),
     // Fetch what is rendered. This asked for the default page of 50 to display six,
     // which on a 300-issue project pulls 100 rows across the two gadgets per visit.
     // `total` below is the unpaged count, so "+N more" stays right regardless.

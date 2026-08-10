@@ -5,11 +5,32 @@ import { api } from "../../lib/api";
 const inputClass =
   "w-full rounded-md border border-hairline bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-blueprint";
 
-export function Field({ label, children, className = "" }: { label: string; children: ReactNode; className?: string }) {
+/**
+ * `error` is the server's message for this specific field, from an RFC 9457 `errors`
+ * member. Rendering it here rather than only in the form-level banner is what makes a
+ * rejection actionable: the server names the field it refused, and the user should not
+ * have to work out which of eleven inputs that was.
+ */
+export function Field({
+  label,
+  children,
+  className = "",
+  error,
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+  error?: string;
+}) {
   return (
     <label className={`block ${className}`}>
       <span className="mb-1 block font-mono text-[10px] uppercase tracking-caps text-graphite-soft">{label}</span>
       {children}
+      {error && (
+        <span role="alert" className="mt-1 block text-xs text-critical">
+          {error}
+        </span>
+      )}
     </label>
   );
 }

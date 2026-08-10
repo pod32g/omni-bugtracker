@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type FieldDefinition, type FieldValue, type User } from "../../lib/api";
+import { issueKeys } from "../../lib/queryKeys";
 
 /**
  * Custom fields are rendered generically, from the definition's type alone. Nothing
@@ -193,7 +194,7 @@ export function CustomFieldsPanel({ issueKey, projectKey }: { issueKey: string; 
     onSuccess: () => {
       setEditing(false);
       qc.invalidateQueries({ queryKey: ["issue-fields", issueKey] });
-      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: issueKeys.all });
     },
   });
 

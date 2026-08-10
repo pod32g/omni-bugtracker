@@ -14,6 +14,8 @@ export interface User {
   display_name: string;
   avatar_url?: string;
   role?: string;
+  /** False for a deactivated account. Only ever false in the admin members list. */
+  is_active?: boolean;
 }
 
 export interface Project {
@@ -562,9 +564,44 @@ export interface DashboardOverview {
 const BASE = "/api/v1";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /**
+   * Per-field messages from an RFC 9457 `errors` member, keyed by field name.
+   *
+   * The server writes a specific sentence for each field it rejects ("must be 80
+   * characters or fewer", "that template belongs to a different project") but a 422
+   * from WriteValidation carries no `detail`, so reading `detail || title` showed
+   * every one of them as the literal string "validation failed". Forms should render
+   * these next to the field; `message` below is the fallback for callers that only
+   * have room for one line.
+   */
+  constructor(
+    public status: number,
+    message: string,
+    public errors: Record<string, string> = {},
+  ) {
     super(message);
   }
+
+  /** The message for `field`, if the server rejected that specific field. */
+  fieldError(field: string): string | undefined {
+    return this.errors[field];
+  }
+}
+
+/**
+ * Builds the single-line message for a problem response. A validation failure with
+ * field errors reads as "title: field — message", which is what the user needs; the
+ * bare title alone tells them only that something was wrong.
+ */
+function problemMessage(problem: Record<string, unknown>, status: number): string {
+  const errors = (problem.errors ?? {}) as Record<string, string>;
+  const entries = Object.entries(errors);
+  if (entries.length > 0) {
+    return entries.map(([field, msg]) => `${field} — ${msg}`).join("; ");
+  }
+  return (
+    (problem.detail as string) || (problem.title as string) || `HTTP ${status}`
+  );
 }
 
 // Server limits change only on redeploy, so fetch them once per page load rather than
@@ -628,7 +665,7 @@ async function request<T>(path: string, init: RequestInit = {}, allowRefresh = t
   }
   if (!res.ok) {
     const problem = await res.json().catch(() => ({ title: res.statusText }));
-    throw new ApiError(res.status, problem.detail || problem.title || `HTTP ${res.status}`);
+    throw new ApiError(res.status, problemMessage(problem, res.status), problem.errors ?? {});
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -645,7 +682,18 @@ export const api = {
   /** Self-service profile edit. Email and role aren't settable — the IdP owns one, admins the other. */
   updateMe: (patch: { display_name?: string; avatar_url?: string }) =>
     request<User>("/me", { method: "PATCH", body: JSON.stringify(patch) }),
-  listUsers: () => request<{ items: User[] }>("/users"),
+  /**
+   * Active users. `includeInactive` is admin-only and exists for the Members screen —
+   * every other caller is an assignee picker, which must not offer a leaver.
+   */
+  listUsers: (includeInactive = false) =>
+    request<{ items: User[] }>(`/users${includeInactive ? "?include_inactive=1" : ""}`),
+  /** Deactivate or reactivate a user. Deactivating also revokes their API tokens. */
+  setUserActive: (id: string, isActive: boolean) =>
+    request<User>(`/users/${id}/active`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: isActive }),
+    }),
   updateUserRole: (id: string, role: string) =>
     request<User>(`/users/${id}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
   getArchiveSettings: () => request<{ auto_after_days: number }>("/settings/archive"),
@@ -1009,7 +1057,7 @@ export const api = {
     if (res.status === 401 && (await tryRefresh())) res = await doFetch();
     if (!res.ok) {
       const problem = await res.json().catch(() => ({ title: res.statusText }));
-      throw new ApiError(res.status, problem.detail || problem.title || `HTTP ${res.status}`);
+      throw new ApiError(res.status, problemMessage(problem, res.status), problem.errors ?? {});
     }
     return res.json() as Promise<Attachment>;
   },

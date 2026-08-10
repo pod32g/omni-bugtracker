@@ -8,6 +8,7 @@ const VERBS: Record<string, string> = {
   "issue.closed": "closed this",
   "issue.reopened": "reopened this",
   "comment.created": "commented",
+  "comment.edited": "edited a comment",
   "issue.commit_linked": "linked a commit",
   "issue.pr_linked": "linked a pull request",
   "issue.resolved_by_git": "resolved via a commit",
