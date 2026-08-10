@@ -438,11 +438,21 @@ func (w *automationWorker) Work(ctx context.Context, job *river.Job[events.Autom
 	}
 
 	client := river.ClientFromContext[pgx.Tx](ctx)
-	publish := func(tx pgx.Tx) error {
-		_, err := client.InsertTx(ctx, tx, events.DomainEventArgs{
-			EventType: events.IssueUpdated, IssueID: issue.ID.String(), ActorID: botID.String(),
-		}, nil)
-		return err
+	// One closure per event type, rather than a single hard-coded issue.updated.
+	//
+	// Every action used to publish issue.updated whatever it actually did, so a rule
+	// that closed an issue announced it as an edit: webhooks subscribed to
+	// ["issue.closed"] never fired at all, and subscribers to everything received an
+	// event whose `event` field contradicted its own payload. Automation is the one
+	// actor with nobody watching the screen, which makes it the worst place to be
+	// wrong about what happened.
+	publishAs := func(eventType string) service.PublishFn {
+		return func(tx pgx.Tx) error {
+			_, err := client.InsertTx(ctx, tx, events.DomainEventArgs{
+				EventType: eventType, IssueID: issue.ID.String(), ActorID: botID.String(),
+			}, nil)
+			return err
+		}
 	}
 
 	for _, rule := range rules {
@@ -456,7 +466,7 @@ func (w *automationWorker) Work(ctx context.Context, job *river.Job[events.Autom
 				[]byte(`{"error":"bad actions json"}`))
 			continue
 		}
-		applied, actErr := w.applyActions(ctx, issue, actions, botID, publish)
+		applied, actErr := w.applyActions(ctx, issue, actions, botID, publishAs)
 		status, logLine := "matched", `{"actions_applied":`+strconv.Itoa(applied)+`}`
 		if actErr != nil {
 			status = "error"
@@ -515,26 +525,34 @@ func containsFold(list []string, want string) bool {
 	return false
 }
 
+// publishAs returns the publish hook for one event type — see the call site for why
+// this is per-action rather than fixed.
 func (w *automationWorker) applyActions(ctx context.Context, issue domain.Issue, actions []ruleAction,
-	botID uuid.UUID, publish service.PublishFn) (int, error) {
+	botID uuid.UUID, publishAs func(eventType string) service.PublishFn) (int, error) {
 	applied := 0
 	for _, a := range actions {
 		var err error
 		switch a.Kind {
 		case "set_priority":
 			p := domain.Priority(a.Value)
-			_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{Priority: &p}, publish)
+			_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{Priority: &p},
+				publishAs(events.IssueUpdated))
 		case "set_severity":
 			s := domain.Severity(a.Value)
-			_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{Severity: &s}, publish)
+			_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{Severity: &s},
+				publishAs(events.IssueUpdated))
 		case "set_assignee":
 			var uid uuid.UUID
 			if uid, err = uuid.Parse(a.Value); err == nil {
-				_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{AssigneeID: &uid}, publish)
+				// Assignment is its own event everywhere else — it is the one people
+				// subscribe to personally.
+				_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{AssigneeID: &uid},
+					publishAs(events.IssueAssigned))
 			}
 		case "add_label":
 			merged := append(append([]string{}, issue.Labels...), a.Value)
-			_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{Labels: &merged}, publish)
+			_, err = w.d.Store.UpdateIssue(ctx, issue.ID, botID, service.UpdateIssueInput{Labels: &merged},
+				publishAs(events.IssueUpdated))
 		case "set_status":
 			to := domain.IssueStatus(a.Value)
 			if !domain.CanTransition(issue.Status, to) {
@@ -542,10 +560,13 @@ func (w *automationWorker) applyActions(ctx context.Context, issue domain.Issue,
 			} else {
 				changes, _ := json.Marshal(map[string]any{
 					"status": map[string]string{"from": string(issue.Status), "to": string(to)}})
-				_, err = w.d.Store.TransitionIssue(ctx, issue.ID, to, botID, "", changes, publish)
+				// statusEvent maps resolved/closed/reopened to their own events, exactly
+				// as service.Issues.Transition does for a human doing the same thing.
+				_, err = w.d.Store.TransitionIssue(ctx, issue.ID, issue.Status, to, botID, "", changes,
+					publishAs(statusEvent(to)))
 			}
 		case "add_comment":
-			_, err = w.d.Store.AddComment(ctx, issue.ID, botID, a.Value, publish)
+			_, err = w.d.Store.AddComment(ctx, issue.ID, botID, a.Value, publishAs(events.IssueCommented))
 		default:
 			err = errors.New("unknown action kind " + a.Kind)
 		}
@@ -770,6 +791,17 @@ func (w *gitIngestWorker) applyRef(
 	if newStatus != nil && isAtOrPast(issue.Status, *newStatus) {
 		newStatus = nil
 	}
+	// And don't make a move the workflow forbids. isAtOrPast only ranks resolved and
+	// closed, so on its own it waves through in_progress → closed and blocked →
+	// resolved: a merged PR could close an issue somebody had explicitly marked
+	// blocked, from a code path that never asked the graph. The link itself still
+	// applies — the commit really does reference the issue, and dropping that because
+	// the status move is illegal would lose the more useful half.
+	if newStatus != nil && !domain.CanTransition(issue.Status, *newStatus) {
+		w.d.Logger.Info("git ingest: transition not allowed by the workflow, linking only",
+			"issue", issue.Key, "from", issue.Status, "to", *newStatus)
+		newStatus = nil
+	}
 
 	eventType := events.IssueUpdated
 	if newStatus != nil {
@@ -807,12 +839,20 @@ func mergedAt(pr *git.PullRequest) *time.Time {
 	return nil
 }
 
+// statusEvent maps a destination status to the event a move into it emits. It must
+// agree with the same switch in service.Issues.Transition — a status reached by a rule
+// or by a merged PR is the same fact as one reached by a person clicking, and a
+// subscriber cannot be expected to know which path produced it. `reopened` was missing
+// here and present there, so a regression reopened by automation announced itself as a
+// generic status change while the human path called it issue.reopened.
 func statusEvent(s domain.IssueStatus) string {
 	switch s {
 	case domain.StatusResolved:
 		return events.IssueResolved
 	case domain.StatusClosed:
 		return events.IssueClosed
+	case domain.StatusReopened:
+		return events.IssueReopened
 	default:
 		return events.IssueStatusChanged
 	}

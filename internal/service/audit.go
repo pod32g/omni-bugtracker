@@ -18,6 +18,8 @@ import (
 // filter by action is a stable string rather than free text.
 const (
 	AuditUserRoleChanged   = "user.role_changed"
+	AuditUserDeactivated   = "user.deactivated"
+	AuditUserReactivated   = "user.reactivated"
 	AuditTokenCreated      = "token.created"
 	AuditTokenRevoked      = "token.revoked"
 	AuditProjectCreated    = "project.created"
@@ -149,7 +151,7 @@ func (h *httpHandlers) listAudit(w http.ResponseWriter, r *http.Request) {
 
 	items, total, err := h.repo.ListAudit(r.Context(), f)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -160,7 +162,8 @@ func (h *httpHandlers) listAudit(w http.ResponseWriter, r *http.Request) {
 
 func auditActions() []string {
 	return []string{
-		AuditUserRoleChanged, AuditTokenCreated, AuditTokenRevoked,
+		AuditUserRoleChanged, AuditUserDeactivated, AuditUserReactivated,
+		AuditTokenCreated, AuditTokenRevoked,
 		AuditProjectCreated, AuditProjectUpdated, AuditProjectArchived, AuditProjectKeyRenamed,
 		AuditMemberSet, AuditMemberRemoved,
 		AuditWebhookCreated, AuditWebhookUpdated, AuditWebhookDeleted,

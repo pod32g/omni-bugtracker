@@ -46,7 +46,7 @@ var errBadDueAt = errors.New(`expected an RFC 3339 timestamp or a "YYYY-MM-DD" d
 func (h *httpHandlers) listSLAPolicies(w http.ResponseWriter, r *http.Request) {
 	policies, err := h.repo.ListSLAPolicies(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if policies == nil {
@@ -163,7 +163,7 @@ func (h *httpHandlers) updateSLAPolicy(w http.ResponseWriter, r *http.Request) {
 		IsActive: body.IsActive,
 	})
 	if err != nil {
-		writeNotFoundOrError(w, err, "sla policy", "update failed")
+		h.writeNotFoundOrError(w, r, err, "sla policy", "update failed")
 		return
 	}
 	// Checked after the write rather than before: the stored values are what the two
@@ -189,7 +189,7 @@ func (h *httpHandlers) deleteSLAPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	deleted, err := h.repo.DeleteSLAPolicy(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !deleted {

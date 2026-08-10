@@ -26,7 +26,7 @@ const maxIterationDays = 92
 func (h *httpHandlers) listIterations(w http.ResponseWriter, r *http.Request) {
 	items, err := h.repo.ListIterations(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -42,7 +42,7 @@ func (h *httpHandlers) listIterations(w http.ResponseWriter, r *http.Request) {
 func (h *httpHandlers) iterationVelocity(w http.ResponseWriter, r *http.Request) {
 	history, err := h.repo.IterationVelocity(r.Context(), chi.URLParam(r, "key"), 12)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "velocity failed", err.Error())
+		h.serverError(w, r, "velocity failed", err)
 		return
 	}
 	if history == nil {
@@ -66,7 +66,7 @@ func (h *httpHandlers) iterationBurndown(w http.ResponseWriter, r *http.Request)
 	}
 	points, err := h.repo.IterationBurndown(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "burndown failed", err.Error())
+		h.serverError(w, r, "burndown failed", err)
 		return
 	}
 	if points == nil {
@@ -74,7 +74,7 @@ func (h *httpHandlers) iterationBurndown(w http.ResponseWriter, r *http.Request)
 	}
 	it, err := h.repo.GetIteration(r.Context(), id)
 	if err != nil {
-		writeNotFoundOrError(w, err, "iteration", "burndown failed")
+		h.writeNotFoundOrError(w, r, err, "iteration", "burndown failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"iteration": it, "points": points})
@@ -180,7 +180,7 @@ func (h *httpHandlers) updateIteration(w http.ResponseWriter, r *http.Request) {
 		Goal: body.Goal, State: body.State,
 	})
 	if err != nil {
-		writeNotFoundOrError(w, err, "iteration", "update failed")
+		h.writeNotFoundOrError(w, r, err, "iteration", "update failed")
 		return
 	}
 	h.audit(r, "iteration.update", "iteration", it.ID.String(), it.Name, map[string]any{
@@ -196,7 +196,7 @@ func (h *httpHandlers) deleteIteration(w http.ResponseWriter, r *http.Request) {
 	}
 	deleted, err := h.repo.DeleteIteration(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !deleted {
@@ -239,7 +239,7 @@ func (h *httpHandlers) carryOverIteration(w http.ResponseWriter, r *http.Request
 	}
 	moved, err := h.repo.CarryOverIssues(r.Context(), id, target)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "carry-over failed", err.Error())
+		h.serverError(w, r, "carry-over failed", err)
 		return
 	}
 	h.audit(r, "iteration.carry_over", "iteration", id.String(), "", map[string]any{
@@ -286,12 +286,12 @@ func (h *httpHandlers) setIssueIteration(w http.ResponseWriter, r *http.Request)
 			})
 			return
 		}
-		writeNotFoundOrError(w, err, "issue", "update failed")
+		h.writeNotFoundOrError(w, r, err, "issue", "update failed")
 		return
 	}
 	updated, err := h.repo.GetIssueByID(r.Context(), issue.ID)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "reload failed", err.Error())
+		h.serverError(w, r, "reload failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)

@@ -34,7 +34,7 @@ func (h *httpHandlers) ops(w http.ResponseWriter, r *http.Request) {
 	}
 	snap, err := h.repo.OpsSnapshot(r.Context())
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "ops read failed", err.Error())
+		h.serverError(w, r, "ops read failed", err)
 		return
 	}
 	// Empty slices rather than null, so the page can map over them unconditionally.

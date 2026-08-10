@@ -86,7 +86,9 @@ type Repository interface {
 	// FindSimilarIssues ranks a project's live issues against a query built from a
 	// draft title, for duplicate detection at filing time.
 	FindSimilarIssues(ctx context.Context, projectKey, query, excludeKey string, limit int32) ([]domain.SimilarIssue, error)
-	TransitionIssue(ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID, comment string, changes []byte, publish PublishFn) (domain.Issue, error)
+	// TransitionIssue applies from → to as a compare-and-set: the write only lands if
+	// the row is still in `from`, and returns ErrStaleStatus if somebody moved it first.
+	TransitionIssue(ctx context.Context, id uuid.UUID, from, to domain.IssueStatus, actor uuid.UUID, comment string, changes []byte, publish PublishFn) (domain.Issue, error)
 	UpdateIssue(ctx context.Context, id, actor uuid.UUID, in UpdateIssueInput, publish PublishFn) (domain.Issue, error)
 	MoveIssue(ctx context.Context, id, actor uuid.UUID, targetProjectKey string, publish PublishFn) (domain.Issue, error)
 	SoftDeleteIssue(ctx context.Context, id, actor uuid.UUID, publish PublishFn) error
@@ -282,7 +284,10 @@ type Repository interface {
 	// ListComments / ListActivity return one page plus the unpaged total.
 	ListComments(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Comment, int, error)
 	GetComment(ctx context.Context, id uuid.UUID) (domain.Comment, error)
-	UpdateComment(ctx context.Context, id, actor uuid.UUID, bodyMD string) (domain.Comment, error)
+	// UpdateComment rewrites a body and re-syncs its references and mentions. publish
+	// runs in the same tx — without it a newly-added @mention is recorded and never
+	// notified.
+	UpdateComment(ctx context.Context, id, actor uuid.UUID, bodyMD string, publish PublishFn) (domain.Comment, error)
 	SoftDeleteComment(ctx context.Context, id, actor uuid.UUID) (bool, error)
 	ListActivity(ctx context.Context, issueID uuid.UUID, limit, offset int32) ([]domain.Activity, int, error)
 	RecentActivity(ctx context.Context, projectKey string, limit int32) ([]domain.Activity, error)
@@ -292,8 +297,13 @@ type Repository interface {
 	OpsSnapshot(ctx context.Context) (domain.OpsSnapshot, error)
 	// Report is the trend view over a date range; see ReportFilter.
 	Report(ctx context.Context, f ReportFilter) (domain.Report, error)
-	ListUsers(ctx context.Context, limit int32) ([]domain.User, error)
+	// ListUsers returns active users; includeInactive adds deactivated accounts, which
+	// only the admin screen wants — an assignee picker must never offer a leaver.
+	ListUsers(ctx context.Context, limit int32, includeInactive bool) ([]domain.User, error)
 	UpdateUserRole(ctx context.Context, userID uuid.UUID, role domain.Role) (domain.User, error)
+	// SetUserActive gates authentication for a user, revoking their API tokens when
+	// deactivating.
+	SetUserActive(ctx context.Context, userID uuid.UUID, active bool) (domain.User, error)
 	// UpdateUserProfile writes the fields a user owns about themselves and marks the
 	// profile overridden so the next OIDC login stops mirroring over them.
 	UpdateUserProfile(ctx context.Context, userID uuid.UUID, in UpdateProfileInput) (domain.User, error)

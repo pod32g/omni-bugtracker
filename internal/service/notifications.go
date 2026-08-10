@@ -22,7 +22,7 @@ func (h *httpHandlers) listNotifications(w http.ResponseWriter, r *http.Request)
 		int32(atoiDefault(r.URL.Query().Get("limit"), 30)),
 		int32(atoiDefault(r.URL.Query().Get("offset"), 0)))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -54,7 +54,7 @@ func (h *httpHandlers) markNotificationsRead(w http.ResponseWriter, r *http.Requ
 	}
 	n, err := h.repo.MarkNotificationsRead(r.Context(), userID, ids)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		h.serverError(w, r, "update failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"marked": n})
@@ -84,7 +84,7 @@ func (h *httpHandlers) markIssueRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.MarkIssueNotificationsRead(r.Context(), userID, issue.ID); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		h.serverError(w, r, "update failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

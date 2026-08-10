@@ -165,6 +165,30 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: "#/components/schemas/SavedSearch" } }
 
+  /users:
+    get:
+      tags: [system]
+      operationId: listUsers
+      description: >-
+        Users, for assignee pickers and the members admin. Active accounts only unless
+        `include_inactive` is set, which additionally requires `admin:all` and is
+        ignored otherwise.
+      parameters:
+        - name: include_inactive
+          in: query
+          required: false
+          schema: { type: string, enum: ["1"] }
+      responses:
+        "200":
+          description: users
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/User" } }
+
   /users/{id}/role:
     parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
     patch:
@@ -178,6 +202,26 @@ paths:
         "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
         "403": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+
+  /users/{id}/active:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    patch:
+      tags: [system]
+      operationId: updateUserActive
+      description: >-
+        Deactivate or reactivate a user (owner/admin only; cannot deactivate yourself).
+        Deactivating revokes every API token they hold and stops their sessions
+        resolving, while leaving their issues, comments and history intact. Reactivating
+        restores access but does not un-revoke the tokens.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [is_active], properties: { is_active: { type: boolean } } } } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
 
   /projects:
     get:
@@ -1316,12 +1360,19 @@ components:
 
     User:
       type: object
+      required: [id, email, display_name, role]
       properties:
         id: { type: string, format: uuid }
         email: { type: string }
         display_name: { type: string }
         avatar_url: { type: string }
-        role: { type: string }
+        role: { type: string, enum: [owner, admin, maintainer, member, reporter, bot] }
+        is_active:
+          type: boolean
+          description: >-
+            False for a deactivated account. Only ever false in the admin members
+            listing (`GET /users?include_inactive=1`) — every other listing is
+            active-only.
 
     Project:
       type: object

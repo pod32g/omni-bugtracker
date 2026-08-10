@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/omni/bugtracker/internal/auth"
 	"github.com/omni/bugtracker/internal/domain"
 	"github.com/omni/bugtracker/internal/httpapi"
 )
@@ -66,15 +65,14 @@ func (h *httpHandlers) exportIssues(w http.ResponseWriter, r *http.Request) {
 	// Reads are gated by authentication alone throughout this API — there is no
 	// issue:read permission — and an export is the paged list without the paging, so
 	// it exposes nothing the caller could not already fetch page by page.
-	p := auth.FromContext(r.Context())
 	key := chi.URLParam(r, "key")
 
-	f, badTerms := ParseFilter(key, r.URL.Query().Get("filter"), p.UserID)
-	if len(badTerms) > 0 {
-		httpapi.WriteValidation(w, badTerms)
+	// The same builder the list uses, so "whatever the list shows is what comes out"
+	// stays true for iteration: and field: terms too.
+	f, ok := h.buildFilter(w, r, key)
+	if !ok {
 		return
 	}
-	f.Sort = r.URL.Query().Get("sort")
 
 	format := strings.ToLower(r.URL.Query().Get("format"))
 	if format == "" {
