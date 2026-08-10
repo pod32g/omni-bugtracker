@@ -9,7 +9,7 @@ Git-native, API-first, automatable — not a Jira clone.
 
 ## Stack
 
-- **Backend:** Go 1.23, chi, pgx + sqlc, River (Postgres job queue), koanf, slog, Prometheus, OpenAPI 3.1.
+- **Backend:** Go (version per `go.mod`), chi, pgx + sqlc, River (Postgres job queue), koanf, slog, Prometheus, OpenAPI 3.1.
 - **Frontend:** React 18, TypeScript, Vite, TailwindCSS, TanStack Query, generated API client. Light + dark themes.
 - **Infra:** PostgreSQL 16, Redis 7, Docker.
 
@@ -81,6 +81,23 @@ Interactive **Swagger UI** is served by the API at [`/docs`](http://localhost:80
 (the raw OpenAPI 3.1 spec is at `/openapi.yaml`). Click **Authorize**, paste a personal
 `obt_` token, and "Try it out" issues live calls against `/api/v1`. The spec is embedded
 in the server binary, so it's always in sync with the deployed build.
+
+## Deploying to Kubernetes
+
+The Helm chart in [`deploy/helm`](deploy/helm) runs the API and worker, with the schema
+migration as a `pre-install,pre-upgrade` hook Job — neither binary migrates at startup,
+and `/readyz` only pings the connection, so a pod on an unmigrated database reports
+itself healthy and then fails every request.
+
+**The API is pinned to one replica, and the autoscaler is off.** Attachment bytes are
+written to a local filesystem (`storage.attachments_dir`), so a second replica serves
+downloads for files it does not have, and scale-down destroys bytes the database still
+points at. Raising `api.replicas` is safe only once attachment storage moves behind a
+shared blob store. The worker scales freely — River hands out jobs with `SKIP LOCKED`.
+
+`attachments.persistence` is on by default and claims a ReadWriteOnce volume marked
+`helm.sh/resource-policy: keep`. **That volume is not covered by any database backup**
+— `pg_dump` holds the metadata rows, not the files — so back it up separately.
 
 ## Design choices
 

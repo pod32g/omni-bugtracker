@@ -1,0 +1,42 @@
+{{- if .Values.migrations.enabled }}
+# Schema migration, as a Helm hook rather than an initContainer.
+#
+# An initContainer would run once per pod — concurrent goose runs racing each other on
+# a scale-out. A pre-install/pre-upgrade hook runs exactly once per release and must
+# succeed before any pod is created, which is also the ordering the API needs: neither
+# the server nor the worker migrates at startup, and /readyz only pings the connection,
+# so a pod on an unmigrated database reports itself healthy and then fails every request.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-migrate
+  labels: { app: {{ .Release.Name }}-migrate }
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    # Kept on failure so the goose output is readable — a migration that failed and
+    # deleted its own logs is the worst possible time to be missing them.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels: { app: {{ .Release.Name }}-migrate }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          # The API image; cmd/migrate is built into it.
+          image: "{{ .Values.image.repository }}:{{ .Values.image.apiTag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/migrate", "up"]
+          env:
+            - name: OMNI_BT_DATABASE__DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.dsnKey }}
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: "500m", memory: 256Mi }
+{{- end }}

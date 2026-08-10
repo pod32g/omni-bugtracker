@@ -18,15 +18,47 @@ identity:
   audience: omni-bugtracker
 
 api:
-  replicas: 3
+  # Pinned to one replica, and the autoscaler is off, because attachments are stored
+  # on a filesystem the API writes to directly (storage.attachments_dir). With more
+  # than one replica an upload lands on whichever pod served the POST while the
+  # metadata row commits to the shared database, so every other pod answers the
+  # download with "attachment bytes missing from storage" — and on scale-down the
+  # bytes are gone for good while the database still points at them.
+  #
+  # Raising this is safe only once attachment storage moves behind a shared blob
+  # store (S3/MinIO). Until then a ReadWriteOnce volume and a single writer are what
+  # make the data durable. See attachments.persistence below.
+  replicas: 1
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
   autoscaling:
-    enabled: true
-    minReplicas: 3
-    maxReplicas: 12
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 1
     targetCPUUtilizationPercentage: 70
+
+# Attachment bytes. The metadata rows live in Postgres; these are the files themselves,
+# and nothing else in the system has a copy — the deploy job's pg_dump does not cover
+# them, so this volume needs its own backup.
+attachments:
+  dir: /data/attachments
+  persistence:
+    # Off by default only so `helm template` works with no cluster storage class.
+    # Turn this on for any install that will hold data: without it the files live in
+    # the pod's writable layer and are destroyed on every restart and every upgrade.
+    enabled: true
+    accessMode: ReadWriteOnce
+    size: 20Gi
+    # storageClass: ""
+
+# The schema migration runs as a pre-install/pre-upgrade hook Job. Neither the API nor
+# the worker migrates on startup, so without this a fresh install brings pods up
+# against an empty database — and they look healthy doing it, because /readyz only
+# pings the connection.
+migrations:
+  enabled: true
+  backoffLimit: 3
 
 worker:
   replicas: 2

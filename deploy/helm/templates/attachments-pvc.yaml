@@ -1,0 +1,22 @@
+{{- if .Values.attachments.persistence.enabled }}
+# Attachment bytes. ReadWriteOnce is deliberate and is the reason api.replicas is
+# pinned to 1: one writer, one volume. A ReadWriteMany class would let the replica
+# count rise, but the real fix is a shared blob store, not a shared filesystem.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-attachments
+  labels: { app: {{ .Release.Name }}-api }
+  annotations:
+    # Survives `helm uninstall`. These files exist nowhere else — the database backup
+    # does not contain them — so deleting the release must not delete them too.
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes: [{{ .Values.attachments.persistence.accessMode }}]
+  {{- with .Values.attachments.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.attachments.persistence.size }}
+{{- end }}

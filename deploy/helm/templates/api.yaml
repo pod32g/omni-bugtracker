@@ -7,6 +7,14 @@ spec:
   {{- if not .Values.api.autoscaling.enabled }}
   replicas: {{ .Values.api.replicas }}
   {{- end }}
+  {{- if .Values.attachments.persistence.enabled }}
+  # Recreate, not RollingUpdate: a ReadWriteOnce volume can be attached to one node at
+  # a time, so a rolling update deadlocks — the new pod waits for a volume the old pod
+  # will not release until the new one is ready. Costs a few seconds of downtime on
+  # deploy, which is the correct trade against an upgrade that hangs.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels: { app: {{ .Release.Name }}-api }
   template:
@@ -19,11 +27,22 @@ spec:
         prometheus.io/path: "/metrics"
       {{- end }}
     spec:
+      {{- if .Values.attachments.persistence.enabled }}
+      volumes:
+        - name: attachments
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-attachments
+      {{- end }}
       containers:
         - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.apiTag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports: [{ containerPort: 8080 }]
+          {{- if .Values.attachments.persistence.enabled }}
+          volumeMounts:
+            - name: attachments
+              mountPath: {{ .Values.attachments.dir | quote }}
+          {{- end }}
           env:
             - name: OMNI_BT_DATABASE__DSN
               valueFrom:
@@ -32,6 +51,8 @@ spec:
                   key: {{ .Values.database.dsnKey }}
             - name: OMNI_BT_REDIS__ADDR
               value: {{ .Values.redis.addr | quote }}
+            - name: OMNI_BT_STORAGE__ATTACHMENTS_DIR
+              value: {{ .Values.attachments.dir | quote }}
             - name: OMNI_BT_IDENTITY__ISSUER
               value: {{ .Values.identity.issuer | quote }}
             - name: OMNI_BT_IDENTITY__JWKS_URL
