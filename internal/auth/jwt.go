@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/omni/bugtracker/internal/config"
 	"github.com/omni/bugtracker/internal/domain"
@@ -28,6 +29,11 @@ type Verifier struct {
 	mu     sync.RWMutex
 	keys   map[string]crypto.PublicKey
 	loaded time.Time
+	// refreshes collapses concurrent JWKS fetches into one. Without it, every request
+	// arriving after the TTL lapsed started its own — so the moment the cache expired,
+	// the identity provider took a burst of identical requests proportional to traffic,
+	// which is exactly the wrong thing to do to a service that may be recovering.
+	refreshes singleflight.Group
 }
 
 func NewVerifier(cfg config.Identity) *Verifier {
@@ -71,21 +77,54 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 
 func (v *Verifier) keyFor(ctx context.Context, kid string) (crypto.PublicKey, error) {
 	v.mu.RLock()
-	key, ok := v.keys[kid]
+	key, known := v.keys[kid]
 	fresh := time.Since(v.loaded) < v.cfg.JWKSCacheTTL
 	v.mu.RUnlock()
-	if ok && fresh {
-		return key, nil
+
+	if fresh {
+		// The key set is current, so it is the provider's answer — including about
+		// keys it does not have. Refreshing on an unknown kid was a fetch amplifier:
+		// the kid is attacker-chosen, so a loop of tokens carrying random ones turned
+		// into an outbound request per request. Freshness answers both cases without
+		// needing to remember individual denials, which is what makes a rotation
+		// discoverable the moment the set goes stale.
+		if known {
+			return key, nil
+		}
+		return nil, fmt.Errorf("unknown key id %q", kid)
 	}
-	if err := v.refresh(ctx); err != nil {
-		return nil, err
-	}
+
+	err := v.refreshOnce(ctx)
+
 	v.mu.RLock()
-	defer v.mu.RUnlock()
-	if key, ok := v.keys[kid]; ok {
+	refreshed, ok := v.keys[kid]
+	v.mu.RUnlock()
+	if ok {
+		return refreshed, nil
+	}
+
+	// The refresh failed and we already hold a key for this kid. Serve it.
+	//
+	// Signing keys outlive their cache entry by a wide margin — the TTL is a staleness
+	// budget, not an expiry — so refusing a token we can still verify turns a blip at
+	// the identity provider into every browser session in the install being signed out
+	// at once. Worth logging; not worth taking the tracker down for.
+	if known {
 		return key, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("jwks refresh: %w", err)
 	}
 	return nil, fmt.Errorf("unknown key id %q", kid)
+}
+
+// refreshOnce collapses concurrent refreshes: whoever arrives while a fetch is in
+// flight waits for its result instead of starting another.
+func (v *Verifier) refreshOnce(ctx context.Context) error {
+	_, err, _ := v.refreshes.Do("jwks", func() (any, error) {
+		return nil, v.refresh(ctx)
+	})
+	return err
 }
 
 type jwks struct {
