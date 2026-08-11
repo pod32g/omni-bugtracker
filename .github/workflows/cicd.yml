@@ -71,6 +71,12 @@ jobs:
       # a type error ships.
       - name: Typecheck
         run: npm run typecheck
+      # --max-warnings is deliberately generous rather than 0: the existing warnings are
+      # real but not urgent, and a lint step that fails on day one is a lint step
+      # somebody deletes. It fails on any *error*, and ratchets down as the backlog
+      # shrinks.
+      - name: Lint
+        run: npm run lint -- --max-warnings 25
       - name: Build
         run: npm run build
 

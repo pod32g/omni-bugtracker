@@ -61,11 +61,15 @@ export function Board() {
   // turns one broken page into an unbounded request loop against the same endpoint —
   // the failure mode the inbox poller documents at 30s intervals, here with no delay
   // at all. `isFetchNextPageError` latches until a manual retry succeeds.
+  // Destructured so the dependency array names values rather than reaching through
+  // `issues` — which is a new object every render, and which exhaustive-deps therefore
+  // (correctly) refuses to accept as a stable dependency.
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = issues;
   useEffect(() => {
-    if (issues.hasNextPage && !issues.isFetchingNextPage && !issues.isFetchNextPageError) {
-      issues.fetchNextPage();
+    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
+      fetchNextPage();
     }
-  }, [issues.hasNextPage, issues.isFetchingNextPage, issues.isFetchNextPageError, issues.fetchNextPage]);
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
 
   const transition = useMutation({
     mutationFn: ({ key, to }: { key: string; to: IssueStatus }) => api.transition(key, to),
@@ -195,7 +199,7 @@ export function Board() {
         wrong rather than merely partial, and saying "capped" there would report a
         fault as a limit.
       */}
-      {issues.isFetchNextPageError && (
+      {isFetchNextPageError && (
         <div className="flex flex-wrap items-center gap-3 px-4 md:px-9 py-3 text-sm text-critical">
           <span>
             Couldn&rsquo;t load all issues — showing {items.length} of {total}. Column counts and WIP
@@ -203,14 +207,14 @@ export function Board() {
           </span>
           <button
             type="button"
-            onClick={() => issues.fetchNextPage()}
+            onClick={() => fetchNextPage()}
             className="rounded border border-critical px-2 py-1 font-medium hover:bg-critical/10"
           >
             Retry
           </button>
         </div>
       )}
-      {truncated && !issues.isFetchingNextPage && !issues.isFetchNextPageError && (
+      {truncated && !isFetchingNextPage && !isFetchNextPageError && (
         <div className="px-4 md:px-9 py-3 text-sm text-graphite">
           Showing {items.length} of {total} issues — this board is capped at {BOARD_MAX_ISSUES}. Use the
           issue list with a filter to narrow it down.
