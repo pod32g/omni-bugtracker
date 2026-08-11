@@ -60,7 +60,7 @@ func NewRouter(d Deps) http.Handler {
 
 	// Unauthenticated operational endpoints.
 	r.Get("/healthz", health)
-	r.Get("/readyz", readyz(d.DB))
+	r.Get("/readyz", readyz(d.DB, d.Logger))
 	r.Handle("/metrics", promhttp.HandlerFor(d.Metrics.Registry, promhttp.HandlerOpts{}))
 
 	// Interactive API docs (Swagger UI) + the raw OpenAPI spec. The UI assets are
@@ -124,10 +124,20 @@ func health(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-func readyz(db *pgxpool.Pool) http.HandlerFunc {
+// readyz reports whether the database is reachable. Unauthenticated, because probes
+// cannot authenticate — which is exactly why it must not describe the failure.
+//
+// It used to return err.Error(), and a pgx connection error names the host, the port,
+// the user and the database. That is a free topology map for anyone who can reach the
+// port, handed over precisely when things are going wrong. The reason belongs in the
+// log, where the operator is.
+func readyz(db *pgxpool.Pool, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := db.Ping(r.Context()); err != nil {
-			WriteProblem(w, http.StatusServiceUnavailable, "not ready", err.Error())
+			if logger != nil {
+				logger.Error("readiness check failed", "err", err)
+			}
+			WriteProblem(w, http.StatusServiceUnavailable, "not ready", "the database is unreachable")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
