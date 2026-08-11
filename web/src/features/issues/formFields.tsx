@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 
@@ -201,6 +201,11 @@ export function TextInput({
   return (
     <input
       autoFocus={autoFocus}
+      // React calls .focus() for autoFocus but emits no attribute, so a dialog cannot
+      // find "the field that wanted focus" by selector. This publishes that intent in
+      // the DOM — see Modal, which prefers it over the first field in document order
+      // (which here is the estimate box, three fields above the one anybody wants).
+      data-autofocus={autoFocus ? "" : undefined}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
@@ -209,18 +214,133 @@ export function TextInput({
   );
 }
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+/**
+ * A modal dialog.
+ *
+ * `confirmClose` guards the dismissal paths that are easy to hit by accident. The new
+ * issue form is the reason: a stray click on the backdrop threw away a bug report
+ * somebody had spent five minutes writing, with no warning and no way back. Escape and
+ * the backdrop ask first when it returns true; the explicit Cancel button never does,
+ * because that one is a decision rather than a slip.
+ *
+ * Focus is trapped and restored. Without it, Tab walks straight out of the dialog into
+ * the page behind — which for a screen-reader or keyboard user means the dialog is a
+ * visual convention they cannot perceive the edges of.
+ */
+export function Modal({
+  title,
+  onClose,
+  children,
+  confirmClose,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  confirmClose?: () => boolean;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const headingID = useId();
+  // Captured during render, not in the effect below.
+  //
+  // React applies autoFocus while attaching the dialog's DOM, which happens *before*
+  // effects run — so reading document.activeElement in the effect returns the title
+  // input inside the dialog, and "restoring" focus on close aimed at a node that was
+  // about to be unmounted. Focus then fell to the body. Render runs before any of the
+  // children exist, so this sees the element that actually opened the dialog.
+  const openerRef = useRef<HTMLElement | null>(null);
+  if (openerRef.current === null) {
+    openerRef.current = document.activeElement as HTMLElement | null;
+  }
+
+  const requestClose = useCallback(() => {
+    if (confirmClose?.() && !window.confirm("Discard your changes?")) return;
+    onClose();
+  }, [confirmClose, onClose]);
+
+  useEffect(() => {
+    // Move focus into the dialog so the next Tab lands inside it — unless something in
+    // there already claimed it. A field marked autoFocus (the title, on the new issue
+    // form) has by this point already been focused, and stealing it back to the close
+    // button would put the caret nowhere useful.
+    const panel = panelRef.current;
+    if (panel && !panel.contains(document.activeElement)) {
+      // The field the form nominated, else the first form control — not simply the
+      // first focusable, which is the close button, and putting the caret there means
+      // a keyboard user tabs past the whole form to reach what they came to fill in.
+      //
+      // Chosen explicitly rather than leaning on autoFocus: React applies that during
+      // commit, and whether it has happened by the time this effect runs differs
+      // between a fresh page load and a dialog opened from a click. This behaves the
+      // same either way.
+      const field =
+        panel.querySelector<HTMLElement>("[data-autofocus]") ??
+        panel.querySelector<HTMLElement>(FIRST_FIELD);
+      (field ?? panel.querySelector<HTMLElement>(FOCUSABLE) ?? panel).focus();
+    }
+
+    // The page behind must not scroll under the dialog.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      openerRef.current?.focus?.();
+    };
+  }, []);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      requestClose();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    // Cycle within the dialog rather than escaping to the page behind it.
+    const items = Array.from(panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])
+      .filter((el) => el.offsetParent !== null || el === document.activeElement);
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     // Below sm the dialog fills the screen: a centred card with 16px of gutter wastes
     // most of a phone and leaves the form scrolling inside a box inside a page.
-    <div className="fixed inset-0 z-50 grid place-items-end bg-ink/40 sm:place-items-center sm:p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 grid place-items-end bg-ink/40 sm:place-items-center sm:p-4"
+      onMouseDown={(e) => {
+        // mousedown on the backdrop *itself*, not a drag that began inside the panel
+        // and happened to end out here — releasing a text selection outside the dialog
+        // used to close it.
+        if (e.target === e.currentTarget) requestClose();
+      }}
+      onKeyDown={onKeyDown}
+    >
       <div
-        className="max-h-[92vh] w-full overflow-auto border-hairline bg-paper p-4 shadow-xl shadow-ink/10 sm:max-h-[90vh] sm:max-w-2xl sm:rounded-lg sm:border sm:p-6"
-        onClick={(e) => e.stopPropagation()}
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={headingID}
+        tabIndex={-1}
+        className="max-h-[92vh] w-full overflow-auto border-hairline bg-paper p-4 shadow-xl shadow-ink/10 outline-none sm:max-h-[90vh] sm:max-w-2xl sm:rounded-lg sm:border sm:p-6"
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-ink">{title}</h2>
-          <button onClick={onClose} className="text-graphite transition hover:text-ink">
+          <h2 id={headingID} className="text-lg font-bold text-ink">
+            {title}
+          </h2>
+          <button
+            type="button"
+            onClick={requestClose}
+            aria-label="Close"
+            className="rounded text-graphite outline-none transition hover:text-ink focus-visible:ring-2 focus-visible:ring-blueprint"
+          >
             ✕
           </button>
         </div>
@@ -229,3 +349,8 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
     </div>
   );
 }
+
+const FIRST_FIELD = "input:not([disabled]):not([type=hidden]), textarea:not([disabled])";
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';

@@ -169,8 +169,19 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
   // message belongs next to that input rather than only in the banner at the bottom.
   const fieldErrors = create.error instanceof ApiError ? create.error.errors : {};
 
+  // Anything typed is worth a confirmation before a stray backdrop click throws it
+  // away. The template body does not count: it was put there by the app, not by them.
+  const isDirty = () =>
+    form.title.trim() !== "" ||
+    (form.description_md ?? "").trim() !== (chosen?.body_md ?? "").trim() ||
+    (form.labels?.length ?? 0) > 0 ||
+    (form.components?.length ?? 0) > 0 ||
+    [form.repro_steps_md, form.expected_md, form.actual_md, form.environment_md].some(
+      (v) => (v ?? "").trim() !== "",
+    );
+
   return (
-    <Modal title={`New issue in ${projectKey}`} onClose={onClose}>
+    <Modal title={`New issue in ${projectKey}`} onClose={onClose} confirmClose={isDirty}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Type">
           <Select value={form.type} onChange={(v) => set("type", v as IssueType)} options={TYPES} />
