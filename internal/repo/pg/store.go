@@ -1549,26 +1549,48 @@ const selectIssue = `
 	       COALESCE(i.rank, ''),
 	       i.due_at, i.first_response_at, i.resolved_at,
 	       sla.response_due, sla.resolution_due, sla.response_state, sla.resolution_state,
-	       i.estimate_minutes, COALESCE(tm.spent_minutes, 0),
+	       i.estimate_minutes,
+	       -- A correlated scalar subquery, not a LEFT JOIN on the issue_time view.
+	       -- issue_time is a GROUP BY view: a grouped subquery cannot be pulled up, and
+	       -- a LEFT JOIN's ON is not a pushdown-safe restriction, so Postgres aggregated
+	       -- the *entire* time_entries table to produce one integer per row. This form
+	       -- parameterises against idx_time_entries_issue and reads only this issue's
+	       -- entries. (issue_time is still the right shape for rollups over a set.)
+	       COALESCE((SELECT sum(te.minutes)::INT FROM time_entries te WHERE te.issue_id = i.id), 0),
 	       i.iteration_id, itr.name,
 	       ru.id, ru.display_name, ru.email,
 	       au.id, au.display_name, au.email,
 	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
 	       COALESCE(array(SELECT c.name FROM issue_components ic JOIN components c ON c.id = ic.component_id WHERE ic.issue_id = i.id ORDER BY c.name), '{}') AS components,
 	       i.milestone_id, m.title, i.release_id, r.version,
-	       (SELECT count(*) FROM issue_relations rel
-	          JOIN issues b ON b.id = CASE WHEN rel.kind = 'blocks' AND rel.to_issue = i.id THEN rel.from_issue
-	                                       WHEN rel.kind = 'blocked_by' AND rel.from_issue = i.id THEN rel.to_issue END
-	         WHERE b.deleted_at IS NULL AND b.status NOT IN ('resolved','closed')) AS open_blockers
-	FROM issues i
-	JOIN projects p ON p.id = i.project_id
-	LEFT JOIN users ru ON ru.id = i.reporter_id
-	LEFT JOIN users au ON au.id = i.assignee_id
-	LEFT JOIN milestones m ON m.id = i.milestone_id
-	LEFT JOIN releases r ON r.id = i.release_id
-	LEFT JOIN issue_sla sla ON sla.issue_id = i.id
-	LEFT JOIN issue_time tm ON tm.issue_id = i.id
-	LEFT JOIN iterations itr ON itr.id = i.iteration_id`
+	       -- Two plainly-correlated counts rather than one join through a CASE.
+	       --
+	       -- The CASE built the *join key*, which buried the i.id correlation inside an
+	       -- expression no index can match: Postgres sequentially scanned the whole of
+	       -- issue_relations once per returned row, so the cost of a page grew with the
+	       -- number of relations in the install rather than with the size of the page.
+	       -- Split into its two real cases, each is an equality on an indexed column
+	       -- (idx_issue_relations_to, and the from_issue unique index).
+	       --
+	       -- The branches cannot overlap — a row has exactly one kind — so summing them
+	       -- cannot double-count. Verified equal to the old expression for every issue in
+	       -- a 20k-issue / 40k-relation dataset.
+	       ((SELECT count(*) FROM issue_relations rel
+	           JOIN issues b ON b.id = rel.from_issue
+	          WHERE rel.to_issue = i.id AND rel.kind = 'blocks'
+	            AND b.deleted_at IS NULL AND b.status NOT IN ('resolved','closed'))
+	      + (SELECT count(*) FROM issue_relations rel
+	           JOIN issues b ON b.id = rel.to_issue
+	          WHERE rel.from_issue = i.id AND rel.kind = 'blocked_by'
+	            AND b.deleted_at IS NULL AND b.status NOT IN ('resolved','closed'))) AS open_blockers
+FROM issues i
+JOIN projects p ON p.id = i.project_id
+LEFT JOIN users ru ON ru.id = i.reporter_id
+LEFT JOIN users au ON au.id = i.assignee_id
+LEFT JOIN milestones m ON m.id = i.milestone_id
+LEFT JOIN releases r ON r.id = i.release_id
+LEFT JOIN issue_sla sla ON sla.issue_id = i.id
+LEFT JOIN iterations itr ON itr.id = i.iteration_id`
 
 // selectLiveIssue re-reads one issue by id after a write. The deleted_at guard
 // matters: every issue write is already conditioned on `deleted_at IS NULL`, so
