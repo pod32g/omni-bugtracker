@@ -8,8 +8,8 @@ Design philosophy: **simplicity over completeness, API-first, everything automat
 | Area | Decision | Why |
 |---|---|---|
 | Topology | **Modular monolith** in Go (one binary, `server` + `worker` modes) | One bounded context; avoids distributed-systems overhead. |
-| API | **Design-first OpenAPI 3.1** → generated Go handlers + TS client | The API *is* the contract; UI can't exceed it. |
-| Data access | **pgx v5 + sqlc** (type-safe SQL, no ORM) | Predictable queries, no reflection magic. |
+| API | **OpenAPI 3.1 as the published contract**, hand-written chi router, drift-checked by a test | The API *is* the contract; UI can't exceed it. (The handlers are not generated — see below.) |
+| Data access | **pgx v5**, hand-written SQL, no ORM | Predictable queries, no reflection magic. |
 | Jobs / events | **River** (Postgres job queue) with transactional `InsertTx` | Enqueue in the same tx as the domain write = built-in transactional outbox. No separate outbox table, no Redis for jobs. |
 | Redis | Cache + rate limiting only | Job durability lives in Postgres via River. |
 | Tenancy | **Single-tenant** (one org per deployment) | Chosen for simplicity; no `tenant_id`/RLS. |
@@ -17,10 +17,32 @@ Design philosophy: **simplicity over completeness, API-first, everything automat
 | Search | Postgres **FTS** (generated `tsvector` columns + GIN) | The index is maintained by the database, so search cannot fall behind writes and there is no projection to fail. |
 | Issues | **One `issues` table** with a `type` discriminator + nullable bug fields + `jsonb` escape hatch | No table-per-type, no custom-field engine. |
 
+## A note on code generation
+
+`make generate` runs three generators — sqlc, oapi-codegen, and openapi-typescript —
+and **nothing in the build imports any of their output**. `internal/repo/gen`,
+`internal/httpapi/gen` and `web/src/api/gen` are all produced, all gitignored, and all
+unreferenced: data access is hand-written pgx in `internal/repo/pg`, the router is
+hand-written chi, and the web client is hand-written in `web/src/lib/api.ts`.
+
+This is written down because the docs previously implied otherwise, and because it is a
+decision somebody should make deliberately rather than inherit:
+
+- **Adopt** — swap `internal/repo/pg` method bodies for the sqlc calls (`store.go` says
+  how), mount the generated server, and bind the TS client. Buys compile-time
+  guarantees that the contract test currently approximates.
+- **Delete** — drop `sqlc.yaml`, `db/queries/`, `api/oapi-codegen.yaml`, the `gen:api`
+  script and the `generate` target. Buys one obvious way to do things and a shorter
+  setup for a new contributor.
+
+Doing neither is the only option with no upside: the generators still have to be
+installed and still produce artifacts, and the inputs (`db/queries/*.sql`) drift from
+the queries actually executed with nothing to notice.
+
 ## Runtime shape
 
 ```
-React SPA ──HTTPS(JWT|token)──► API (chi) ──► services ──► repo (sqlc/pgx) ──► Postgres
+React SPA ──HTTPS(JWT|token)──► API (chi) ──► services ──► repo (pgx) ──► Postgres
                                     │                                            ▲
                                     └── River.InsertTx (same tx as write) ───────┘
                                                     │

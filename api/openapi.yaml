@@ -3,9 +3,14 @@ info:
   title: Omni-BugTracker API
   version: 1.0.0
   description: >
-    Developer-first, self-hosted issue & bug tracker. Design-first contract:
-    Go handlers and the TypeScript client are generated from this file.
-    Every UI action is expressible here.
+    Developer-first, self-hosted issue & bug tracker.
+
+    This file is the HTTP contract. It is hand-maintained alongside a hand-written
+    chi router — it did claim that the Go handlers and TypeScript client were
+    generated from it, which was not true of the running server and is the kind of
+    thing an integrator would reasonably act on. A test walks the route tree and
+    fails when a served route is missing here, so the two cannot silently diverge
+    again; the operations still absent from it are listed explicitly in that test.
 servers:
   - url: /api/v1
 security:

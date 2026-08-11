@@ -4,13 +4,13 @@ A developer-first, self-hosted issue & bug tracker for the Omni ecosystem.
 Git-native, API-first, automatable — not a Jira clone.
 
 > **Status:** actively developed; runs as a self-hosted deployment. Architecture is in
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Generated code (sqlc, OpenAPI types, TS client) is kept out
-> of git — run `make generate`, then `go mod tidy`.
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). `make generate` output is kept out of git — and is
+> currently imported by nothing; see "A note on code generation" in the architecture doc.
 
 ## Stack
 
-- **Backend:** Go (version per `go.mod`), chi, pgx + sqlc, River (Postgres job queue), koanf, slog, Prometheus, OpenAPI 3.1.
-- **Frontend:** React 18, TypeScript, Vite, TailwindCSS, TanStack Query, generated API client. Light + dark themes.
+- **Backend:** Go (version per `go.mod`), chi, pgx, River (Postgres job queue), koanf, slog, Prometheus, OpenAPI 3.1.
+- **Frontend:** React 18, TypeScript, Vite, TailwindCSS, TanStack Query, hand-written typed API client. Light + dark themes.
 - **Infra:** PostgreSQL 16, Redis 7, Docker.
 
 ## Quickstart (self-hosted)
