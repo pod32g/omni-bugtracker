@@ -25,6 +25,7 @@ import (
 	"github.com/omni/bugtracker/internal/auth"
 	"github.com/omni/bugtracker/internal/config"
 	"github.com/omni/bugtracker/internal/domain"
+	"github.com/omni/bugtracker/internal/egress"
 	"github.com/omni/bugtracker/internal/events"
 	"github.com/omni/bugtracker/internal/httpapi"
 	"github.com/omni/bugtracker/internal/prose"
@@ -1183,8 +1184,11 @@ func (h *httpHandlers) createWebhook(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
 		return
 	}
-	if !strings.HasPrefix(body.URL, "http://") && !strings.HasPrefix(body.URL, "https://") {
-		httpapi.WriteValidation(w, map[string]string{"url": "must be an http(s) URL"})
+	// The binding check is at dial time (a name can resolve anywhere, and can change
+	// between now and delivery) — this one exists so the obvious mistakes are refused
+	// while the person making them is still looking at the form.
+	if err := egress.ValidateWebhookURL(body.URL); err != nil {
+		httpapi.WriteValidation(w, map[string]string{"url": err.Error()})
 		return
 	}
 	if body.ProjectKey != "" {
@@ -1227,9 +1231,11 @@ func (h *httpHandlers) updateWebhook(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
 		return
 	}
-	if body.URL != nil && !strings.HasPrefix(*body.URL, "http://") && !strings.HasPrefix(*body.URL, "https://") {
-		httpapi.WriteValidation(w, map[string]string{"url": "must be an http(s) URL"})
-		return
+	if body.URL != nil {
+		if err := egress.ValidateWebhookURL(*body.URL); err != nil {
+			httpapi.WriteValidation(w, map[string]string{"url": err.Error()})
+			return
+		}
 	}
 	wh, err := h.repo.UpdateWebhook(r.Context(), UpdateWebhookInput{
 		ID: id, URL: body.URL, Secret: body.Secret, Events: body.Events, IsActive: body.IsActive,

@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/omni/bugtracker/internal/domain"
+	"github.com/omni/bugtracker/internal/egress"
 	"github.com/omni/bugtracker/internal/events"
 	"github.com/omni/bugtracker/internal/git"
 	"github.com/omni/bugtracker/internal/integrations"
@@ -364,8 +365,17 @@ func (w *webhookWorker) Work(ctx context.Context, job *river.Job[events.WebhookJ
 		req.Header.Set("X-OBT-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	// One slow destination must not consume the shared webhook queue: every delivery
+	// runs through the same River queue (MaxWorkers: 5), so five requests to a
+	// black-holed endpoint used to stall every other integration for their full
+	// timeout. The gate is per host, so a bad receiver is only bad for itself.
+	release, err := webhookHosts.Acquire(ctx, hostOf(url))
+	if err != nil {
+		return err // shutting down; River will retry
+	}
+	defer release()
+
+	resp, err := egress.WebhookClient().Do(req)
 	var code *int
 	success := false
 	if err == nil {
