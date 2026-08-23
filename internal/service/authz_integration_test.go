@@ -58,6 +58,7 @@ type authzFixture struct {
 	project   string // project the users below are members of
 	projectID uuid.UUID
 	other     string // a second project, for cross-project checks
+	otherID   uuid.UUID
 	issue     string // an issue key in `project`
 	users     map[domain.Role]uuid.UUID
 }
@@ -122,6 +123,7 @@ func setupAuthz(t *testing.T) *authzFixture {
 	}
 
 	f.projectID = projectID
+	f.otherID = otherID
 	f.issue = f.seedIssue(t)
 	return f
 }
@@ -384,4 +386,68 @@ func TestAuthzInactiveUsersAreAdminOnly(t *testing.T) {
 	if listed(domain.RoleMember) {
 		t.Error("a member saw a deactivated account via include_inactive")
 	}
+}
+
+// TestCarryOverAuthorizesTheTargetIteration covers the half of the carry-over check
+// that did not exist.
+//
+// carryOverIteration authorized the *source* iteration, then read body.to, parsed it
+// as a UUID, and handed it to CarryOverIssues. The target was never resolved to a
+// project and never authorized — so somebody with project:manage on one project could
+// push its unfinished issues into an iteration belonging to a project they have no
+// rights to. The issues stayed in their own project while pointing at a foreign
+// iteration, which corrupts that iteration's burndown, velocity and effort rollups.
+//
+// The matrix test above cannot express this: it keys on global roles, and a global
+// maintainer has project:manage everywhere. The exposure needs someone whose rights
+// come from membership — global `member`, maintainer in the source project only.
+func TestCarryOverAuthorizesTheTargetIteration(t *testing.T) {
+	f := setupAuthz(t)
+	ctx := context.Background()
+
+	source := f.seedIteration(t, f.projectID, "source")
+	sameProject := f.seedIteration(t, f.projectID, "sibling")
+	foreign := f.seedIteration(t, f.otherID, "foreign")
+
+	// Rights by membership, not by global role: maintainer of f.project, nothing at
+	// all in f.other.
+	member := f.users[domain.RoleMember]
+	if _, err := f.pool.Exec(ctx,
+		`INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'maintainer')`,
+		f.projectID, member); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+
+	carry := func(target uuid.UUID) int {
+		return f.do(t, domain.RoleMember, "POST",
+			"/iterations/"+source.String()+"/carry-over",
+			fmt.Sprintf(`{"to":%q}`, target))
+	}
+
+	if code := carry(foreign); code != http.StatusForbidden {
+		t.Errorf("carry-over into another project's iteration = %d, want 403", code)
+	}
+	// The control: the same caller, the same route, a target they do own. If this
+	// were also refused the check above would be proving nothing.
+	if code := carry(sameProject); code == http.StatusForbidden {
+		t.Errorf("carry-over within the caller's own project was refused (%d)", code)
+	}
+	// A target that does not exist is a 404 — not a 500 from CarryOverIssues, and not
+	// a 403 that would confirm the id belongs to somebody.
+	if code := carry(uuid.New()); code != http.StatusNotFound {
+		t.Errorf("carry-over into a nonexistent iteration = %d, want 404", code)
+	}
+}
+
+// seedIteration adds an iteration to the given project and returns its id.
+func (f *authzFixture) seedIteration(t *testing.T, projectID uuid.UUID, name string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := f.pool.QueryRow(context.Background(),
+		`INSERT INTO iterations (project_id, name, starts_on, ends_on)
+		 VALUES ($1, $2, current_date, current_date + 14) RETURNING id`,
+		projectID, name+"-"+strings.ReplaceAll(uuid.NewString(), "-", "")[:6]).Scan(&id); err != nil {
+		t.Fatalf("seed iteration %s: %v", name, err)
+	}
+	return id
 }

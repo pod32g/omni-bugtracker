@@ -235,6 +235,18 @@ func (h *httpHandlers) carryOverIteration(w http.ResponseWriter, r *http.Request
 			httpapi.WriteValidation(w, map[string]string{"to": "cannot carry an iteration over into itself"})
 			return
 		}
+		// The destination needs its own authorization. Only the *source* was checked
+		// above, so a maintainer of one project could push that project's unfinished
+		// issues into an iteration belonging to a project they have no rights to: the
+		// issues stayed where they were but pointed at a foreign iteration, corrupting
+		// its burndown, velocity and effort rollups, and the owning project had no way
+		// to see who did it — the audit row is on the source.
+		//
+		// Same shape as moving an issue between projects, which already requires
+		// issue:create on the destination.
+		if !h.authorizeTargetIteration(w, r, parsed) {
+			return
+		}
 		target = &parsed
 	}
 	moved, err := h.repo.CarryOverIssues(r.Context(), id, target)
@@ -246,6 +258,23 @@ func (h *httpHandlers) carryOverIteration(w http.ResponseWriter, r *http.Request
 		"moved": moved, "to": body.To,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"moved": moved})
+}
+
+// authorizeTargetIteration resolves an iteration to its project and requires
+// project:manage on it. Existence first, then permission — the same order (and the
+// same answers) as authorizeEntityManage, so a caller cannot tell "no such iteration"
+// apart from "not yours" by the shape of the refusal alone.
+func (h *httpHandlers) authorizeTargetIteration(w http.ResponseWriter, r *http.Request, id uuid.UUID) bool {
+	key, err := h.repo.ProjectKeyForEntity(r.Context(), "iteration", id)
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such iteration")
+		return false
+	}
+	if !h.canOnProject(r.Context(), auth.FromContext(r.Context()), key, auth.PermProjectManage) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing project:manage on "+key)
+		return false
+	}
+	return true
 }
 
 // setIssueIteration plans or unplans one issue. Body: {"iteration_id": "<uuid>"} —
