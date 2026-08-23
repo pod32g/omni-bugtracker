@@ -12,11 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/omni/bugtracker/internal/config"
 	"github.com/omni/bugtracker/internal/events"
+	"github.com/omni/bugtracker/internal/httpapi"
 	"github.com/omni/bugtracker/internal/integrations"
 	"github.com/omni/bugtracker/internal/platform"
 	"github.com/omni/bugtracker/internal/repo/pg"
@@ -76,7 +74,7 @@ func main() {
 	// therefore reading a flat line and calling it healthy.
 	metricsSrv := &http.Server{
 		Addr:              cfg.Worker.MetricsAddr,
-		Handler:           workerAdminMux(metrics, db),
+		Handler:           httpapi.AdminMux(metrics.Registry, db, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
@@ -113,29 +111,3 @@ func main() {
 // workerDrainTimeout bounds how long we wait for in-flight jobs. Comfortably inside a
 // default 30s termination grace period, so the process exits on its own terms.
 const workerDrainTimeout = 20 * time.Second
-
-// workerAdminMux serves the worker's own metrics and a readiness probe. Deliberately a
-// separate listener from anything user-facing — the worker has no public surface, and
-// this port belongs to the cluster.
-func workerAdminMux(metrics *platform.Metrics, db *pgxpool.Pool) http.Handler {
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		w.Header().Set("Content-Type", "application/json")
-		if err := db.Ping(ctx); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			// The reason stays in the log; the body says only that it is not ready.
-			// /readyz on the API leaks the raw pgx error, host and user included.
-			_, _ = w.Write([]byte(`{"status":"not ready"}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"status":"ready"}`))
-	})
-	return mux
-}

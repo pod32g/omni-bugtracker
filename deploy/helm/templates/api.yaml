@@ -23,7 +23,10 @@ spec:
       {{- if .Values.metrics.enabled }}
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
+        # Not 8080. /metrics is served on its own listener, off the published API
+        # port — the scrape payload maps every route and its traffic, and it used to
+        # be readable by anything that could reach the API.
+        prometheus.io/port: "{{ .Values.api.metricsPort }}"
         prometheus.io/path: "/metrics"
       {{- end }}
     spec:
@@ -37,7 +40,11 @@ spec:
         - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.apiTag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          ports: [{ containerPort: 8080 }]
+          ports:
+            - { containerPort: 8080, name: http }
+            # Declared so the scrape annotation has something to resolve, and left
+            # out of the Service on purpose: cluster-internal only.
+            - { containerPort: {{ .Values.api.metricsPort }}, name: metrics }
           {{- if .Values.attachments.persistence.enabled }}
           volumeMounts:
             - name: attachments
@@ -51,6 +58,8 @@ spec:
                   key: {{ .Values.database.dsnKey }}
             - name: OMNI_BT_REDIS__ADDR
               value: {{ .Values.redis.addr | quote }}
+            - name: OMNI_BT_SERVER__METRICS_ADDR
+              value: ":{{ .Values.api.metricsPort }}"
             - name: OMNI_BT_STORAGE__ATTACHMENTS_DIR
               value: {{ .Values.attachments.dir | quote }}
             - name: OMNI_BT_IDENTITY__ISSUER
