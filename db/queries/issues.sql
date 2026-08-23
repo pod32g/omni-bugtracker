@@ -54,7 +54,10 @@ SET title            = COALESCE(sqlc.narg('title'), title),
     version_fixed     = COALESCE(sqlc.narg('version_fixed'), version_fixed),
     git_commit_sha    = COALESCE(sqlc.narg('git_commit_sha'), git_commit_sha),
     pull_request_url  = COALESCE(sqlc.narg('pull_request_url'), pull_request_url),
-    resolved_at       = CASE WHEN sqlc.narg('status') IN ('resolved','closed') AND resolved_at IS NULL
+    -- Re-stamped on every entry into a terminal status, not only the first: see the
+    -- same CASE in TransitionIssue. `status` here is the pre-update value.
+    resolved_at       = CASE WHEN sqlc.narg('status') IN ('resolved','closed')
+                              AND status::text NOT IN ('resolved','closed')
                              THEN now() ELSE resolved_at END,
     closed_at         = CASE WHEN sqlc.narg('status') = 'closed' THEN now() ELSE closed_at END,
     updated_at        = now()

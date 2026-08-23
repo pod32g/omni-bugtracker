@@ -617,6 +617,35 @@ func issueWhere(f service.IssueFilter) (string, []any) {
 // as a comment on the issue in the same transaction, so a transition and the
 // reason for it can never land apart — either both are visible or neither is.
 // changes is stored on the activity row; pass nil for none.
+// setIssueStatusSQL is the assignment half of a status write, shared by the two places
+// that perform one: TransitionIssue (which appends a compare-and-set predicate) and
+// git ingestion (which has no expected prior status). They were two copies, and two
+// copies is how the resolved_at bug below survived being fixed in one of them.
+//
+// $1 is the issue id, $2 the new status. $2 is bound as text and cast per use —
+// comparisons need text, the assignment needs the enum. A bare $2 for both makes
+// Postgres deduce conflicting types (42P08).
+//
+// resolved_at re-stamps on every *entry* into a terminal status. The old condition was
+// `AND resolved_at IS NULL`, which stamped once and never again: an issue resolved in
+// January, reopened in June and resolved in July still reported January. Every metric
+// derived from it was wrong for exactly the issues most worth measuring — the ones that
+// regressed — including AvgResolutionHours, MTTRHours, the resolve percentiles and the
+// SLA resolution clock, which saw a target met months before the work happened.
+//
+// `status` inside a SET expression is the pre-update value, so this fires on
+// non-terminal → terminal and leaves resolved → closed alone. Earlier resolution dates
+// are not lost: every transition writes an activity row, and its created_at is when
+// that resolution happened.
+const setIssueStatusSQL = `
+	UPDATE issues SET status = $2::issue_status,
+	  resolved_at = CASE WHEN $2::text IN ('resolved','closed')
+	                      AND status::text NOT IN ('resolved','closed')
+	                     THEN now() ELSE resolved_at END,
+	  closed_at   = CASE WHEN $2::text = 'closed' THEN now() ELSE closed_at END,
+	  updated_at  = now()
+	WHERE id = $1 AND deleted_at IS NULL`
+
 func (s *Store) TransitionIssue(
 	ctx context.Context, id uuid.UUID, from, to domain.IssueStatus, actor uuid.UUID,
 	comment string, changes []byte, publish service.PublishFn,
@@ -627,21 +656,13 @@ func (s *Store) TransitionIssue(
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// $2 is bound as text and cast per use — comparisons need text, the assignment needs
-	// the enum. Using a bare $2 for both makes Postgres deduce conflicting types (42P08).
-	//
 	// `status = $3` is the compare-and-set. The caller validated CanTransition(from, to)
 	// in Go against a status it read in a *separate* query, so without this predicate
 	// the check is advisory: two concurrent transitions both read `in_progress`, both
 	// pass validation, and the second overwrites the first — landing states the graph
 	// forbids (blocked → resolved) and emitting two contradictory status_changed events
 	// for one issue. Making the read part of the write is what closes the window.
-	const upd = `
-		UPDATE issues SET status = $2::issue_status,
-		  resolved_at = CASE WHEN $2::text IN ('resolved','closed') AND resolved_at IS NULL THEN now() ELSE resolved_at END,
-		  closed_at   = CASE WHEN $2::text = 'closed' THEN now() ELSE closed_at END,
-		  updated_at  = now()
-		WHERE id = $1 AND deleted_at IS NULL AND status = $3::issue_status`
+	const upd = setIssueStatusSQL + ` AND status = $3::issue_status`
 	tag, err := tx.Exec(ctx, upd, id, string(to), string(from))
 	if err != nil {
 		return domain.Issue{}, err
@@ -1492,12 +1513,9 @@ func (s *Store) ApplyGitLink(ctx context.Context, in service.GitLinkInput, publi
 		entityType, entityID = "pull_request", *in.PRID
 	}
 	if in.NewStatus != nil {
-		if _, err := tx.Exec(ctx,
-			`UPDATE issues SET status = $2::issue_status,
-			   resolved_at = CASE WHEN $2::text IN ('resolved','closed') AND resolved_at IS NULL THEN now() ELSE resolved_at END,
-			   closed_at   = CASE WHEN $2::text = 'closed' THEN now() ELSE closed_at END,
-			   updated_at  = now()
-			 WHERE id = $1 AND deleted_at IS NULL`, in.IssueID, string(*in.NewStatus)); err != nil {
+		// The same statement TransitionIssue uses, minus the compare-and-set: a commit
+		// saying "fixes BUG-12" has no expected prior status to check against.
+		if _, err := tx.Exec(ctx, setIssueStatusSQL, in.IssueID, string(*in.NewStatus)); err != nil {
 			return err
 		}
 	}
