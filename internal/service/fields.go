@@ -26,7 +26,7 @@ const maxFieldOptions = 100
 func (h *httpHandlers) listFieldDefinitions(w http.ResponseWriter, r *http.Request) {
 	defs, err := h.repo.ListFieldDefinitions(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if defs == nil {
@@ -143,7 +143,7 @@ func (h *httpHandlers) updateFieldDefinition(w http.ResponseWriter, r *http.Requ
 	}
 	def, err := h.repo.UpdateFieldDefinition(r.Context(), id, in)
 	if err != nil {
-		writeNotFoundOrError(w, err, "field", "update failed")
+		h.writeNotFoundOrError(w, r, err, "field", "update failed")
 		return
 	}
 	h.audit(r, "field.update", "field_definition", def.ID.String(), def.Key, nil)
@@ -157,7 +157,7 @@ func (h *httpHandlers) deleteFieldDefinition(w http.ResponseWriter, r *http.Requ
 	}
 	deleted, err := h.repo.DeleteFieldDefinition(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !deleted {
@@ -175,7 +175,7 @@ func (h *httpHandlers) listIssueFields(w http.ResponseWriter, r *http.Request) {
 	}
 	values, err := h.repo.IssueFieldValues(r.Context(), issue.ID)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if values == nil {
@@ -203,20 +203,24 @@ func (h *httpHandlers) setIssueFields(w http.ResponseWriter, r *http.Request) {
 	}
 	defs, err := h.repo.ListFieldDefinitions(r.Context(), issue.ProjectKey)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "load fields failed", err.Error())
+		h.serverError(w, r, "load fields failed", err)
 		return
 	}
 	if problems := ValidateFieldValues(defs, issue.Type, body, false); len(problems) > 0 {
 		httpapi.WriteValidation(w, problems)
 		return
 	}
+	// 500, not 400: ValidateFieldValues above has already passed on this payload, so a
+	// failure here is a constraint violation or a database fault — the client cannot
+	// fix it by sending something different, and telling them to try is worse than
+	// useless because a well-behaved one will not retry a 400.
 	if err := h.repo.SetIssueFieldValues(r.Context(), issue.ID, body); err != nil {
-		httpapi.WriteProblem(w, http.StatusBadRequest, "save failed", err.Error())
+		h.serverError(w, r, "save failed", err)
 		return
 	}
 	values, err := h.repo.IssueFieldValues(r.Context(), issue.ID)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "reload failed", err.Error())
+		h.serverError(w, r, "reload failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": values})

@@ -51,11 +51,41 @@ func (s *Store) UpsertUser(ctx context.Context, in service.UpsertUserParams) (do
 		      avatar_url   = CASE WHEN users.profile_overridden THEN users.avatar_url
 		                          ELSE COALESCE(NULLIF(EXCLUDED.avatar_url, ''), users.avatar_url) END,
 		      last_seen_at = now(), updated_at = now()
-		RETURNING id, identity_sub, email, display_name, avatar_url, role`
+		RETURNING id, identity_sub, email, display_name, avatar_url, role, is_active`
 	var u domain.User
 	err := s.pool.QueryRow(ctx, q, in.IdentitySub, in.Email, in.DisplayName, in.AvatarURL).
-		Scan(&u.ID, &u.IdentitySub, &u.Email, &u.DisplayName, &u.AvatarURL, &u.Role)
+		Scan(&u.ID, &u.IdentitySub, &u.Email, &u.DisplayName, &u.AvatarURL, &u.Role, &u.IsActive)
 	return u, err
+}
+
+// SetUserActive activates or deactivates a user and revokes every API token they hold
+// when deactivating. Revocation is part of the same statement pair rather than a
+// follow-up call: a deactivation that left live tokens behind would be worse than none
+// at all, because it reads as done.
+func (s *Store) SetUserActive(ctx context.Context, id uuid.UUID, active bool) (domain.User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.User{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var u domain.User
+	err = tx.QueryRow(ctx,
+		`UPDATE users SET is_active = $2, updated_at = now() WHERE id = $1
+		 RETURNING id, identity_sub, email, display_name, avatar_url, role, is_active`,
+		id, active).
+		Scan(&u.ID, &u.IdentitySub, &u.Email, &u.DisplayName, &u.AvatarURL, &u.Role, &u.IsActive)
+	if err != nil {
+		return domain.User{}, err
+	}
+	if !active {
+		if _, err := tx.Exec(ctx,
+			`UPDATE api_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`,
+			id); err != nil {
+			return domain.User{}, err
+		}
+	}
+	return u, tx.Commit(ctx)
 }
 
 func (s *Store) GetUserByToken(ctx context.Context, tokenHash []byte) (service.TokenPrincipal, error) {
@@ -63,7 +93,11 @@ func (s *Store) GetUserByToken(ctx context.Context, tokenHash []byte) (service.T
 		SELECT t.id, u.id, u.identity_sub, u.email, u.display_name, u.avatar_url, u.role, t.scopes
 		FROM api_tokens t JOIN users u ON u.id = t.user_id
 		WHERE t.token_hash = $1 AND t.revoked_at IS NULL
-		  AND (t.expires_at IS NULL OR t.expires_at > now())`
+		  AND (t.expires_at IS NULL OR t.expires_at > now())
+		  -- A deactivated owner's token outlives their access without this. Checked on
+		  -- every request rather than only at deactivation, so it also covers tokens
+		  -- issued before is_active was enforced.
+		  AND u.is_active`
 	var tp service.TokenPrincipal
 	err := s.pool.QueryRow(ctx, q, tokenHash).Scan(
 		&tp.TokenID, &tp.User.ID, &tp.User.IdentitySub, &tp.User.Email,
@@ -584,7 +618,7 @@ func issueWhere(f service.IssueFilter) (string, []any) {
 // reason for it can never land apart — either both are visible or neither is.
 // changes is stored on the activity row; pass nil for none.
 func (s *Store) TransitionIssue(
-	ctx context.Context, id uuid.UUID, to domain.IssueStatus, actor uuid.UUID,
+	ctx context.Context, id uuid.UUID, from, to domain.IssueStatus, actor uuid.UUID,
 	comment string, changes []byte, publish service.PublishFn,
 ) (domain.Issue, error) {
 	tx, err := s.pool.Begin(ctx)
@@ -595,20 +629,36 @@ func (s *Store) TransitionIssue(
 
 	// $2 is bound as text and cast per use — comparisons need text, the assignment needs
 	// the enum. Using a bare $2 for both makes Postgres deduce conflicting types (42P08).
+	//
+	// `status = $3` is the compare-and-set. The caller validated CanTransition(from, to)
+	// in Go against a status it read in a *separate* query, so without this predicate
+	// the check is advisory: two concurrent transitions both read `in_progress`, both
+	// pass validation, and the second overwrites the first — landing states the graph
+	// forbids (blocked → resolved) and emitting two contradictory status_changed events
+	// for one issue. Making the read part of the write is what closes the window.
 	const upd = `
 		UPDATE issues SET status = $2::issue_status,
 		  resolved_at = CASE WHEN $2::text IN ('resolved','closed') AND resolved_at IS NULL THEN now() ELSE resolved_at END,
 		  closed_at   = CASE WHEN $2::text = 'closed' THEN now() ELSE closed_at END,
 		  updated_at  = now()
-		WHERE id = $1 AND deleted_at IS NULL`
-	tag, err := tx.Exec(ctx, upd, id, string(to))
+		WHERE id = $1 AND deleted_at IS NULL AND status = $3::issue_status`
+	tag, err := tx.Exec(ctx, upd, id, string(to), string(from))
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	// No row means the issue was deleted between resolution and here. Bail before
-	// writing an activity entry and publishing an event for a write that never landed.
+	// No row means one of two things: the issue was deleted between resolution and
+	// here, or somebody else moved it first. Distinguishing them costs one query and
+	// is worth it — "it's gone" and "somebody beat you to it" need different words in
+	// the UI, and the second is a 409 rather than a 404.
 	if tag.RowsAffected() == 0 {
-		return domain.Issue{}, pgx.ErrNoRows
+		var current domain.IssueStatus
+		err := tx.QueryRow(ctx,
+			`SELECT status FROM issues WHERE id = $1 AND deleted_at IS NULL`, id).Scan(&current)
+		if err != nil {
+			return domain.Issue{}, pgx.ErrNoRows
+		}
+		return domain.Issue{}, fmt.Errorf("%w: expected %s, found %s",
+			service.ErrStaleStatus, from, current)
 	}
 	// The from/to pair goes on the activity row: a timeline entry that says only
 	// "status changed" cannot be read back into what actually happened.
@@ -667,9 +717,17 @@ func (s *Store) SetIssueArchived(ctx context.Context, id, actor uuid.UUID, archi
 	return scanIssue(s.pool.QueryRow(ctx, selectLiveIssue, id))
 }
 
-// ArchiveStaleClosed archives every non-archived, non-deleted issue whose closed_at is
-// older than `days`, in one set-based statement, and writes one activity row per issue.
-// Returns the number archived. Used by the daily auto-archive job.
+// ArchiveStaleClosed archives every non-archived, non-deleted issue that is currently
+// finished and whose closed_at is older than `days`, in one set-based statement, and
+// writes one activity row per issue. Returns the number archived. Used by the daily
+// auto-archive job.
+//
+// The status predicate is load-bearing. closed_at records when an issue was last
+// closed and is never cleared on reopen — both write sites keep the old value with
+// `CASE WHEN ... THEN now() ELSE closed_at END` — so a reopened regression still
+// carries a closed_at from its first life. Filtering on that timestamp alone archived
+// live work: a bug reopened after 30 days vanished from every list and from search
+// while somebody was assigned to it.
 func (s *Store) ArchiveStaleClosed(ctx context.Context, days int, actor uuid.UUID) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -680,7 +738,8 @@ func (s *Store) ArchiveStaleClosed(ctx context.Context, days int, actor uuid.UUI
 	const q = `
 		WITH archived AS (
 			UPDATE issues SET archived_at = now(), updated_at = now()
-			 WHERE closed_at IS NOT NULL
+			 WHERE status IN ('resolved', 'closed')
+			   AND closed_at IS NOT NULL
 			   AND closed_at < now() - ($1 * interval '1 day')
 			   AND archived_at IS NULL
 			   AND deleted_at IS NULL
@@ -1049,7 +1108,18 @@ func (s *Store) GetComment(ctx context.Context, id uuid.UUID) (domain.Comment, e
 }
 
 // UpdateComment replaces the body and stamps edited_at; records comment.edited.
-func (s *Store) UpdateComment(ctx context.Context, id, actor uuid.UUID, bodyMD string) (domain.Comment, error) {
+// UpdateComment rewrites a comment body, re-syncing the references and mentions the
+// new text implies, and runs publish in the same transaction.
+//
+// The publish hook is not optional decoration: syncMentions writes issue_mentions rows
+// with notified_at NULL for the dispatcher to claim, and the dispatcher only runs
+// because an event was enqueued. Without one, editing a comment to add "@alex can you
+// look at this" recorded the mention and notified nobody — the row sat unclaimed until
+// some unrelated event on the same issue swept it up, carrying that event's payload.
+// Every other write in this file already had the hook; this one was missed.
+func (s *Store) UpdateComment(
+	ctx context.Context, id, actor uuid.UUID, bodyMD string, publish service.PublishFn,
+) (domain.Comment, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return domain.Comment{}, err
@@ -1074,6 +1144,11 @@ func (s *Store) UpdateComment(ctx context.Context, id, actor uuid.UUID, bodyMD s
 	}
 	if err := syncMentions(ctx, tx, issueID, &id, actor, bodyMD); err != nil {
 		return domain.Comment{}, fmt.Errorf("sync mentions: %w", err)
+	}
+	if publish != nil {
+		if err := publish(tx); err != nil {
+			return domain.Comment{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Comment{}, err
@@ -1283,10 +1358,17 @@ func (s *Store) Dashboard(ctx context.Context, projectKey string) (domain.Dashbo
 	return d, nil
 }
 
-func (s *Store) ListUsers(ctx context.Context, limit int32) ([]domain.User, error) {
+// ListUsers returns active users, or everyone when includeInactive is set.
+//
+// The default has to stay active-only: this feeds the assignee pickers, and offering
+// a leaver as an assignee is how work gets assigned to nobody. The admin screen passes
+// true, because a list that hid deactivated accounts would make deactivation a
+// one-way door with no way back through the UI.
+func (s *Store) ListUsers(ctx context.Context, limit int32, includeInactive bool) ([]domain.User, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, identity_sub, email, display_name, avatar_url, role
-		 FROM users WHERE is_active = TRUE ORDER BY display_name LIMIT $1`, clampLimit(limit))
+		`SELECT id, identity_sub, email, display_name, avatar_url, role, is_active
+		 FROM users WHERE ($2 OR is_active) ORDER BY is_active DESC, display_name LIMIT $1`,
+		clampLimit(limit), includeInactive)
 	if err != nil {
 		return nil, err
 	}
@@ -1294,7 +1376,7 @@ func (s *Store) ListUsers(ctx context.Context, limit int32) ([]domain.User, erro
 	var out []domain.User
 	for rows.Next() {
 		var u domain.User
-		if err := rows.Scan(&u.ID, &u.IdentitySub, &u.Email, &u.DisplayName, &u.AvatarURL, &u.Role); err != nil {
+		if err := rows.Scan(&u.ID, &u.IdentitySub, &u.Email, &u.DisplayName, &u.AvatarURL, &u.Role, &u.IsActive); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -1467,26 +1549,48 @@ const selectIssue = `
 	       COALESCE(i.rank, ''),
 	       i.due_at, i.first_response_at, i.resolved_at,
 	       sla.response_due, sla.resolution_due, sla.response_state, sla.resolution_state,
-	       i.estimate_minutes, COALESCE(tm.spent_minutes, 0),
+	       i.estimate_minutes,
+	       -- A correlated scalar subquery, not a LEFT JOIN on the issue_time view.
+	       -- issue_time is a GROUP BY view: a grouped subquery cannot be pulled up, and
+	       -- a LEFT JOIN's ON is not a pushdown-safe restriction, so Postgres aggregated
+	       -- the *entire* time_entries table to produce one integer per row. This form
+	       -- parameterises against idx_time_entries_issue and reads only this issue's
+	       -- entries. (issue_time is still the right shape for rollups over a set.)
+	       COALESCE((SELECT sum(te.minutes)::INT FROM time_entries te WHERE te.issue_id = i.id), 0),
 	       i.iteration_id, itr.name,
 	       ru.id, ru.display_name, ru.email,
 	       au.id, au.display_name, au.email,
 	       COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id WHERE il.issue_id = i.id ORDER BY l.name), '{}') AS labels,
 	       COALESCE(array(SELECT c.name FROM issue_components ic JOIN components c ON c.id = ic.component_id WHERE ic.issue_id = i.id ORDER BY c.name), '{}') AS components,
 	       i.milestone_id, m.title, i.release_id, r.version,
-	       (SELECT count(*) FROM issue_relations rel
-	          JOIN issues b ON b.id = CASE WHEN rel.kind = 'blocks' AND rel.to_issue = i.id THEN rel.from_issue
-	                                       WHEN rel.kind = 'blocked_by' AND rel.from_issue = i.id THEN rel.to_issue END
-	         WHERE b.deleted_at IS NULL AND b.status NOT IN ('resolved','closed')) AS open_blockers
-	FROM issues i
-	JOIN projects p ON p.id = i.project_id
-	LEFT JOIN users ru ON ru.id = i.reporter_id
-	LEFT JOIN users au ON au.id = i.assignee_id
-	LEFT JOIN milestones m ON m.id = i.milestone_id
-	LEFT JOIN releases r ON r.id = i.release_id
-	LEFT JOIN issue_sla sla ON sla.issue_id = i.id
-	LEFT JOIN issue_time tm ON tm.issue_id = i.id
-	LEFT JOIN iterations itr ON itr.id = i.iteration_id`
+	       -- Two plainly-correlated counts rather than one join through a CASE.
+	       --
+	       -- The CASE built the *join key*, which buried the i.id correlation inside an
+	       -- expression no index can match: Postgres sequentially scanned the whole of
+	       -- issue_relations once per returned row, so the cost of a page grew with the
+	       -- number of relations in the install rather than with the size of the page.
+	       -- Split into its two real cases, each is an equality on an indexed column
+	       -- (idx_issue_relations_to, and the from_issue unique index).
+	       --
+	       -- The branches cannot overlap — a row has exactly one kind — so summing them
+	       -- cannot double-count. Verified equal to the old expression for every issue in
+	       -- a 20k-issue / 40k-relation dataset.
+	       ((SELECT count(*) FROM issue_relations rel
+	           JOIN issues b ON b.id = rel.from_issue
+	          WHERE rel.to_issue = i.id AND rel.kind = 'blocks'
+	            AND b.deleted_at IS NULL AND b.status NOT IN ('resolved','closed'))
+	      + (SELECT count(*) FROM issue_relations rel
+	           JOIN issues b ON b.id = rel.to_issue
+	          WHERE rel.from_issue = i.id AND rel.kind = 'blocked_by'
+	            AND b.deleted_at IS NULL AND b.status NOT IN ('resolved','closed'))) AS open_blockers
+FROM issues i
+JOIN projects p ON p.id = i.project_id
+LEFT JOIN users ru ON ru.id = i.reporter_id
+LEFT JOIN users au ON au.id = i.assignee_id
+LEFT JOIN milestones m ON m.id = i.milestone_id
+LEFT JOIN releases r ON r.id = i.release_id
+LEFT JOIN issue_sla sla ON sla.issue_id = i.id
+LEFT JOIN iterations itr ON itr.id = i.iteration_id`
 
 // selectLiveIssue re-reads one issue by id after a write. The deleted_at guard
 // matters: every issue write is already conditioned on `deleted_at IS NULL`, so

@@ -8,6 +8,7 @@ import { Avatar, StatusPill } from "../../components/Badges";
 const EVENT_TEXT: Record<string, string> = {
   "user.mentioned": "mentioned you",
   "comment.created": "commented",
+  "comment.edited": "edited a comment",
   "issue.assigned": "assigned this to you",
   "issue.created": "filed this",
   "issue.status_changed": "changed the status",

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { api, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
+import { api, ApiError, type IssueType, type NewIssue, type Priority, type Severity } from "../../lib/api";
+import { issueKeys } from "../../lib/queryKeys";
 import { statusLabel, statusTone } from "../../components/Badges";
 import { AssigneeSelect, ComponentsSelect, Field, LabelsInput, Modal, Select, TextInput, Textarea } from "./formFields";
 import { NewIssueFields } from "./CustomFields";
@@ -157,16 +158,30 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
       return issue;
     },
     onSuccess: (issue) => {
-      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: issueKeys.all });
       onClose();
       navigate(`/issues/${issue.key}`);
     },
   });
 
   const isBug = form.type === "bug";
+  // Field-keyed messages from a 422. The server names the field it rejected, so the
+  // message belongs next to that input rather than only in the banner at the bottom.
+  const fieldErrors = create.error instanceof ApiError ? create.error.errors : {};
+
+  // Anything typed is worth a confirmation before a stray backdrop click throws it
+  // away. The template body does not count: it was put there by the app, not by them.
+  const isDirty = () =>
+    form.title.trim() !== "" ||
+    (form.description_md ?? "").trim() !== (chosen?.body_md ?? "").trim() ||
+    (form.labels?.length ?? 0) > 0 ||
+    (form.components?.length ?? 0) > 0 ||
+    [form.repro_steps_md, form.expected_md, form.actual_md, form.environment_md].some(
+      (v) => (v ?? "").trim() !== "",
+    );
 
   return (
-    <Modal title={`New issue in ${projectKey}`} onClose={onClose}>
+    <Modal title={`New issue in ${projectKey}`} onClose={onClose} confirmClose={isDirty}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Type">
           <Select value={form.type} onChange={(v) => set("type", v as IssueType)} options={TYPES} />
@@ -182,14 +197,14 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
         <Field label="Assignee">
           <AssigneeSelect value={form.assignee_id ?? ""} onChange={(v) => set("assignee_id", v)} />
         </Field>
-        <Field label="Estimate (optional)">
+        <Field label="Estimate (optional)" error={fieldErrors.estimate}>
           <TextInput
             value={form.estimate ?? ""}
             onChange={(v) => set("estimate", v)}
             placeholder="2d, 4h, 90m"
           />
         </Field>
-        <Field label="Due date (optional)">
+        <Field label="Due date (optional)" error={fieldErrors.due_at}>
           {/* A date input, not a datetime one: people commit to a day. The API
               resolves a bare date to the end of it. */}
           <input
@@ -201,7 +216,7 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
         </Field>
       </div>
 
-      <Field label="Title" className="mt-3">
+      <Field label="Title" className="mt-3" error={fieldErrors.title}>
         <TextInput autoFocus value={form.title} onChange={(v) => set("title", v)} placeholder="Short summary" />
       </Field>
       <SimilarIssues
@@ -211,7 +226,7 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
         onMarkDuplicate={setDuplicateOf}
       />
       {forType.length > 0 && (
-        <Field label="Template" className="mt-3">
+        <Field label="Template" className="mt-3" error={fieldErrors.template_id}>
           <div className="flex flex-wrap items-center gap-1.5">
             {forType.map((t) => (
               <button
@@ -245,7 +260,7 @@ export function NewIssueForm({ projectKey, onClose }: { projectKey: string; onCl
           )}
         </Field>
       )}
-      <Field label="Description (Markdown)" className="mt-3">
+      <Field label="Description (Markdown)" className="mt-3" error={fieldErrors.description_md}>
         <Textarea value={form.description_md ?? ""} onChange={(v) => set("description_md", v)} rows={4} />
       </Field>
       <NewIssueFields

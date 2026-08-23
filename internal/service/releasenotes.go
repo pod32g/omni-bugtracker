@@ -121,7 +121,7 @@ func (h *httpHandlers) releaseNotes(w http.ResponseWriter, r *http.Request) {
 
 	rel, issues, err := h.releaseWithIssues(r.Context(), id)
 	if err != nil {
-		writeNotFoundOrError(w, err, "release", "compose failed")
+		h.writeNotFoundOrError(w, r, err, "release", "compose failed")
 		return
 	}
 	notes := ComposeReleaseNotes(rel, issues)
@@ -150,7 +150,7 @@ func (h *httpHandlers) releaseNotes(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := h.repo.UpdateRelease(r.Context(), UpdateReleaseInput{ID: id, NotesMD: &notes})
 	if err != nil {
-		writeNotFoundOrError(w, err, "release", "update failed")
+		h.writeNotFoundOrError(w, r, err, "release", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)

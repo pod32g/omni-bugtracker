@@ -19,6 +19,7 @@ import {
   type Release,
   type User,
 } from "../../lib/api";
+import { issueKeys } from "../../lib/queryKeys";
 import { describeActivity, timeAgo } from "../../lib/activity";
 import { formatMinutes, parseDuration } from "../../lib/duration";
 import { remarkIssueKeys } from "../../lib/issueRefs";
@@ -109,7 +110,7 @@ export function IssueDetail() {
     mutationFn: (body: Partial<NewIssue>) => api.updateIssue(issueKey, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["issue", issueKey] });
-      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: issueKeys.all });
     },
   });
 
@@ -118,7 +119,7 @@ export function IssueDetail() {
   const move = useMutation({
     mutationFn: (targetProjectKey: string) => api.moveIssue(issueKey, targetProjectKey),
     onSuccess: (moved) => {
-      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: issueKeys.all });
       qc.invalidateQueries({ queryKey: ["issue", moved.key] });
       navigate(`/issues/${moved.key}`, { replace: true });
     },
@@ -134,7 +135,7 @@ export function IssueDetail() {
   const del = useMutation({
     mutationFn: () => api.deleteIssue(issueKey),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: issueKeys.all });
       navigate("/issues");
     },
   });
@@ -142,7 +143,7 @@ export function IssueDetail() {
     mutationFn: (archived: boolean) => (archived ? api.archiveIssue(issueKey) : api.unarchiveIssue(issueKey)),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["issue", issueKey] });
-      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: issueKeys.all });
       qc.invalidateQueries({ queryKey: ["activity", issueKey] });
     },
   });
@@ -161,7 +162,7 @@ export function IssueDetail() {
       until ? api.snoozeIssue(issueKey, until, "") : api.wakeIssue(issueKey),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["issue", issueKey] });
-      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: issueKeys.all });
       qc.invalidateQueries({ queryKey: ["activity", issueKey] });
     },
   });
@@ -577,7 +578,7 @@ function LinkedIssues({ issueKey }: { issueKey: string }) {
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["relations", issueKey] });
     qc.invalidateQueries({ queryKey: ["activity", issueKey] });
-    qc.invalidateQueries({ queryKey: ["issues"] }); // open_blockers on cards
+    qc.invalidateQueries({ queryKey: issueKeys.all }); // open_blockers on cards
   };
   const add = useMutation({
     mutationFn: () => api.addRelation(issueKey, kind, otherKey.trim()),
@@ -1492,7 +1493,7 @@ function IterationControl({ issue, projectKey }: { issue: Issue; projectKey: str
     mutationFn: (id: string) => api.setIssueIteration(issue.key, id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["issue", issue.key] });
-      qc.invalidateQueries({ queryKey: ["issues"] });
+      qc.invalidateQueries({ queryKey: issueKeys.all });
       qc.invalidateQueries({ queryKey: ["iterations", projectKey] });
     },
   });
@@ -1548,7 +1549,7 @@ function EffortControl({ issue, onEstimate }: { issue: Issue; onEstimate: (v: st
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["time", issue.key] });
     qc.invalidateQueries({ queryKey: ["issue", issue.key] });
-    qc.invalidateQueries({ queryKey: ["issues"] });
+    qc.invalidateQueries({ queryKey: issueKeys.all });
   };
   const log = useMutation({
     mutationFn: () => api.logTime(issue.key, { duration, note }),

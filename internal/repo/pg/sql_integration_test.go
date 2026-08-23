@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/omni/bugtracker/internal/domain"
+	"github.com/omni/bugtracker/internal/service"
 )
 
 // These tests exercise the SQL itself against a real Postgres, because the class of bug
@@ -333,19 +334,40 @@ func TestIntegrationClaimSLAEscalationsIsExactlyOnce(t *testing.T) {
 		}
 	})
 
-	first, err := s.ClaimSLAEscalations(ctx)
+	first, err := s.ClaimSLAEscalations(ctx, nil)
 	if err != nil {
 		t.Fatalf("first sweep: %v", err)
 	}
 	if len(first) == 0 {
 		t.Skip("no issues past an SLA threshold in this database — nothing to claim")
 	}
-	second, err := s.ClaimSLAEscalations(ctx)
+	second, err := s.ClaimSLAEscalations(ctx, nil)
 	if err != nil {
 		t.Fatalf("second sweep: %v", err)
 	}
 	if len(second) != 0 {
 		t.Errorf("second sweep re-claimed %d escalations; each (issue, kind) must be claimed once", len(second))
+	}
+
+	// The claim is only worth making if it can be announced. An enqueue that fails
+	// must take the claim with it, or the escalation is recorded as told and never
+	// told — which the next sweep will not fix, because it skips claimed rows.
+	if _, err := pool.Exec(ctx, `DELETE FROM issue_sla_events`); err != nil {
+		t.Fatalf("reset for rollback check: %v", err)
+	}
+	boom := errors.New("enqueue exploded")
+	if _, err := s.ClaimSLAEscalations(ctx, func(pgx.Tx, []service.SLAEscalation) error {
+		return boom
+	}); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want %v", err, boom)
+	}
+	again, err := s.ClaimSLAEscalations(ctx, nil)
+	if err != nil {
+		t.Fatalf("sweep after rollback: %v", err)
+	}
+	if len(again) != len(first) {
+		t.Errorf("after a failed enqueue %d escalations are re-claimable, want %d — the "+
+			"rest were consumed with nobody told", len(again), len(first))
 	}
 }
 
@@ -420,7 +442,7 @@ func TestIntegrationTransitionIssueComment(t *testing.T) {
 	t.Run("comment is recorded", func(t *testing.T) {
 		issueID, actorID := seed(t)
 		changes := []byte(`{"status":{"from":"open","to":"resolved"}}`)
-		issue, err := store.TransitionIssue(ctx, issueID, domain.StatusResolved, actorID,
+		issue, err := store.TransitionIssue(ctx, issueID, domain.StatusOpen, domain.StatusResolved, actorID,
 			"fixed in a0cf1ff", changes, nil)
 		if err != nil {
 			t.Fatalf("transition: %v", err)
@@ -453,7 +475,7 @@ func TestIntegrationTransitionIssueComment(t *testing.T) {
 	t.Run("empty and whitespace comments create nothing", func(t *testing.T) {
 		for _, body := range []string{"", "   ", "\n\t "} {
 			issueID, actorID := seed(t)
-			if _, err := store.TransitionIssue(ctx, issueID, domain.StatusResolved, actorID,
+			if _, err := store.TransitionIssue(ctx, issueID, domain.StatusOpen, domain.StatusResolved, actorID,
 				body, nil, nil); err != nil {
 				t.Fatalf("transition: %v", err)
 			}
@@ -468,7 +490,7 @@ func TestIntegrationTransitionIssueComment(t *testing.T) {
 	t.Run("a failure rolls back both", func(t *testing.T) {
 		issueID, actorID := seed(t)
 		boom := errors.New("publish exploded")
-		_, err := store.TransitionIssue(ctx, issueID, domain.StatusResolved, actorID,
+		_, err := store.TransitionIssue(ctx, issueID, domain.StatusOpen, domain.StatusResolved, actorID,
 			"should not survive", nil, func(pgx.Tx) error { return boom })
 		if !errors.Is(err, boom) {
 			t.Fatalf("err = %v, want %v", err, boom)
@@ -484,4 +506,342 @@ func TestIntegrationTransitionIssueComment(t *testing.T) {
 			t.Errorf("comment committed despite failure: %#v", got)
 		}
 	})
+}
+
+// TestIntegrationArchiveStaleClosedSkipsReopened is the regression test for auto-archive
+// hiding live work.
+//
+// closed_at is never cleared on reopen — both write sites keep the old value with
+// `CASE WHEN ... THEN now() ELSE closed_at END` — so an issue that was closed months
+// ago and reopened yesterday still carries a stale closed_at. Selecting on that
+// timestamp alone archived it: the bug disappeared from every list and from search
+// while somebody was assigned to it, and nothing in the UI said why.
+func TestIntegrationArchiveStaleClosedSkipsReopened(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := &Store{pool: pool}
+
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	var actorID, projectID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (identity_sub, email, display_name, role)
+		 VALUES ($1, $2, $3, 'owner') RETURNING id`,
+		"test:"+suffix, suffix+"@test.local", "tester-"+suffix).Scan(&actorID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO projects (key, name) VALUES ($1, 'Archive Test') RETURNING id`,
+		"A"+strings.ToUpper(suffix[:4])).Scan(&projectID); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+		_, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, actorID)
+	})
+
+	// Every row carries the same long-stale closed_at. Status is the only difference,
+	// which is exactly what the predicate under test has to notice.
+	newIssue := func(t *testing.T, number int, status string) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO issues (project_id, number, type, title, status, priority, reporter_id, closed_at)
+			 VALUES ($1, $2, 'bug', $3, $4::issue_status, 'p2', $5, now() - interval '400 days')
+			 RETURNING id`,
+			projectID, number, status+" issue", status, actorID).Scan(&id); err != nil {
+			t.Fatalf("seed %s issue: %v", status, err)
+		}
+		return id
+	}
+	closed := newIssue(t, 1, "closed")
+	resolved := newIssue(t, 2, "resolved")
+	reopened := newIssue(t, 3, "reopened")
+	inProgress := newIssue(t, 4, "in_progress")
+
+	if _, err := store.ArchiveStaleClosed(ctx, 30, actorID); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+
+	archived := func(t *testing.T, id uuid.UUID) bool {
+		t.Helper()
+		var got bool
+		if err := pool.QueryRow(ctx,
+			`SELECT archived_at IS NOT NULL FROM issues WHERE id = $1`, id).Scan(&got); err != nil {
+			t.Fatalf("read archived_at: %v", err)
+		}
+		return got
+	}
+
+	for _, tc := range []struct {
+		name string
+		id   uuid.UUID
+		want bool
+	}{
+		{"closed", closed, true},
+		{"resolved", resolved, true},
+		// The bug: both of these carry a stale closed_at but are live work.
+		{"reopened", reopened, false},
+		{"in_progress", inProgress, false},
+	} {
+		if got := archived(t, tc.id); got != tc.want {
+			t.Errorf("%s issue: archived = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestIntegrationDeactivationRevokesAccess covers the offboarding path end to end.
+//
+// users.is_active existed in the schema from the start and was written by nothing and
+// read only by the assignee picker, so "deactivating" somebody removed them from a
+// dropdown and left every credential they held working. The two assertions that matter
+// are that an existing token stops resolving and that reactivation is not a one-way
+// door.
+func TestIntegrationDeactivationRevokesAccess(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := &Store{pool: pool}
+
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	var userID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (identity_sub, email, display_name, role)
+		 VALUES ($1, $2, $3, 'owner') RETURNING id`,
+		"test:"+suffix, suffix+"@test.local", "leaver-"+suffix).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID) })
+
+	tokenHash := []byte("hash-" + suffix + "-0123456789abcdef")
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO api_tokens (user_id, name, token_hash, scopes) VALUES ($1, 'ci', $2, '{}')`,
+		userID, tokenHash); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+
+	if _, err := store.GetUserByToken(ctx, tokenHash); err != nil {
+		t.Fatalf("token should resolve while the user is active: %v", err)
+	}
+
+	if _, err := store.SetUserActive(ctx, userID, false); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+
+	// The token is revoked in the same transaction *and* the join filters on
+	// is_active, so this fails for two independent reasons — deliberately, because
+	// tokens issued before this existed are only caught by the second.
+	if _, err := store.GetUserByToken(ctx, tokenHash); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("deactivated user's token still resolves: err = %v", err)
+	}
+	var revoked bool
+	if err := pool.QueryRow(ctx,
+		`SELECT revoked_at IS NOT NULL FROM api_tokens WHERE token_hash = $1`, tokenHash).Scan(&revoked); err != nil {
+		t.Fatalf("read token: %v", err)
+	}
+	if !revoked {
+		t.Error("deactivation left the API token unrevoked")
+	}
+
+	// A deactivated user must not be offered as an assignee, but must still be
+	// visible to the admin screen — otherwise reactivation is unreachable.
+	active, err := store.ListUsers(ctx, 500, false)
+	if err != nil {
+		t.Fatalf("list active: %v", err)
+	}
+	for _, u := range active {
+		if u.ID == userID {
+			t.Error("deactivated user appears in the default (assignee) listing")
+		}
+	}
+	all, err := store.ListUsers(ctx, 500, true)
+	if err != nil {
+		t.Fatalf("list all: %v", err)
+	}
+	found := false
+	for _, u := range all {
+		if u.ID == userID {
+			found = true
+			if u.IsActive == nil || *u.IsActive {
+				t.Error("deactivated user reports IsActive != false in the admin listing")
+			}
+		}
+	}
+	if !found {
+		t.Error("deactivated user is invisible to the admin listing — reactivation is unreachable")
+	}
+
+	// Reactivation restores the account. The revoked token stays revoked: it was
+	// exposed by the departure, and handing it back would defeat the point.
+	u, err := store.SetUserActive(ctx, userID, true)
+	if err != nil {
+		t.Fatalf("reactivate: %v", err)
+	}
+	if u.IsActive == nil || !*u.IsActive {
+		t.Error("reactivation did not set is_active")
+	}
+	if _, err := store.GetUserByToken(ctx, tokenHash); !errors.Is(err, pgx.ErrNoRows) {
+		t.Error("reactivation un-revoked a token that was revoked on departure")
+	}
+}
+
+// TestIntegrationTransitionIssueCompareAndSet covers the lost-update window on status.
+//
+// The workflow graph was enforced in Go against a status read in a separate query, and
+// the UPDATE that followed matched on id alone. Two callers could therefore both read
+// `open`, both validate their edge, and both write — the second silently overwriting
+// the first, producing a state the graph forbids and two contradictory
+// issue.status_changed events for one issue. The predicate makes the read part of the
+// write, so the loser is told rather than ignored.
+func TestIntegrationTransitionIssueCompareAndSet(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := &Store{pool: pool}
+
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	var actorID, projectID, issueID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (identity_sub, email, display_name, role)
+		 VALUES ($1, $2, $3, 'owner') RETURNING id`,
+		"test:"+suffix, suffix+"@test.local", "tester-"+suffix).Scan(&actorID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO projects (key, name) VALUES ($1, 'CAS Test') RETURNING id`,
+		"C"+strings.ToUpper(suffix[:4])).Scan(&projectID); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+		_, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, actorID)
+	})
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO issues (project_id, number, type, title, status, priority, reporter_id)
+		 VALUES ($1, 1, 'bug', 'cas target', 'open', 'p2', $2) RETURNING id`,
+		projectID, actorID).Scan(&issueID); err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+
+	// First writer wins: open → in_progress.
+	if _, err := store.TransitionIssue(ctx, issueID,
+		domain.StatusOpen, domain.StatusInProgress, actorID, "", nil, nil); err != nil {
+		t.Fatalf("first transition: %v", err)
+	}
+
+	// Second writer is working from the stale `open` it read before the first landed.
+	// blocked is a legal target *from open*, so the Go-side check passes and only the
+	// predicate can stop it.
+	_, err := store.TransitionIssue(ctx, issueID,
+		domain.StatusOpen, domain.StatusBlocked, actorID, "", nil, nil)
+	if !errors.Is(err, service.ErrStaleStatus) {
+		t.Fatalf("stale transition: err = %v, want ErrStaleStatus", err)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM issues WHERE id = $1`, issueID).Scan(&status); err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != "in_progress" {
+		t.Errorf("status = %q, want in_progress — the stale write overwrote the live one", status)
+	}
+
+	// A deleted issue is still ErrNoRows, not a conflict: nothing to retry against.
+	if _, err := pool.Exec(ctx, `UPDATE issues SET deleted_at = now() WHERE id = $1`, issueID); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+	if _, err := store.TransitionIssue(ctx, issueID,
+		domain.StatusInProgress, domain.StatusResolved, actorID, "", nil, nil); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("deleted issue: err = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+// TestIntegrationUpdateCommentPublishes covers the mention that an edit records and
+// nobody hears about.
+//
+// syncMentions writes issue_mentions rows with notified_at NULL for the dispatcher to
+// claim, and the dispatcher only runs off an enqueued event. UpdateComment was the one
+// write in this file with no publish hook, so editing a comment to add "@alex can you
+// look" recorded the mention and notified nobody — it sat unclaimed until some
+// unrelated event on the same issue swept it up carrying that event's payload.
+func TestIntegrationUpdateCommentPublishes(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := &Store{pool: pool}
+
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	var authorID, targetID, projectID, issueID, commentID uuid.UUID
+	for _, u := range []struct {
+		into *uuid.UUID
+		name string
+	}{{&authorID, "author-" + suffix}, {&targetID, "target-" + suffix}} {
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO users (identity_sub, email, display_name, role)
+			 VALUES ($1, $2, $3, 'member') RETURNING id`,
+			"test:"+u.name, u.name+"@test.local", u.name).Scan(u.into); err != nil {
+			t.Fatalf("seed user %s: %v", u.name, err)
+		}
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO projects (key, name) VALUES ($1, 'Edit Test') RETURNING id`,
+		"E"+strings.ToUpper(suffix[:4])).Scan(&projectID); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+		_, _ = pool.Exec(ctx, `DELETE FROM users WHERE id IN ($1, $2)`, authorID, targetID)
+	})
+	// resolveHandles only resolves a plain `member` who actually belongs to the
+	// project — you cannot mention somebody into a project they cannot see. Both users
+	// here are members, so both need the row.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'member'), ($1, $3, 'member')`,
+		projectID, authorID, targetID); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO issues (project_id, number, type, title, status, priority, reporter_id)
+		 VALUES ($1, 1, 'bug', 'edit target', 'open', 'p2', $2) RETURNING id`,
+		projectID, authorID).Scan(&issueID); err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO comments (issue_id, author_id, body_md) VALUES ($1, $2, 'no mention here') RETURNING id`,
+		issueID, authorID).Scan(&commentID); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+
+	// Editing in a mention must both record the row and run the hook, in one tx.
+	published := 0
+	if _, err := store.UpdateComment(ctx, commentID, authorID,
+		"actually @target-"+suffix+" should look at this",
+		func(pgx.Tx) error { published++; return nil }); err != nil {
+		t.Fatalf("update comment: %v", err)
+	}
+	if published != 1 {
+		t.Fatalf("publish ran %d times, want 1 — without it the mention below notifies nobody", published)
+	}
+
+	var pending int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM issue_mentions
+		  WHERE issue_id = $1 AND user_id = $2 AND notified_at IS NULL`,
+		issueID, targetID).Scan(&pending); err != nil {
+		t.Fatalf("read mentions: %v", err)
+	}
+	if pending != 1 {
+		t.Errorf("pending mentions = %d, want 1", pending)
+	}
+
+	// A failing hook must take the edit with it — a body claiming to mention somebody
+	// while the mention was rolled back is the worse of the two outcomes.
+	boom := errors.New("publish exploded")
+	if _, err := store.UpdateComment(ctx, commentID, authorID, "rolled back",
+		func(pgx.Tx) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want %v", err, boom)
+	}
+	var body string
+	if err := pool.QueryRow(ctx, `SELECT body_md FROM comments WHERE id = $1`, commentID).Scan(&body); err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if body == "rolled back" {
+		t.Error("edit committed despite the publish failing")
+	}
 }

@@ -32,6 +32,12 @@ const (
 	IssueSLAWarning  = "issue.sla_warning"
 	IssueSLABreached = "issue.sla_breached"
 	IssueCommented   = "comment.created"
+	// CommentEdited fires when a comment body is rewritten. It exists because editing
+	// a comment can introduce an @mention, and the mention fan-out only runs when an
+	// event is enqueued — an edit that published nothing left the mention recorded and
+	// unnotified. Distinct from comment.created so a subscriber is not told the same
+	// comment was posted twice.
+	CommentEdited    = "comment.edited"
 	IssueLinked      = "issue.linked"
 	UserMentioned    = "user.mentioned"
 	ReleasePublished = "release.published"

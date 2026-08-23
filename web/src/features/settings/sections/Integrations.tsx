@@ -4,7 +4,10 @@ import { api, type InboundIntegration } from "../../../lib/api";
 import { Card, ErrorLine, inputClass, quietButtonClass } from "../ui";
 
 const BLURB: Record<string, string> = {
-  git: "Commit and PR webhooks from GitHub or GitLab. Messages saying “fixes BUG-12” link and transition the issue.",
+  // GitHub only — git.Parse rejects every other provider value with "unsupported git
+  // provider". This said "GitHub or GitLab", which sent people to configure a GitLab
+  // webhook that could only ever fail.
+  git: "Commit and PR webhooks from GitHub. Messages saying “fixes BUG-12” link and transition the issue.",
   logging: "Alerts from Omni-Logging. Repeated firings of one rule collapse into a single issue.",
   metrics: "Alerts from Omni-Metrics, fingerprinted the same way.",
 };

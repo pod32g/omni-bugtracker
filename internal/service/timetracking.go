@@ -113,7 +113,7 @@ func (h *httpHandlers) listTimeEntries(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := h.repo.ListTimeEntries(r.Context(), issue.ID)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if entries == nil {
@@ -169,7 +169,7 @@ func (h *httpHandlers) logTime(w http.ResponseWriter, r *http.Request) {
 		SpentOn: strings.TrimSpace(body.SpentOn), Note: body.Note,
 	})
 	if err != nil {
-		writeNotFoundOrError(w, err, "issue", "log failed")
+		h.writeNotFoundOrError(w, r, err, "issue", "log failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, entry)
@@ -208,7 +208,7 @@ func (h *httpHandlers) deleteTimeEntry(w http.ResponseWriter, r *http.Request) {
 	force := p.Can(auth.PermProjectManage)
 	deleted, err := h.repo.DeleteTimeEntry(r.Context(), id, actor, force)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !deleted {

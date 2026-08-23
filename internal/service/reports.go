@@ -51,7 +51,7 @@ func (h *httpHandlers) reports(w http.ResponseWriter, r *http.Request) {
 
 	rep, err := h.repo.Report(r.Context(), f)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "report failed", err.Error())
+		h.serverError(w, r, "report failed", err)
 		return
 	}
 	// Empty slices rather than null, so the client can map over them unconditionally.

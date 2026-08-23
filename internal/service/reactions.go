@@ -34,7 +34,7 @@ func (h *httpHandlers) listReactions(w http.ResponseWriter, r *http.Request) {
 	viewer, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
 	items, err := h.repo.ListReactions(r.Context(), issue.ID, viewer)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -86,7 +86,7 @@ func (h *httpHandlers) toggleReaction(w http.ResponseWriter, r *http.Request) {
 	userID, _ := uuid.Parse(p.UserID)
 	added, err := h.repo.ToggleReaction(r.Context(), issue.ID, commentID, userID, body.Emoji)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "reaction failed", err.Error())
+		h.serverError(w, r, "reaction failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"emoji": body.Emoji, "reacted": added})

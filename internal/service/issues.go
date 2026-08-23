@@ -18,6 +18,12 @@ import (
 var (
 	ErrInvalidTransition = errors.New("invalid status transition")
 	ErrForbidden         = errors.New("forbidden")
+	// ErrStaleStatus means the issue moved between the caller reading its status and
+	// the write landing — the compare-and-set in TransitionIssue found a different
+	// `from`. The caller saw a valid edge; it just is not the edge that is available
+	// any more. Answered as 409, because retrying from the current state may well
+	// succeed and the client needs to re-read to decide.
+	ErrStaleStatus = errors.New("issue status changed while you were working on it")
 )
 
 // Publisher is the subset of events.Publisher the service needs.
@@ -113,7 +119,7 @@ func (s *Issues) Transition(ctx context.Context, id uuid.UUID, from, to domain.I
 
 	changes, _ := json.Marshal(map[string]any{"status": map[string]string{"from": string(from), "to": string(to)}})
 	commented := strings.TrimSpace(comment) != ""
-	return s.repo.TransitionIssue(ctx, id, to, actor, comment, changes, func(tx pgx.Tx) error {
+	return s.repo.TransitionIssue(ctx, id, from, to, actor, comment, changes, func(tx pgx.Tx) error {
 		if err := s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
 			EventType: eventType,
 			IssueID:   id.String(),
@@ -204,6 +210,27 @@ func (s *Issues) Comment(ctx context.Context, issueID, author uuid.UUID, body st
 			EventType: events.IssueCommented,
 			IssueID:   issueID.String(),
 			ActorID:   author.String(),
+		})
+	})
+}
+
+// EditComment rewrites a comment and emits comment.edited.
+//
+// The event is what makes a newly-added @mention reach anybody: syncMentions records
+// the row inside the write, and the dispatcher's mention fan-out only runs off an
+// enqueued event. Editing used to call the store directly with no hook at all.
+// issueID is passed rather than looked up: the mention fan-out keys entirely off
+// ev.IssueID and silently does nothing when it is empty, so an event without it would
+// reintroduce the exact bug this method exists to fix. Every caller has already loaded
+// the comment to authorise the edit, so it costs nothing.
+func (s *Issues) EditComment(
+	ctx context.Context, issueID, commentID, actor uuid.UUID, body string,
+) (domain.Comment, error) {
+	return s.repo.UpdateComment(ctx, commentID, actor, body, func(tx pgx.Tx) error {
+		return s.pub.PublishTx(ctx, tx, events.DomainEventArgs{
+			EventType: events.CommentEdited,
+			IssueID:   issueID.String(),
+			ActorID:   actor.String(),
 		})
 	})
 }

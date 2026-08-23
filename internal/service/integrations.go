@@ -82,7 +82,7 @@ func (h *IntegrationHandlers) GitEvents(w http.ResponseWriter, r *http.Request) 
 	if err := h.pub.Enqueue(r.Context(), events.GitIngestArgs{
 		Provider: "github", Event: event, Payload: body,
 	}); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "enqueue failed", err.Error())
+		h.serverError(w, r, "enqueue failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
@@ -138,7 +138,7 @@ func (h *IntegrationHandlers) ObsAlertsHandler(source string) http.HandlerFunc {
 			Source: source, ProjectKey: strings.ToUpper(alert.ProjectKey),
 			Fingerprint: fingerprint, Payload: body,
 		}); err != nil {
-			httpapi.WriteProblem(w, http.StatusInternalServerError, "enqueue failed", err.Error())
+			h.serverError(w, r, "enqueue failed", err)
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)

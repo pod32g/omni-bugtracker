@@ -18,7 +18,8 @@ tools:
 	go install github.com/riverqueue/river/cmd/river@latest
 	cd web && npm install
 
-## generate: regenerate SQL (sqlc), HTTP types/handlers (oapi-codegen), TS client
+## generate: run the codegen pipelines. NOTE: nothing in the build imports their
+## output today — see "A note on code generation" in docs/ARCHITECTURE.md.
 generate:
 	sqlc generate
 	oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml

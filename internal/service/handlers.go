@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -24,6 +25,7 @@ import (
 	"github.com/omni/bugtracker/internal/auth"
 	"github.com/omni/bugtracker/internal/config"
 	"github.com/omni/bugtracker/internal/domain"
+	"github.com/omni/bugtracker/internal/egress"
 	"github.com/omni/bugtracker/internal/events"
 	"github.com/omni/bugtracker/internal/httpapi"
 	"github.com/omni/bugtracker/internal/prose"
@@ -76,6 +78,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/ops", h.ops)
 	r.Get("/users", h.users)
 	r.Patch("/users/{id}/role", h.updateUserRole)
+	r.Patch("/users/{id}/active", h.updateUserActive)
 	r.Get("/dashboards/overview", h.dashboard)
 	r.Get("/reports", h.reports)
 	r.Get("/search", h.search)
@@ -282,7 +285,7 @@ func (h *httpHandlers) updateMe(w http.ResponseWriter, r *http.Request) {
 		DisplayName: body.DisplayName, AvatarURL: body.AvatarURL,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		h.serverError(w, r, "update failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
@@ -294,7 +297,7 @@ func (h *httpHandlers) listTokens(w http.ResponseWriter, r *http.Request) {
 	uid, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
 	tokens, err := h.repo.ListAPITokens(r.Context(), uid)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if tokens == nil {
@@ -329,14 +332,14 @@ func (h *httpHandlers) createToken(w http.ResponseWriter, r *http.Request) {
 	}
 	plaintext, hash, err := auth.GenerateAPIToken()
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "token generation failed", err.Error())
+		h.serverError(w, r, "token generation failed", err)
 		return
 	}
 	tok, err := h.repo.CreateAPIToken(r.Context(), CreateTokenInput{
 		UserID: uid, Name: strings.TrimSpace(body.Name), Scopes: body.Scopes, TokenHash: hash,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
+		h.serverError(w, r, "create failed", err)
 		return
 	}
 	// `token` is the only time the plaintext is ever returned — shown once.
@@ -361,7 +364,7 @@ func (h *httpHandlers) revokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, err := h.repo.RevokeAPIToken(r.Context(), uid, tid)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "revoke failed", err.Error())
+		h.serverError(w, r, "revoke failed", err)
 		return
 	}
 	if !ok {
@@ -378,7 +381,7 @@ func (h *httpHandlers) listSavedSearches(w http.ResponseWriter, r *http.Request)
 	uid, _ := uuid.Parse(auth.FromContext(r.Context()).UserID)
 	items, err := h.repo.ListSavedSearches(r.Context(), uid)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -410,7 +413,7 @@ func (h *httpHandlers) saveSavedSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	ss, err := h.repo.UpsertSavedSearch(r.Context(), uid, body.Name, body.Query)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "save failed", err.Error())
+		h.serverError(w, r, "save failed", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, ss)
@@ -425,7 +428,7 @@ func (h *httpHandlers) deleteSavedSearch(w http.ResponseWriter, r *http.Request)
 	}
 	ok, err := h.repo.DeleteSavedSearch(r.Context(), uid, id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !ok {
@@ -436,9 +439,15 @@ func (h *httpHandlers) deleteSavedSearch(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *httpHandlers) users(w http.ResponseWriter, r *http.Request) {
-	users, err := h.repo.ListUsers(r.Context(), 500)
+	// ?include_inactive=1 is for the Members admin, which has to be able to see a
+	// deactivated account in order to reactivate it. Gated on admin so the leaver
+	// roster is not readable by everyone; the unqualified list stays active-only,
+	// which is what every assignee picker wants.
+	includeInactive := r.URL.Query().Get("include_inactive") == "1" &&
+		auth.FromContext(r.Context()).Can(auth.PermAdmin)
+	users, err := h.repo.ListUsers(r.Context(), 500, includeInactive)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": users})
@@ -472,11 +481,60 @@ func (h *httpHandlers) updateUserRole(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := h.repo.UpdateUserRole(r.Context(), id, domain.Role(body.Role))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		h.serverError(w, r, "update failed", err)
 		return
 	}
 	h.audit(r, AuditUserRoleChanged, "user", id.String(), user.Email,
 		map[string]any{"role": body.Role})
+	writeJSON(w, http.StatusOK, user)
+}
+
+// updateUserActive deactivates or reactivates a user. Deactivation is how somebody
+// leaves: deleting them would orphan every issue they filed and every comment they
+// wrote, so the account stays and its credentials stop working. Revoking their API
+// tokens is part of the same transaction — see SetUserActive.
+func (h *httpHandlers) updateUserActive(w http.ResponseWriter, r *http.Request) {
+	p := auth.FromContext(r.Context())
+	if !p.Can(auth.PermAdmin) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing admin:all")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad user id", "")
+		return
+	}
+	// Same guard as the role endpoint: locking yourself out of the install you
+	// administer is not a thing an API should let you do by accident.
+	if id.String() == p.UserID {
+		httpapi.WriteProblem(w, http.StatusConflict, "forbidden", "you can't deactivate yourself")
+		return
+	}
+	var body struct {
+		IsActive *bool `json:"is_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	if body.IsActive == nil {
+		httpapi.WriteValidation(w, map[string]string{"is_active": "required"})
+		return
+	}
+	user, err := h.repo.SetUserActive(r.Context(), id, *body.IsActive)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such user")
+			return
+		}
+		h.serverError(w, r, "update failed", err)
+		return
+	}
+	action := AuditUserDeactivated
+	if *body.IsActive {
+		action = AuditUserReactivated
+	}
+	h.audit(r, action, "user", id.String(), user.Email, nil)
 	writeJSON(w, http.StatusOK, user)
 }
 
@@ -506,7 +564,7 @@ func (h *httpHandlers) getArchiveSettings(w http.ResponseWriter, r *http.Request
 	}
 	days, err := EffectiveArchiveDays(r.Context(), h.repo, h.cfg)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "read failed", err.Error())
+		h.serverError(w, r, "read failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"auto_after_days": days})
@@ -529,7 +587,7 @@ func (h *httpHandlers) updateArchiveSettings(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := SetArchiveDays(r.Context(), h.repo, body.AutoAfterDays); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "save failed", err.Error())
+		h.serverError(w, r, "save failed", err)
 		return
 	}
 	// Enabling it runs a sweep now so it doesn't wait for the daily tick; best-effort.
@@ -613,7 +671,7 @@ func (h *httpHandlers) getIntegrationSettings(w http.ResponseWriter, r *http.Req
 	}
 	inbound, err := h.integrationStatus(r.Context())
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "read failed", err.Error())
+		h.serverError(w, r, "read failed", err)
 		return
 	}
 	// Outbound delivery is reported but not editable: the client is built once at
@@ -659,7 +717,7 @@ func (h *httpHandlers) updateIntegrationSettings(w http.ResponseWriter, r *http.
 	}
 	stored, err := GetInboundSettings(r.Context(), h.repo)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "read failed", err.Error())
+		h.serverError(w, r, "read failed", err)
 		return
 	}
 	changed := map[string]any{}
@@ -692,14 +750,14 @@ func (h *httpHandlers) updateIntegrationSettings(w http.ResponseWriter, r *http.
 		stored[source] = ov
 	}
 	if err := SetInboundSettings(r.Context(), h.repo, stored); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "save failed", err.Error())
+		h.serverError(w, r, "save failed", err)
 		return
 	}
 	h.audit(r, AuditSettingsUpdated, "settings", "integrations", "inbound integrations", changed)
 
 	inbound, err := h.integrationStatus(r.Context())
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "read failed", err.Error())
+		h.serverError(w, r, "read failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"inbound": inbound})
@@ -729,7 +787,7 @@ func (h *httpHandlers) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := h.repo.Dashboard(r.Context(), projectKey)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "dashboard failed", err.Error())
+		h.serverError(w, r, "dashboard failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
@@ -763,7 +821,7 @@ func (h *httpHandlers) getProjectBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	board, err := h.repo.GetOrCreateBoard(r.Context(), key)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "board failed", err.Error())
+		h.serverError(w, r, "board failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, board)
@@ -809,7 +867,7 @@ func (h *httpHandlers) updateBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	board, err := h.repo.UpdateBoard(r.Context(), id, body.Name, body.Swimlane)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		h.serverError(w, r, "update failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, board)
@@ -844,7 +902,7 @@ func (h *httpHandlers) createBoardColumn(w http.ResponseWriter, r *http.Request)
 		Name: body.Name, Statuses: body.Statuses, WipLimit: body.WipLimit,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
+		h.serverError(w, r, "create failed", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, board)
@@ -879,7 +937,7 @@ func (h *httpHandlers) updateBoardColumn(w http.ResponseWriter, r *http.Request)
 	}
 	board, err := h.repo.UpdateBoardColumn(r.Context(), id, in)
 	if err != nil {
-		writeNotFoundOrError(w, err, "column", "update failed")
+		h.writeNotFoundOrError(w, r, err, "column", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, board)
@@ -892,7 +950,7 @@ func (h *httpHandlers) deleteBoardColumn(w http.ResponseWriter, r *http.Request)
 	}
 	board, found, err := h.repo.DeleteBoardColumn(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !found {
@@ -954,7 +1012,7 @@ func (h *httpHandlers) listAutomationRules(w http.ResponseWriter, r *http.Reques
 	}
 	items, err := h.repo.ListAutomationRules(r.Context())
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -1007,7 +1065,7 @@ func (h *httpHandlers) createAutomationRule(w http.ResponseWriter, r *http.Reque
 		Trigger: body.Trigger, Actions: body.Actions, CreatedBy: creator,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
+		h.serverError(w, r, "create failed", err)
 		return
 	}
 	h.audit(r, AuditRuleCreated, "automation_rule", rule.ID.String(), rule.Name,
@@ -1044,7 +1102,7 @@ func (h *httpHandlers) updateAutomationRule(w http.ResponseWriter, r *http.Reque
 		Trigger: body.Trigger, Actions: body.Actions,
 	})
 	if err != nil {
-		writeNotFoundOrError(w, err, "rule", "update failed")
+		h.writeNotFoundOrError(w, r, err, "rule", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, rule)
@@ -1061,7 +1119,7 @@ func (h *httpHandlers) deleteAutomationRule(w http.ResponseWriter, r *http.Reque
 	}
 	ok, err := h.repo.DeleteAutomationRule(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !ok {
@@ -1078,7 +1136,7 @@ func (h *httpHandlers) listAutomationRuns(w http.ResponseWriter, r *http.Request
 	}
 	items, err := h.repo.ListAutomationRuns(r.Context(), 25)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -1103,7 +1161,7 @@ func (h *httpHandlers) listWebhooks(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.repo.ListWebhooks(r.Context())
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -1126,8 +1184,11 @@ func (h *httpHandlers) createWebhook(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
 		return
 	}
-	if !strings.HasPrefix(body.URL, "http://") && !strings.HasPrefix(body.URL, "https://") {
-		httpapi.WriteValidation(w, map[string]string{"url": "must be an http(s) URL"})
+	// The binding check is at dial time (a name can resolve anywhere, and can change
+	// between now and delivery) — this one exists so the obvious mistakes are refused
+	// while the person making them is still looking at the form.
+	if err := egress.ValidateWebhookURL(body.URL); err != nil {
+		httpapi.WriteValidation(w, map[string]string{"url": err.Error()})
 		return
 	}
 	if body.ProjectKey != "" {
@@ -1142,7 +1203,7 @@ func (h *httpHandlers) createWebhook(w http.ResponseWriter, r *http.Request) {
 		Events: body.Events, CreatedBy: creator,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
+		h.serverError(w, r, "create failed", err)
 		return
 	}
 	// URL and event filter, never the signing secret.
@@ -1170,15 +1231,17 @@ func (h *httpHandlers) updateWebhook(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
 		return
 	}
-	if body.URL != nil && !strings.HasPrefix(*body.URL, "http://") && !strings.HasPrefix(*body.URL, "https://") {
-		httpapi.WriteValidation(w, map[string]string{"url": "must be an http(s) URL"})
-		return
+	if body.URL != nil {
+		if err := egress.ValidateWebhookURL(*body.URL); err != nil {
+			httpapi.WriteValidation(w, map[string]string{"url": err.Error()})
+			return
+		}
 	}
 	wh, err := h.repo.UpdateWebhook(r.Context(), UpdateWebhookInput{
 		ID: id, URL: body.URL, Secret: body.Secret, Events: body.Events, IsActive: body.IsActive,
 	})
 	if err != nil {
-		writeNotFoundOrError(w, err, "webhook", "update failed")
+		h.writeNotFoundOrError(w, r, err, "webhook", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, wh)
@@ -1195,7 +1258,7 @@ func (h *httpHandlers) deleteWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, err := h.repo.DeleteWebhook(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !ok {
@@ -1217,7 +1280,7 @@ func (h *httpHandlers) listWebhookDeliveries(w http.ResponseWriter, r *http.Requ
 	}
 	items, err := h.repo.ListWebhookDeliveries(r.Context(), id, 25)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -1243,14 +1306,14 @@ func (h *httpHandlers) redeliverWebhook(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.repo.ResetWebhookDelivery(r.Context(), deliveryID); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "redeliver failed", err.Error())
+		h.serverError(w, r, "redeliver failed", err)
 		return
 	}
 	if err := h.pub.EnqueueWebhook(r.Context(), events.WebhookJobArgs{
 		WebhookID: hookID.String(), DeliveryID: deliveryID.String(),
 		EventType: d.EventType, Payload: d.Payload,
 	}); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "redeliver failed", err.Error())
+		h.serverError(w, r, "redeliver failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
@@ -1269,7 +1332,7 @@ func (h *httpHandlers) search(w http.ResponseWriter, r *http.Request) {
 	}
 	hits, err := h.repo.Search(r.Context(), q, limit)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "search failed", err.Error())
+		h.serverError(w, r, "search failed", err)
 		return
 	}
 	if hits == nil {
@@ -1281,7 +1344,7 @@ func (h *httpHandlers) search(w http.ResponseWriter, r *http.Request) {
 func (h *httpHandlers) listProjects(w http.ResponseWriter, r *http.Request) {
 	projects, err := h.repo.ListProjects(r.Context(), 200, 0)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": projects})
@@ -1350,7 +1413,7 @@ func (h *httpHandlers) getProject(w http.ResponseWriter, r *http.Request) {
 func (h *httpHandlers) listProjectMembers(w http.ResponseWriter, r *http.Request) {
 	members, err := h.repo.ListProjectMembers(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if members == nil {
@@ -1410,7 +1473,7 @@ func (h *httpHandlers) deleteProjectMember(w http.ResponseWriter, r *http.Reques
 	}
 	ok, err := h.repo.RemoveProjectMember(r.Context(), key, uid)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "remove failed", err.Error())
+		h.serverError(w, r, "remove failed", err)
 		return
 	}
 	if !ok {
@@ -1452,7 +1515,7 @@ func (h *httpHandlers) updateProject(w http.ResponseWriter, r *http.Request) {
 		DefaultAssigneeID: body.DefaultAssigneeID,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		h.serverError(w, r, "update failed", err)
 		return
 	}
 	h.audit(r, AuditProjectUpdated, "project", project.Key, project.Name, nil)
@@ -1515,7 +1578,7 @@ func (h *httpHandlers) archiveProject(w http.ResponseWriter, r *http.Request) {
 	}
 	archived := true
 	if _, err := h.repo.UpdateProject(r.Context(), UpdateProjectInput{Key: key, IsArchived: &archived}); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "archive failed", err.Error())
+		h.serverError(w, r, "archive failed", err)
 		return
 	}
 	h.audit(r, AuditProjectArchived, "project", key, key, nil)
@@ -1527,7 +1590,7 @@ func (h *httpHandlers) archiveProject(w http.ResponseWriter, r *http.Request) {
 func (h *httpHandlers) listLabels(w http.ResponseWriter, r *http.Request) {
 	labels, err := h.repo.ListLabels(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if labels == nil {
@@ -1567,7 +1630,7 @@ func (h *httpHandlers) authorizeLabel(w http.ResponseWriter, r *http.Request, ra
 	}
 	key, found, err := h.repo.LabelScope(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "lookup failed", err.Error())
+		h.serverError(w, r, "lookup failed", err)
 		return uuid.Nil, false
 	}
 	if !found {
@@ -1667,7 +1730,7 @@ func (h *httpHandlers) deleteLabel(w http.ResponseWriter, r *http.Request) {
 	}
 	deleted, err := h.repo.DeleteLabel(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !deleted {
@@ -1703,12 +1766,12 @@ func (h *httpHandlers) mergeLabel(w http.ResponseWriter, r *http.Request) {
 	}
 	sourceKey, _, err := h.repo.LabelScope(r.Context(), source)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "lookup failed", err.Error())
+		h.serverError(w, r, "lookup failed", err)
 		return
 	}
 	targetKey, _, err := h.repo.LabelScope(r.Context(), target)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "lookup failed", err.Error())
+		h.serverError(w, r, "lookup failed", err)
 		return
 	}
 	if sourceKey != targetKey {
@@ -1718,7 +1781,7 @@ func (h *httpHandlers) mergeLabel(w http.ResponseWriter, r *http.Request) {
 	}
 	label, err := h.repo.MergeLabels(r.Context(), source, target)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "merge failed", err.Error())
+		h.serverError(w, r, "merge failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, label)
@@ -1751,7 +1814,7 @@ func (h *httpHandlers) authorizeEntityManage(w http.ResponseWriter, r *http.Requ
 func (h *httpHandlers) listComponents(w http.ResponseWriter, r *http.Request) {
 	components, err := h.repo.ListComponents(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if components == nil {
@@ -1824,7 +1887,7 @@ func (h *httpHandlers) updateComponent(w http.ResponseWriter, r *http.Request) {
 		ID: id, Name: body.Name, DescriptionMD: body.DescriptionMD, LeadID: body.LeadID,
 	})
 	if err != nil {
-		writeNotFoundOrError(w, err, "component", "update failed")
+		h.writeNotFoundOrError(w, r, err, "component", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
@@ -1837,7 +1900,7 @@ func (h *httpHandlers) deleteComponent(w http.ResponseWriter, r *http.Request) {
 	}
 	deleted, err := h.repo.DeleteComponent(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !deleted {
@@ -1864,7 +1927,7 @@ func parseDueOn(s string) (*time.Time, error) {
 func (h *httpHandlers) listMilestones(w http.ResponseWriter, r *http.Request) {
 	milestones, err := h.repo.ListMilestones(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if milestones == nil {
@@ -1958,7 +2021,7 @@ func (h *httpHandlers) updateMilestone(w http.ResponseWriter, r *http.Request) {
 	}
 	m, err := h.repo.UpdateMilestone(r.Context(), in)
 	if err != nil {
-		writeNotFoundOrError(w, err, "milestone", "update failed")
+		h.writeNotFoundOrError(w, r, err, "milestone", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, m)
@@ -1971,7 +2034,7 @@ func (h *httpHandlers) deleteMilestone(w http.ResponseWriter, r *http.Request) {
 	}
 	deleted, err := h.repo.DeleteMilestone(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !deleted {
@@ -1986,7 +2049,7 @@ func (h *httpHandlers) deleteMilestone(w http.ResponseWriter, r *http.Request) {
 func (h *httpHandlers) listReleases(w http.ResponseWriter, r *http.Request) {
 	releases, err := h.repo.ListReleases(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if releases == nil {
@@ -2069,7 +2132,7 @@ func (h *httpHandlers) updateRelease(w http.ResponseWriter, r *http.Request) {
 		GitTag: body.GitTag, State: body.State,
 	})
 	if err != nil {
-		writeNotFoundOrError(w, err, "release", "update failed")
+		h.writeNotFoundOrError(w, r, err, "release", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, rel)
@@ -2082,7 +2145,7 @@ func (h *httpHandlers) deleteRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	deleted, err := h.repo.DeleteRelease(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !deleted {
@@ -2103,21 +2166,40 @@ func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
 	h.issueList(w, r, chi.URLParam(r, "key"))
 }
 
-func (h *httpHandlers) issueList(w http.ResponseWriter, r *http.Request, key string) {
+// buildFilter turns the ?filter= query string into a complete IssueFilter, including
+// the two term families that need a database lookup to resolve. It writes the problem
+// response and returns false when the filter cannot be honoured.
+//
+// This exists as one function because it was previously two, and they disagreed.
+// ParseFilter records `iteration:` and `field:` terms symbolically — as a name and a
+// set of key/value pairs — and something has to turn those into ids before the query
+// runs. The list did; the export did not, and an unresolved term is not an error but a
+// term with no effect. So exporting "the twelve issues in this sprint" silently
+// returned every issue in the project: a wider result set than the screen the user was
+// looking at, which is the worst way for a filter to fail.
+func (h *httpHandlers) buildFilter(w http.ResponseWriter, r *http.Request, key string) (IssueFilter, bool) {
 	p := auth.FromContext(r.Context())
 	f, badTerms := ParseFilter(key, r.URL.Query().Get("filter"), p.UserID)
 	// A typo in the filter box is the caller's mistake, not a server fault: unknown
 	// enum values would otherwise reach Postgres and fail the whole query as a 500.
 	if len(badTerms) > 0 {
 		httpapi.WriteValidation(w, badTerms)
-		return
+		return f, false
 	}
 	h.resolveIterationFilter(r, &f)
 	if problems := h.resolveFieldFilters(r, &f); len(problems) > 0 {
 		httpapi.WriteValidation(w, problems)
-		return
+		return f, false
 	}
 	f.Sort = r.URL.Query().Get("sort")
+	return f, true
+}
+
+func (h *httpHandlers) issueList(w http.ResponseWriter, r *http.Request, key string) {
+	f, ok := h.buildFilter(w, r, key)
+	if !ok {
+		return
+	}
 	f.Limit = int32(atoiDefault(r.URL.Query().Get("limit"), 50))
 	// Paging: `total` in the response is the unpaged count, so clients page with
 	// offset until they've collected `total` items.
@@ -2125,7 +2207,7 @@ func (h *httpHandlers) issueList(w http.ResponseWriter, r *http.Request, key str
 
 	items, total, err := h.issues.List(r.Context(), f)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -2174,6 +2256,12 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteValidation(w, map[string]string{"title": "required"})
 		return
 	}
+	// Before anything reaches a Postgres enum column, where an unknown value is a
+	// query error and not an empty result.
+	if problems := issueEnumProblems(&body.Type, body.Severity, &body.Priority, nil); len(problems) > 0 {
+		httpapi.WriteValidation(w, problems)
+		return
+	}
 	dueAt, _, err := parseDueAt(body.DueAt)
 	if err != nil {
 		httpapi.WriteValidation(w, map[string]string{"due_at": err.Error()})
@@ -2218,7 +2306,7 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	defs, err := h.repo.ListFieldDefinitions(r.Context(), projectKey)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "load fields failed", err.Error())
+		h.serverError(w, r, "load fields failed", err)
 		return
 	}
 	if len(defs) > 0 {
@@ -2238,7 +2326,7 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		Source: domain.SourceHuman, DueAt: dueAt, EstimateMinutes: estimate,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "create failed", err.Error())
+		h.serverError(w, r, "create failed", err)
 		return
 	}
 	// Field values are written after the issue exists — they are keyed by issue id, so
@@ -2284,6 +2372,18 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.Patch == nil && body.Status == nil && body.TargetProjectKey == nil && body.Archived == nil {
 		httpapi.WriteValidation(w, map[string]string{"patch": "nothing to apply"})
+		return
+	}
+	// Rejected for the whole batch rather than per issue: a bad enum is a malformed
+	// request, not a property of any one issue, and reporting it a hundred times as
+	// individual failures would bury it.
+	var sev *domain.Severity
+	var pri *domain.Priority
+	if body.Patch != nil {
+		sev, pri = body.Patch.Severity, body.Patch.Priority
+	}
+	if problems := issueEnumProblems(nil, sev, pri, body.Status); len(problems) > 0 {
+		httpapi.WriteValidation(w, problems)
 		return
 	}
 	var target string
@@ -2430,6 +2530,10 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
 		return
 	}
+	if problems := issueEnumProblems(body.Type, body.Severity, body.Priority, nil); len(problems) > 0 {
+		httpapi.WriteValidation(w, problems)
+		return
+	}
 	if body.Title != nil && strings.TrimSpace(*body.Title) == "" {
 		httpapi.WriteValidation(w, map[string]string{"title": "cannot be empty"})
 		return
@@ -2473,7 +2577,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		DueAt: dueAt, EstimateMinutes: estimate,
 	})
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		h.serverError(w, r, "update failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -2519,7 +2623,7 @@ func (h *httpHandlers) moveIssue(w http.ResponseWriter, r *http.Request) {
 	actor, _ := uuid.Parse(p.UserID)
 	moved, err := h.issues.Move(r.Context(), issue.ID, actor, target)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "move failed", err.Error())
+		h.serverError(w, r, "move failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, moved)
@@ -2576,7 +2680,7 @@ func (h *httpHandlers) setSnooze(w http.ResponseWriter, r *http.Request, until *
 	actor, _ := uuid.Parse(p.UserID)
 	updated, err := h.issues.SetSnooze(r.Context(), issue.ID, actor, until, note)
 	if err != nil {
-		writeNotFoundOrError(w, err, "issue", "snooze failed")
+		h.writeNotFoundOrError(w, r, err, "issue", "snooze failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -2610,12 +2714,12 @@ func (h *httpHandlers) rankIssue(w http.ResponseWriter, r *http.Request) {
 
 	prev, next, err := h.repo.NeighbourRanks(r.Context(), issue.ProjectKey, body.After, body.Before)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "rank failed", err.Error())
+		h.serverError(w, r, "rank failed", err)
 		return
 	}
 	rank := RankBetween(prev, next)
 	if err := h.repo.SetIssueRank(r.Context(), issue.ID, rank); err != nil {
-		writeNotFoundOrError(w, err, "issue", "rank failed")
+		h.writeNotFoundOrError(w, r, err, "issue", "rank failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"key": issue.Key, "rank": rank})
@@ -2634,7 +2738,7 @@ func (h *httpHandlers) setArchived(w http.ResponseWriter, r *http.Request, archi
 	actor, _ := uuid.Parse(p.UserID)
 	updated, err := h.issues.SetArchived(r.Context(), issue.ID, actor, archived)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "archive failed", err.Error())
+		h.serverError(w, r, "archive failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -2652,7 +2756,7 @@ func (h *httpHandlers) deleteIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	actor, _ := uuid.Parse(p.UserID)
 	if err := h.issues.Delete(r.Context(), issue.ID, actor); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -2698,8 +2802,14 @@ func (h *httpHandlers) transition(w http.ResponseWriter, r *http.Request) {
 			string(issue.Status)+" → "+string(body.To))
 		return
 	}
+	// Somebody moved the issue between the read above and the write. The edge the
+	// caller asked for was legal when they asked; it just is not on offer any more.
+	if errors.Is(err, ErrStaleStatus) {
+		httpapi.WriteProblem(w, http.StatusConflict, "issue moved", err.Error())
+		return
+	}
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "transition failed", err.Error())
+		h.serverError(w, r, "transition failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -2714,7 +2824,7 @@ func (h *httpHandlers) listComments(w http.ResponseWriter, r *http.Request) {
 	offset := int32(atoiDefault(r.URL.Query().Get("offset"), 0))
 	comments, total, err := h.repo.ListComments(r.Context(), issue.ID, limit, offset)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if comments == nil {
@@ -2745,7 +2855,7 @@ func (h *httpHandlers) addComment(w http.ResponseWriter, r *http.Request) {
 	author, _ := uuid.Parse(p.UserID)
 	c, err := h.issues.Comment(r.Context(), issue.ID, author, body.BodyMD)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "comment failed", err.Error())
+		h.serverError(w, r, "comment failed", err)
 		return
 	}
 	// `/spend 90m yesterday chasing the retry loop` logs time from the comment it was
@@ -2772,7 +2882,7 @@ func (h *httpHandlers) listWatchers(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.repo.ListWatchers(r.Context(), issue.ID)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -2800,7 +2910,7 @@ func (h *httpHandlers) setWatchState(w http.ResponseWriter, r *http.Request, wat
 		return
 	}
 	if err := h.repo.SetWatcher(r.Context(), issue.ID, uid, watching); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "watch update failed", err.Error())
+		h.serverError(w, r, "watch update failed", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -2826,7 +2936,7 @@ func (h *httpHandlers) listRelations(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.repo.ListRelations(r.Context(), issue.ID)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -2843,7 +2953,7 @@ func (h *httpHandlers) listReferences(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.repo.ListReferencedBy(r.Context(), issue.ID)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -2918,7 +3028,7 @@ func (h *httpHandlers) deleteRelation(w http.ResponseWriter, r *http.Request) {
 	actor, _ := uuid.Parse(p.UserID)
 	ok, err := h.repo.DeleteRelation(r.Context(), id, actor)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "unlink failed", err.Error())
+		h.serverError(w, r, "unlink failed", err)
 		return
 	}
 	if !ok {
@@ -2953,9 +3063,9 @@ func (h *httpHandlers) updateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := uuid.Parse(p.UserID)
-	updated, err := h.repo.UpdateComment(r.Context(), id, actor, body.BodyMD)
+	updated, err := h.issues.EditComment(r.Context(), c.IssueID, id, actor, body.BodyMD)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "update failed", err.Error())
+		h.serverError(w, r, "update failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -2982,7 +3092,7 @@ func (h *httpHandlers) deleteComment(w http.ResponseWriter, r *http.Request) {
 	actor, _ := uuid.Parse(p.UserID)
 	ok, err := h.repo.SoftDeleteComment(r.Context(), id, actor)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !ok {
@@ -3001,7 +3111,7 @@ func (h *httpHandlers) activity(w http.ResponseWriter, r *http.Request) {
 	offset := int32(atoiDefault(r.URL.Query().Get("offset"), 0))
 	acts, total, err := h.issues.Activity(r.Context(), issue.ID, limit, offset)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "activity failed", err.Error())
+		h.serverError(w, r, "activity failed", err)
 		return
 	}
 	if acts == nil {
@@ -3017,7 +3127,7 @@ func (h *httpHandlers) commits(w http.ResponseWriter, r *http.Request) {
 	}
 	commits, err := h.repo.ListCommitsForIssue(r.Context(), issue.ID)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "commits failed", err.Error())
+		h.serverError(w, r, "commits failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, commits)
@@ -3032,7 +3142,7 @@ func (h *httpHandlers) listAttachments(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.repo.ListAttachmentsForIssue(r.Context(), issue.ID)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -3075,28 +3185,37 @@ func (h *httpHandlers) uploadAttachment(w http.ResponseWriter, r *http.Request) 
 	// Object key is server-generated; the extension is kept only as a hint.
 	objectKey := uuid.NewString() + strings.ToLower(filepath.Ext(filename))
 	if err := os.MkdirAll(h.attachDir, 0o755); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "storage unavailable", err.Error())
+		h.serverError(w, r, "storage unavailable", err)
 		return
 	}
 	dst, err := os.Create(filepath.Join(h.attachDir, objectKey))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "storage unavailable", err.Error())
+		h.serverError(w, r, "storage unavailable", err)
 		return
 	}
 	defer dst.Close() //nolint:errcheck
 
+	// Sniff before storing: the type is decided from the bytes, not from the part
+	// header, which the uploader writes. Peeling the head off first and putting it
+	// back with a MultiReader keeps this a single streaming pass.
+	head := make([]byte, 512)
+	n, err := io.ReadFull(file, head)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		_ = os.Remove(filepath.Join(h.attachDir, objectKey))
+		h.serverError(w, r, "read failed", err)
+		return
+	}
+	head = head[:n]
+
 	hasher := sha256.New()
-	size, err := io.Copy(dst, io.TeeReader(file, hasher))
+	size, err := io.Copy(dst, io.TeeReader(io.MultiReader(bytes.NewReader(head), file), hasher))
 	if err != nil {
 		_ = os.Remove(filepath.Join(h.attachDir, objectKey))
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "write failed", err.Error())
+		h.serverError(w, r, "write failed", err)
 		return
 	}
 
-	contentType := header.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
+	contentType := ResolveContentType(header.Header.Get("Content-Type"), head)
 	uploader, _ := uuid.Parse(p.UserID)
 	att, err := h.repo.CreateAttachment(r.Context(), CreateAttachmentInput{
 		IssueID: issue.ID, UploaderID: uploader, Filename: filename, ContentType: contentType,
@@ -3104,7 +3223,7 @@ func (h *httpHandlers) uploadAttachment(w http.ResponseWriter, r *http.Request) 
 	})
 	if err != nil {
 		_ = os.Remove(filepath.Join(h.attachDir, objectKey))
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "save failed", err.Error())
+		h.serverError(w, r, "save failed", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, att)
@@ -3136,18 +3255,19 @@ func (h *httpHandlers) downloadAttachment(w http.ResponseWriter, r *http.Request
 		size = st.Size()
 	}
 
-	// Serve user content defensively: images/PDF render inline, everything else
-	// downloads; HTML-ish types are neutralized to text/plain.
-	ct := att.ContentType
-	disposition := "attachment"
-	switch {
-	case strings.HasPrefix(ct, "image/"), ct == "application/pdf":
-		disposition = "inline"
-	case strings.Contains(ct, "html"), strings.Contains(ct, "xml"), strings.Contains(ct, "svg"):
-		ct = "text/plain; charset=utf-8"
-	}
+	// Serve user content defensively. This used to be a switch whose image/ prefix
+	// case ran before its svg case — and since Go takes only the first match, an
+	// `image/svg+xml` upload reached the inline branch and executed script on this
+	// origin, where the session cookie lives. The allowlist replacing it is closed
+	// and is applied to the *stored* type, so rows written before that fix are
+	// covered too.
+	ct, disposition := DispositionFor(att.ContentType)
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// Defense in depth for the inline branch: even a renderable type gets no script,
+	// no network, and a unique opaque origin.
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:")
+	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, att.Filename))
 	_, _ = io.Copy(w, f)
@@ -3173,7 +3293,7 @@ func (h *httpHandlers) deleteAttachment(w http.ResponseWriter, r *http.Request) 
 	}
 	objectKey, found, err := h.repo.DeleteAttachment(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !found {
@@ -3222,12 +3342,15 @@ func atoiDefault(s string, def int) int {
 // writeNotFoundOrError distinguishes "the row isn't there" from "the write failed".
 // Collapsing both into a 404 (or a 409) makes a real database fault indistinguishable
 // from a missing id, which is the difference between a client bug and an outage.
-func writeNotFoundOrError(w http.ResponseWriter, err error, entity, title string) {
+//
+// A method rather than a free function so the 5xx branch can reach serverError: it was
+// the last place in the package that handed a raw error string to the client.
+func (h *httpHandlers) writeNotFoundOrError(w http.ResponseWriter, r *http.Request, err error, entity, title string) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such "+entity)
 		return
 	}
-	httpapi.WriteProblem(w, http.StatusInternalServerError, title, err.Error())
+	h.serverError(w, r, title, err)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

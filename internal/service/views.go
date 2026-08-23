@@ -26,7 +26,7 @@ import (
 func (h *httpHandlers) listProjectViews(w http.ResponseWriter, r *http.Request) {
 	items, err := h.repo.ListProjectViews(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -40,7 +40,7 @@ func (h *httpHandlers) listProjectViews(w http.ResponseWriter, r *http.Request) 
 func (h *httpHandlers) listAllViews(w http.ResponseWriter, r *http.Request) {
 	items, err := h.repo.ListSharedViews(r.Context())
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -88,7 +88,7 @@ func (h *httpHandlers) updateSavedSearch(w http.ResponseWriter, r *http.Request)
 		ID: id, Name: body.Name, Query: body.Query, Description: body.Description, Sort: body.Sort,
 	})
 	if err != nil {
-		writeNotFoundOrError(w, err, "saved search", "update failed")
+		h.writeNotFoundOrError(w, r, err, "saved search", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -128,7 +128,7 @@ func (h *httpHandlers) createProjectView(w http.ResponseWriter, r *http.Request)
 		Description: body.Description, Sort: body.Sort,
 	})
 	if err != nil {
-		writeNotFoundOrError(w, err, "project", "create failed")
+		h.writeNotFoundOrError(w, r, err, "project", "create failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, view)
@@ -163,7 +163,7 @@ func (h *httpHandlers) updateProjectView(w http.ResponseWriter, r *http.Request)
 		Sort: body.Sort, Position: body.Position, IsDefault: body.IsDefault,
 	})
 	if err != nil {
-		writeNotFoundOrError(w, err, "view", "update failed")
+		h.writeNotFoundOrError(w, r, err, "view", "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -176,7 +176,7 @@ func (h *httpHandlers) deleteProjectView(w http.ResponseWriter, r *http.Request)
 	}
 	deleted, err := h.repo.DeleteProjectView(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !deleted {
@@ -209,7 +209,7 @@ func (h *httpHandlers) shareSavedSearch(w http.ResponseWriter, r *http.Request) 
 	userID, _ := uuid.Parse(p.UserID)
 	view, err := h.repo.ShareSavedSearch(r.Context(), userID, id, body.ProjectKey)
 	if err != nil {
-		writeNotFoundOrError(w, err, "saved search", "share failed")
+		h.writeNotFoundOrError(w, r, err, "saved search", "share failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -225,7 +225,7 @@ func (h *httpHandlers) authorizeViewManage(w http.ResponseWriter, r *http.Reques
 	}
 	key, err := h.repo.GetViewProjectKey(r.Context(), id)
 	if err != nil {
-		writeNotFoundOrError(w, err, "view", "lookup failed")
+		h.writeNotFoundOrError(w, r, err, "view", "lookup failed")
 		return uuid.Nil, "", false
 	}
 	if key == "" {

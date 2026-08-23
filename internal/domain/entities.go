@@ -13,6 +13,17 @@ type User struct {
 	DisplayName string    `json:"display_name"`
 	AvatarURL   string    `json:"avatar_url"`
 	Role        Role      `json:"role"`
+	// IsActive gates authentication. A leaver is deactivated rather than deleted, so
+	// their issues, comments and history keep an author — but every credential they
+	// hold, session and API token alike, stops resolving to a principal.
+	//
+	// A pointer because User is embedded all over the API as an actor summary — the
+	// author of a comment, the actor on an activity row — and those queries do not
+	// select it. As a plain bool that read as `"is_active": false` on every one of
+	// them, which says "this person is deactivated" about people who are not. Nil
+	// means "not loaded" and is omitted; only the endpoints that actually select the
+	// column populate it.
+	IsActive *bool `json:"is_active,omitempty"`
 }
 
 type Project struct {

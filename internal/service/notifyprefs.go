@@ -69,7 +69,7 @@ func (h *httpHandlers) getNotificationPrefs(w http.ResponseWriter, r *http.Reque
 	}
 	prefs, err := h.repo.GetNotificationPrefs(r.Context(), userID)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "load failed", err.Error())
+		h.serverError(w, r, "load failed", err)
 		return
 	}
 	effective := make(map[string]string, len(DefaultChannels))
@@ -111,7 +111,7 @@ func (h *httpHandlers) putNotificationPrefs(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := h.repo.SetNotificationPrefs(r.Context(), userID, body, DefaultChannels); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "save failed", err.Error())
+		h.serverError(w, r, "save failed", err)
 		return
 	}
 	h.getNotificationPrefs(w, r)
@@ -128,7 +128,7 @@ func (h *httpHandlers) setIssueMute(w http.ResponseWriter, r *http.Request, mute
 		return
 	}
 	if err := h.repo.SetIssueMute(r.Context(), issue.ID, userID, muted); err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "mute failed", err.Error())
+		h.serverError(w, r, "mute failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"muted": muted})

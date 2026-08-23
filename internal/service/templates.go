@@ -16,7 +16,7 @@ import (
 func (h *httpHandlers) listIssueTemplates(w http.ResponseWriter, r *http.Request) {
 	items, err := h.repo.ListIssueTemplates(r.Context(), chi.URLParam(r, "key"))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "list failed", err.Error())
+		h.serverError(w, r, "list failed", err)
 		return
 	}
 	if items == nil {
@@ -148,7 +148,7 @@ func (h *httpHandlers) updateIssueTemplate(w http.ResponseWriter, r *http.Reques
 	}
 	tmpl, err := h.repo.UpdateIssueTemplate(r.Context(), id, in)
 	if err != nil {
-		writeNotFoundOrError(w, err, "template", "update failed")
+		h.writeNotFoundOrError(w, r, err, "template", "update failed")
 		return
 	}
 	// Checked against what was actually stored, so a one-field edit cannot leave the
@@ -170,7 +170,7 @@ func (h *httpHandlers) deleteIssueTemplate(w http.ResponseWriter, r *http.Reques
 	}
 	deleted, err := h.repo.DeleteIssueTemplate(r.Context(), id)
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "delete failed", err.Error())
+		h.serverError(w, r, "delete failed", err)
 		return
 	}
 	if !deleted {

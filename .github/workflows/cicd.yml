@@ -16,7 +16,72 @@ env:
   COMPOSE: -f deploy/docker-compose.yml
 
 jobs:
+  # The test jobs run on GitHub-hosted runners, not the self-hosted box: they execute
+  # only the repo's own code against a throwaway database, so fork PRs can get real
+  # feedback without the fork-code-on-our-hardware risk the build job has to avoid.
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: omni
+          POSTGRES_PASSWORD: omni
+          POSTGRES_DB: omni_bugtracker
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U omni -d omni_bugtracker"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # The SQL integration tests skip themselves unless this is set, which is why
+      # they had never run anywhere. Migrations are applied below, so it points at a
+      # real schema rather than an empty database.
+      OMNI_BT_TEST_DSN: postgres://omni:omni@localhost:5432/omni_bugtracker?sslmode=disable
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Apply migrations
+        run: go run ./cmd/migrate up
+        env:
+          OMNI_BT_DATABASE__DSN: postgres://omni:omni@localhost:5432/omni_bugtracker?sslmode=disable
+      - name: go vet
+        run: go vet ./...
+      # -race because the failure classes this codebase is exposed to (job fan-out,
+      # the JWKS cache, the rate limiter) are concurrent ones that pass without it.
+      - name: go test
+        run: go test -race ./...
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # `vite build` does not typecheck — it strips types and emits. Without this step
+      # a type error ships.
+      - name: Typecheck
+        run: npm run typecheck
+      # --max-warnings is deliberately generous rather than 0: the existing warnings are
+      # real but not urgent, and a lint step that fails on day one is a lint step
+      # somebody deletes. It fails on any *error*, and ratchets down as the backlog
+      # shrinks.
+      - name: Lint
+        run: npm run lint -- --max-warnings 25
+      - name: Build
+        run: npm run build
+
   build:
+    needs: [test, web]
     runs-on: [self-hosted, omnibt]     # MUST match the runner's labels
     # SECURITY: never run untrusted fork-PR code on a self-hosted runner.
     if: >-

@@ -8,7 +8,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/omni/bugtracker/internal/domain"
-	"github.com/omni/bugtracker/internal/httpapi"
 )
 
 // maxSimilarTerms bounds the query. A pasted stack trace in the title field would
@@ -66,7 +65,7 @@ func (h *httpHandlers) similarIssues(w http.ResponseWriter, r *http.Request) {
 	items, err := h.repo.FindSimilarIssues(r.Context(), key, query,
 		r.URL.Query().Get("exclude"), int32(atoiDefault(r.URL.Query().Get("limit"), 5)))
 	if err != nil {
-		httpapi.WriteProblem(w, http.StatusInternalServerError, "lookup failed", err.Error())
+		h.serverError(w, r, "lookup failed", err)
 		return
 	}
 	if items == nil {

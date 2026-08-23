@@ -98,6 +98,11 @@ func (r RateLimit) WithDefaults() RateLimit {
 type Worker struct {
 	Queues       map[string]int `koanf:"queues"`
 	PollInterval time.Duration  `koanf:"poll_interval"`
+	// MetricsAddr is where the worker serves /metrics, /healthz and /readyz. It needs
+	// its own listener because it is a separate process from the API: its job and
+	// webhook counters are invisible otherwise, which is how they came to be read as
+	// a flat line for so long.
+	MetricsAddr string `koanf:"metrics_addr"`
 }
 
 type Identity struct {
@@ -216,6 +221,11 @@ func (c *Config) validate() error {
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))
+	}
+	// An unset listen address binds :80 in net/http, which is a surprising default for
+	// something that only ever wants to be reachable from inside the cluster.
+	if c.Worker.MetricsAddr == "" {
+		c.Worker.MetricsAddr = ":9090"
 	}
 	return nil
 }

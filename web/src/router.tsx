@@ -3,6 +3,7 @@ import { MyWork } from "./features/mywork/MyWork";
 import { Reports } from "./features/reports/Reports";
 import { Navigate, createBrowserRouter } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { RouteError } from "./components/RouteError";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { Board } from "./features/board/Board";
 import { IssueList } from "./features/issues/IssueList";
@@ -29,6 +30,9 @@ export const router = createBrowserRouter([
   {
     path: "/",
     element: <Layout />,
+    // Renders inside the Layout, so a failed screen keeps the nav and the user keeps
+    // their bearings. Every child route inherits this unless it sets its own.
+    errorElement: <RouteError />,
     children: [
       { index: true, element: <Dashboard /> },
       { path: "board", element: <Board /> },

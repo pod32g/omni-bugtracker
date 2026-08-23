@@ -2,9 +2,16 @@ package service
 
 import (
 	"context"
+	"errors"
 
 	"github.com/omni/bugtracker/internal/auth"
 )
+
+// ErrUserDeactivated is returned when the credential is valid but the account behind
+// it has been deactivated. The middleware turns any authentication error into a bare
+// 401, which is the right answer here: whether an account exists is not something an
+// unauthenticated caller gets to learn.
+var ErrUserDeactivated = errors.New("user is deactivated")
 
 // Auth implements the HTTP middleware's Authenticator port.
 type Auth struct {
@@ -44,6 +51,15 @@ func (a *Auth) SyncUser(ctx context.Context, c *auth.Claims) (*auth.Principal, e
 	})
 	if err != nil {
 		return nil, err
+	}
+	// A valid identity token is not by itself authorisation to use this tracker.
+	// Omni-Identity may still be issuing tokens for somebody this install has
+	// deactivated — the IdP is shared, and offboarding here must not depend on
+	// offboarding there having happened first.
+	// UpsertUser always selects the column, so nil here would mean the query changed
+	// underneath us — fail closed rather than let a nil read as "active".
+	if u.IsActive == nil || !*u.IsActive {
+		return nil, ErrUserDeactivated
 	}
 	// The tracker's DB is authoritative for its own RBAC roles (managed via the
 	// Members admin / promoted by an owner). We intentionally do NOT let the identity

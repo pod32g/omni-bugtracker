@@ -10,11 +10,26 @@ spec:
   template:
     metadata:
       labels: { app: {{ .Release.Name }}-worker }
+      {{- if .Values.metrics.enabled }}
+      # The worker has its own registry in its own process. Without these it was never
+      # scraped at all, so bugtracker_jobs_processed_total and
+      # bugtracker_webhook_attempts_total read as constant zero on every dashboard —
+      # a queue that had stopped draining looked exactly like an idle one.
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.worker.metricsPort }}"
+        prometheus.io/path: "/metrics"
+      {{- end }}
     spec:
+      # Long enough for River to finish in-flight jobs; the binary gives up at 20s of
+      # its own accord, so this leaves room for that to happen cleanly rather than
+      # being SIGKILLed mid-fan-out.
+      terminationGracePeriodSeconds: 30
       containers:
         - name: worker
           image: "{{ .Values.image.repository }}:{{ .Values.image.workerTag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ name: metrics, containerPort: {{ .Values.worker.metricsPort }} }]
           env:
             - name: OMNI_BT_DATABASE__DSN
               valueFrom:
@@ -23,4 +38,17 @@ spec:
                   key: {{ .Values.database.dsnKey }}
             - name: OMNI_BT_REDIS__ADDR
               value: {{ .Values.redis.addr | quote }}
+            - name: OMNI_BT_WORKER__METRICS_ADDR
+              value: ":{{ .Values.worker.metricsPort }}"
+          # A worker that cannot reach the database is not doing any work, and until it
+          # had a listener there was no way to say so — a wedged worker stayed Ready
+          # forever.
+          readinessProbe:
+            httpGet: { path: /readyz, port: metrics }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 10
+            periodSeconds: 20
           resources: {{ toYaml .Values.worker.resources | nindent 12 }}

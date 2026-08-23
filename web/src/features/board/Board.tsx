@@ -3,6 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { Link } from "react-router-dom";
 import { api, type Board as BoardConfig, type BoardColumn, type Issue, type IssueStatus } from "../../lib/api";
 import { useProject } from "../../lib/project";
+import { issueKeys } from "../../lib/queryKeys";
 import { Avatar, LabelChip, PriorityText, SeverityBar, statusLabel } from "../../components/Badges";
 import { IconGear, IconPlus } from "../../components/icons";
 
@@ -43,7 +44,7 @@ export function Board() {
   // computed from what's loaded, so a partial page renders a quietly wrong board.
   // Pages until every issue is in hand (the API caps a single request at 200).
   const issues = useInfiniteQuery({
-    queryKey: ["issues", projectKey, boardFilter, "board-rank"],
+    queryKey: issueKeys.board(projectKey, boardFilter),
     queryFn: ({ pageParam }) => api.listIssues(projectKey, boardFilter, "rank", BOARD_PAGE_SIZE, pageParam),
     initialPageParam: 0,
     getNextPageParam: (last, pages) => {
@@ -54,20 +55,32 @@ export function Board() {
   });
 
   // Keep pulling pages until the project is fully loaded or the ceiling is hit.
+  //
+  // A failed page leaves `hasNextPage` true, so this must not re-fire on failure:
+  // `isFetchingNextPage` flipping back to false is itself a dependency change, which
+  // turns one broken page into an unbounded request loop against the same endpoint —
+  // the failure mode the inbox poller documents at 30s intervals, here with no delay
+  // at all. `isFetchNextPageError` latches until a manual retry succeeds.
+  // Destructured so the dependency array names values rather than reaching through
+  // `issues` — which is a new object every render, and which exhaustive-deps therefore
+  // (correctly) refuses to accept as a stable dependency.
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = issues;
   useEffect(() => {
-    if (issues.hasNextPage && !issues.isFetchingNextPage) issues.fetchNextPage();
-  }, [issues.hasNextPage, issues.isFetchingNextPage, issues.fetchNextPage]);
+    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
+      fetchNextPage();
+    }
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
 
   const transition = useMutation({
     mutationFn: ({ key, to }: { key: string; to: IssueStatus }) => api.transition(key, to),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["issues"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: issueKeys.all }),
   });
   // Ranking is a separate call from the transition: a card can move column, position,
   // or both, and a drop that only reorders must not pretend to be a status change.
   const rank = useMutation({
     mutationFn: ({ key, after, before }: { key: string; after: string; before: string }) =>
       api.rankIssue(key, after, before),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["issues"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: issueKeys.all }),
   });
 
   const items = issues.data?.pages.flatMap((p) => p.items) ?? [];
@@ -179,7 +192,29 @@ export function Board() {
       {transition.isError && (
         <div className="px-4 md:px-9 py-3 text-sm text-critical">{(transition.error as Error).message}</div>
       )}
-      {truncated && !issues.isFetchingNextPage && (
+      {/*
+        Truncation has two causes and they need different words. Hitting the cap is
+        expected and the advice is to filter. A failed page is a broken board: columns
+        and WIP counts are derived from what loaded, so the numbers on screen are
+        wrong rather than merely partial, and saying "capped" there would report a
+        fault as a limit.
+      */}
+      {isFetchNextPageError && (
+        <div className="flex flex-wrap items-center gap-3 px-4 md:px-9 py-3 text-sm text-critical">
+          <span>
+            Couldn&rsquo;t load all issues — showing {items.length} of {total}. Column counts and WIP
+            warnings are incomplete.
+          </span>
+          <button
+            type="button"
+            onClick={() => fetchNextPage()}
+            className="rounded border border-critical px-2 py-1 font-medium hover:bg-critical/10"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {truncated && !isFetchingNextPage && !isFetchNextPageError && (
         <div className="px-4 md:px-9 py-3 text-sm text-graphite">
           Showing {items.length} of {total} issues — this board is capped at {BOARD_MAX_ISSUES}. Use the
           issue list with a filter to narrow it down.

@@ -2,10 +2,14 @@
 FROM node:20-alpine AS build
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
-RUN npm install
+# ci, not install: the lockfile is the point of committing one, and `npm install` will
+# happily resolve a different tree in the image than CI typechecked.
+RUN npm ci
 COPY web/ ./
-COPY api/openapi.yaml /api/openapi.yaml
-RUN npm run gen:api || true
+# `npm run gen:api` used to run here as `|| true`. It writes src/api/gen/schema.d.ts,
+# which nothing imports (src/api/ does not exist) — so the step could only ever fail
+# silently or succeed pointlessly. Run it deliberately if the generated client is ever
+# adopted; do not run it as a no-op that hides its own errors.
 RUN npm run build
 
 FROM nginx:1.27-alpine

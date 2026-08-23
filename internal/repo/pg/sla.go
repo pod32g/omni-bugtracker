@@ -99,8 +99,22 @@ func (s *Store) DeleteSLAPolicy(ctx context.Context, id uuid.UUID) (bool, error)
 // announcing. The claim is the INSERT: two workers racing on the same issue both run
 // the SELECT, but only one gets the row back from ON CONFLICT DO NOTHING, so a
 // breach is never announced twice.
-func (s *Store) ClaimSLAEscalations(ctx context.Context) ([]service.SLAEscalation, error) {
-	rows, err := s.pool.Query(ctx, `
+// enqueue runs inside the claiming transaction, and that is the whole point: the claim
+// used to commit and the caller then looped over the results inserting jobs, so an
+// insert that failed partway left the remaining escalations claimed-but-unannounced.
+// Permanently — the next sweep skips them precisely because they were claimed. The
+// comment above once said "a re-run after a crash re-announces nothing", which was
+// true and was also the bug.
+func (s *Store) ClaimSLAEscalations(
+	ctx context.Context, enqueue func(pgx.Tx, []service.SLAEscalation) error,
+) ([]service.SLAEscalation, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	rows, err := tx.Query(ctx, `
 		WITH due AS (
 			SELECT v.issue_id, k.kind
 			  FROM issue_sla v
@@ -133,5 +147,18 @@ func (s *Store) ClaimSLAEscalations(ctx context.Context) ([]service.SLAEscalatio
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	if len(out) > 0 && enqueue != nil {
+		if err := enqueue(tx, out); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

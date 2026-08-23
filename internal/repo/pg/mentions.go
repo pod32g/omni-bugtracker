@@ -152,25 +152,61 @@ func resolveHandles(ctx context.Context, tx pgx.Tx, issueID uuid.UUID, handles [
 // mentioned on an issue. Called by the dispatcher, which turns each into a notify job.
 // The UPDATE ... RETURNING is the claim: two dispatcher runs cannot both take a row, so
 // a mention notifies exactly once even if several events fire for the same issue.
-func (s *Store) ClaimPendingMentions(ctx context.Context, issueID uuid.UUID) ([]string, error) {
-	rows, err := s.pool.Query(ctx,
+// enqueue runs inside the claiming transaction. Stamping notified_at is a promise that
+// somebody will be told; making it in one transaction and enqueuing the notification in
+// another meant a failure between them consumed the mention silently — the row says
+// notified, and nothing ever notified. Rolling back leaves it pending for the next
+// event on that issue to claim.
+//
+// Deactivated users are skipped: a mention is a notification, and a leaver has no
+// business receiving one. Their row is still stamped so it does not sit pending
+// forever.
+func (s *Store) ClaimPendingMentions(
+	ctx context.Context, issueID uuid.UUID, enqueue func(pgx.Tx, []string) error,
+) ([]string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	rows, err := tx.Query(ctx,
 		`UPDATE issue_mentions m
 		    SET notified_at = now()
 		   FROM users u
 		  WHERE m.user_id = u.id AND m.issue_id = $1 AND m.notified_at IS NULL
-		 RETURNING u.email`, issueID)
+		 RETURNING u.email, u.is_active`, issueID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	var emails []string
 	for rows.Next() {
 		var email string
-		if err := rows.Scan(&email); err != nil {
+		var active bool
+		if err := rows.Scan(&email, &active); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		emails = append(emails, email)
+		if active {
+			emails = append(emails, email)
+		}
 	}
-	return emails, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(emails) == 0 {
+		return nil, tx.Commit(ctx)
+	}
+
+	if enqueue != nil {
+		if err := enqueue(tx, emails); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return emails, nil
 }
