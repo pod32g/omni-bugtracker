@@ -185,6 +185,30 @@ func setIssueLabels(ctx context.Context, tx pgx.Tx, projectID, issueID uuid.UUID
 	return nil
 }
 
+// removeIssueLabels detaches labels by name, case-insensitively — the same comparison
+// ensureLabels uses to find them, so "Backend" removes "backend". The label row itself
+// survives: it belongs to the project, not to this issue.
+func removeIssueLabels(ctx context.Context, tx pgx.Tx, issueID uuid.UUID, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	lowered := make([]string, 0, len(names))
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" {
+			lowered = append(lowered, strings.ToLower(n))
+		}
+	}
+	if len(lowered) == 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx,
+		`DELETE FROM issue_labels il
+		  USING labels l
+		  WHERE il.label_id = l.id AND il.issue_id = $1 AND lower(l.name) = ANY($2::text[])`,
+		issueID, lowered)
+	return err
+}
+
 func (s *Store) CreateProject(ctx context.Context, in service.CreateProjectInput) (domain.Project, error) {
 	const q = `INSERT INTO projects (key, name, description_md)
 	           VALUES ($1, $2, $3)
@@ -867,7 +891,7 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 	if tag.RowsAffected() == 0 {
 		return domain.Issue{}, pgx.ErrNoRows
 	}
-	if in.Labels != nil || in.Components != nil {
+	if in.Labels != nil || in.Components != nil || len(in.LabelsAdd) > 0 || len(in.LabelsRemove) > 0 {
 		var projectID uuid.UUID
 		if err := tx.QueryRow(ctx, `SELECT project_id FROM issues WHERE id = $1`, id).Scan(&projectID); err != nil {
 			return domain.Issue{}, err
@@ -875,6 +899,18 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		if in.Labels != nil {
 			if err := setIssueLabels(ctx, tx, projectID, id, *in.Labels, true); err != nil {
 				return domain.Issue{}, fmt.Errorf("set labels: %w", err)
+			}
+		}
+		// Additive edits. Remove before add, so a caller that sends the same name in
+		// both ends up with the label rather than without it — and so the pair is
+		// order-independent from the caller's point of view. The handler refuses that
+		// combination anyway; this is what happens if one ever gets through.
+		if err := removeIssueLabels(ctx, tx, id, in.LabelsRemove); err != nil {
+			return domain.Issue{}, fmt.Errorf("remove labels: %w", err)
+		}
+		if len(in.LabelsAdd) > 0 {
+			if err := setIssueLabels(ctx, tx, projectID, id, in.LabelsAdd, false); err != nil {
+				return domain.Issue{}, fmt.Errorf("add labels: %w", err)
 			}
 		}
 		if in.Components != nil {

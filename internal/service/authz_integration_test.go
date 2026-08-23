@@ -451,3 +451,87 @@ func (f *authzFixture) seedIteration(t *testing.T, projectID uuid.UUID, name str
 	}
 	return id
 }
+
+// TestBulkLabelEditIsAdditive is the regression test for the bulk endpoint eating
+// labels.
+//
+// patch.labels goes to UpdateIssue, which treats the array as the complete set: the
+// store deletes every row in issue_labels for the issue and re-inserts what was sent.
+// Selecting fifty issues and "adding" one label therefore stripped every other label
+// from all fifty, in one click, with no confirmation and no undo — and unlike the
+// single-issue form, the user could not see what they were about to discard.
+func TestBulkLabelEditIsAdditive(t *testing.T) {
+	f := setupAuthz(t)
+	ctx := context.Background()
+
+	issueKey := f.seedIssue(t)
+	var issueID uuid.UUID
+	if err := f.pool.QueryRow(ctx,
+		`SELECT i.id FROM issues i JOIN projects p ON p.id = i.project_id
+		  WHERE p.key = $1 AND i.number = split_part($2, '-', 2)::int`,
+		f.project, issueKey).Scan(&issueID); err != nil {
+		t.Fatalf("resolve issue: %v", err)
+	}
+
+	labelsNow := func() []string {
+		t.Helper()
+		var names []string
+		if err := f.pool.QueryRow(ctx,
+			`SELECT COALESCE(array(SELECT l.name FROM issue_labels il JOIN labels l ON l.id = il.label_id
+			                        WHERE il.issue_id = $1 ORDER BY l.name), '{}')`, issueID).Scan(&names); err != nil {
+			t.Fatalf("read labels: %v", err)
+		}
+		return names
+	}
+	bulk := func(patch string) int {
+		return f.do(t, domain.RoleOwner, "POST", "/issues/bulk",
+			fmt.Sprintf(`{"ids":[%q],"patch":%s}`, issueID, patch))
+	}
+
+	// Two labels the caller of the "add one label" request does not know about.
+	if code := bulk(`{"labels":["regression","backend"]}`); code != http.StatusOK {
+		t.Fatalf("seed labels: %d", code)
+	}
+	if got := labelsNow(); len(got) != 2 {
+		t.Fatalf("seeding produced %v, want two labels", got)
+	}
+
+	// The bug: this used to leave the issue with exactly ["urgent"].
+	if code := bulk(`{"labels_add":["urgent"]}`); code != http.StatusOK {
+		t.Fatalf("labels_add: %d", code)
+	}
+	if got := labelsNow(); len(got) != 3 {
+		t.Errorf("labels_add produced %v — the labels it did not name were discarded", got)
+	}
+
+	// Removal takes one out and leaves the rest, case-insensitively.
+	if code := bulk(`{"labels_remove":["BACKEND"]}`); code != http.StatusOK {
+		t.Fatalf("labels_remove: %d", code)
+	}
+	got := labelsNow()
+	if len(got) != 2 {
+		t.Errorf("labels_remove produced %v, want two labels", got)
+	}
+	for _, n := range got {
+		if strings.EqualFold(n, "backend") {
+			t.Errorf("labels_remove left %q in place", n)
+		}
+	}
+
+	// Replace still replaces — it is a real intention, just not the default one.
+	if code := bulk(`{"labels":["only"]}`); code != http.StatusOK {
+		t.Fatalf("labels replace: %d", code)
+	}
+	if got := labelsNow(); len(got) != 1 || got[0] != "only" {
+		t.Errorf("replace produced %v, want [only]", got)
+	}
+
+	// Replace and edit together have no obvious meaning, so they are refused rather
+	// than resolved by an argument order nobody can see.
+	if code := bulk(`{"labels":["a"],"labels_add":["b"]}`); code != http.StatusUnprocessableEntity {
+		t.Errorf("labels + labels_add = %d, want 422", code)
+	}
+	if code := bulk(`{"labels_add":["x"],"labels_remove":["X"]}`); code != http.StatusUnprocessableEntity {
+		t.Errorf("the same label in add and remove = %d, want 422", code)
+	}
+}

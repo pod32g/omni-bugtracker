@@ -1592,7 +1592,18 @@ components:
         assignee_id: { type: string, format: uuid, nullable: true }
         milestone_id: { type: string, format: uuid, nullable: true }
         version_fixed: { type: string }
-        labels: { type: array, items: { type: string } }
+        labels:
+          type: array
+          items: { type: string }
+          description: "Replaces the label set — labels not listed here are removed. Cannot be combined with labels_add / labels_remove (422)."
+        labels_add:
+          type: array
+          items: { type: string }
+          description: Adds these labels, leaving existing ones in place. Created in the project if new.
+        labels_remove:
+          type: array
+          items: { type: string }
+          description: Removes these labels (case-insensitive), leaving the rest.
         components:
           type: array
           items: { type: string }
@@ -1609,12 +1620,28 @@ components:
             priority: { $ref: "#/components/schemas/Priority" }
             severity: { $ref: "#/components/schemas/Severity" }
             assignee_id: { type: string, format: uuid, nullable: true }
-            labels: { type: array, items: { type: string } }
+            labels:
+              type: array
+              items: { type: string }
+              description: >
+                Replaces the label set on every selected issue — labels not listed
+                here are removed. In a bulk selection the caller cannot see what that
+                discards, so prefer labels_add / labels_remove. Cannot be combined
+                with either of them (422).
+            labels_add:
+              type: array
+              items: { type: string }
+              description: Adds these labels, leaving existing ones in place. Created in the project if new.
+            labels_remove:
+              type: array
+              items: { type: string }
+              description: Removes these labels (case-insensitive), leaving the rest. The project label itself survives.
             components: { type: array, items: { type: string } }
             milestone_id: { type: string, format: uuid, nullable: true }
             release_id: { type: string, format: uuid, nullable: true }
         status: { $ref: "#/components/schemas/IssueStatus" }
         target_project_key: { type: string }
+        archived: { type: boolean, description: archives or restores every selected issue }
 
     Comment:
       type: object

@@ -718,10 +718,19 @@ type UpdateIssueInput struct {
 	ExpectedMD      *string
 	ActualMD        *string
 	EnvironmentMD   *string
-	Labels          *[]string  // nil = unchanged; non-nil replaces the label set
-	Components      *[]string  // nil = unchanged; non-nil replaces (names must exist in the project)
-	MilestoneID     *uuid.UUID // nil = unchanged; zero UUID clears; must belong to the issue's project
-	ReleaseID       *uuid.UUID // nil = unchanged; zero UUID clears; must belong to the issue's project
+	Labels          *[]string // nil = unchanged; non-nil replaces the label set
+	// LabelsAdd / LabelsRemove edit the set without knowing it. Labels is a
+	// destructive write: adding one label means sending the complete list, so any
+	// label the caller did not know about is deleted. That is defensible on the
+	// single-issue form, where the user can see what they are about to overwrite,
+	// and indefensible in bulk — "add one label to these fifty" stripped every other
+	// label from all fifty. Mutually exclusive with Labels; the handler rejects the
+	// combination rather than guessing an order.
+	LabelsAdd    []string
+	LabelsRemove []string
+	Components   *[]string  // nil = unchanged; non-nil replaces (names must exist in the project)
+	MilestoneID  *uuid.UUID // nil = unchanged; zero UUID clears; must belong to the issue's project
+	ReleaseID    *uuid.UUID // nil = unchanged; zero UUID clears; must belong to the issue's project
 	// DueAt follows the same convention: nil = unchanged, the zero time clears it.
 	DueAt *time.Time
 	// EstimateMinutes: nil = unchanged, 0 clears, >0 sets.

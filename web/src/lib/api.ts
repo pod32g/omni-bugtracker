@@ -878,7 +878,14 @@ export const api = {
       priority?: Priority;
       severity?: Severity;
       assignee_id?: string;
+      /**
+       * Replaces the whole label set — every label not listed here is deleted from
+       * every selected issue. Prefer labels_add / labels_remove: in a bulk selection
+       * the user cannot see what a replace is about to discard.
+       */
       labels?: string[];
+      labels_add?: string[];
+      labels_remove?: string[];
       components?: string[];
       milestone_id?: string;
       release_id?: string;

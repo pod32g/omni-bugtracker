@@ -2341,6 +2341,32 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, issue)
 }
 
+// labelPatchProblems validates the three label members against each other.
+//
+// `labels` is a replace: the store deletes every row in issue_labels for the issue and
+// re-inserts what was sent. Selecting fifty issues and "adding" one label therefore
+// stripped every other label from all fifty, in one click, with no confirmation and no
+// undo. labels_add / labels_remove exist so the common intention does not have to be
+// expressed as a destructive write.
+func labelPatchProblems(replace *[]string, add, remove []string) map[string]string {
+	problems := map[string]string{}
+	if replace != nil && (len(add) > 0 || len(remove) > 0) {
+		problems["labels"] = "cannot be combined with labels_add or labels_remove — replace or edit, not both"
+		return problems
+	}
+	inRemove := make(map[string]bool, len(remove))
+	for _, n := range remove {
+		inRemove[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+	for _, n := range add {
+		if inRemove[strings.ToLower(strings.TrimSpace(n))] {
+			problems["labels_add"] = "contains a label that labels_remove also names: " + n
+			break
+		}
+	}
+	return problems
+}
+
 // bulkUpdateIssues applies a patch, a status transition, and/or a project move
 // to a set of issues. Each issue is processed independently with the same
 // permission checks and activity/event semantics as the single-issue
@@ -2350,13 +2376,18 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		IDs   []uuid.UUID `json:"ids"`
 		Patch *struct {
-			Priority    *domain.Priority `json:"priority"`
-			Severity    *domain.Severity `json:"severity"`
-			AssigneeID  *uuid.UUID       `json:"assignee_id"`
-			Labels      *[]string        `json:"labels"`
-			Components  *[]string        `json:"components"`
-			MilestoneID *uuid.UUID       `json:"milestone_id"`
-			ReleaseID   *uuid.UUID       `json:"release_id"`
+			Priority   *domain.Priority `json:"priority"`
+			Severity   *domain.Severity `json:"severity"`
+			AssigneeID *uuid.UUID       `json:"assignee_id"`
+			// labels replaces the whole set. In a bulk selection the caller cannot
+			// see what they are replacing, so labels_add / labels_remove edit it
+			// instead — see the mutual-exclusion check below.
+			Labels       *[]string  `json:"labels"`
+			LabelsAdd    []string   `json:"labels_add"`
+			LabelsRemove []string   `json:"labels_remove"`
+			Components   *[]string  `json:"components"`
+			MilestoneID  *uuid.UUID `json:"milestone_id"`
+			ReleaseID    *uuid.UUID `json:"release_id"`
 		} `json:"patch"`
 		Status           *domain.IssueStatus `json:"status"`
 		TargetProjectKey *string             `json:"target_project_key"`
@@ -2385,6 +2416,16 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 	if problems := issueEnumProblems(nil, sev, pri, body.Status); len(problems) > 0 {
 		httpapi.WriteValidation(w, problems)
 		return
+	}
+	// Replace and edit are different intentions and combining them has no obvious
+	// meaning, so it is refused rather than resolved by an argument order nobody can
+	// see. Same for a name in both add and remove.
+	if body.Patch != nil {
+		if problems := labelPatchProblems(body.Patch.Labels,
+			body.Patch.LabelsAdd, body.Patch.LabelsRemove); len(problems) > 0 {
+			httpapi.WriteValidation(w, problems)
+			return
+		}
 	}
 	var target string
 	if body.TargetProjectKey != nil {
@@ -2428,6 +2469,7 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 			if _, err := h.issues.Update(r.Context(), issue.ID, actor, UpdateIssueInput{
 				Priority: body.Patch.Priority, Severity: body.Patch.Severity,
 				AssigneeID: body.Patch.AssigneeID, Labels: body.Patch.Labels,
+				LabelsAdd: body.Patch.LabelsAdd, LabelsRemove: body.Patch.LabelsRemove,
 				Components: body.Patch.Components, MilestoneID: body.Patch.MilestoneID,
 				ReleaseID: body.Patch.ReleaseID,
 			}); err != nil {
@@ -2517,9 +2559,14 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		ActualMD        *string           `json:"actual_md"`
 		EnvironmentMD   *string           `json:"environment_md"`
 		Labels          *[]string         `json:"labels"`
-		Components      *[]string         `json:"components"`
-		MilestoneID     *uuid.UUID        `json:"milestone_id"`
-		ReleaseID       *uuid.UUID        `json:"release_id"`
+		// Additive alternatives to labels, same as the bulk endpoint — an API where
+		// only one of the two routes can edit a label set without knowing it is an
+		// API people work around.
+		LabelsAdd    []string   `json:"labels_add"`
+		LabelsRemove []string   `json:"labels_remove"`
+		Components   *[]string  `json:"components"`
+		MilestoneID  *uuid.UUID `json:"milestone_id"`
+		ReleaseID    *uuid.UUID `json:"release_id"`
 		// Pointer-to-string so the three cases stay distinguishable: absent leaves the
 		// due date alone, "" clears it, a timestamp sets it.
 		DueAt *string `json:"due_at"`
@@ -2536,6 +2583,10 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Title != nil && strings.TrimSpace(*body.Title) == "" {
 		httpapi.WriteValidation(w, map[string]string{"title": "cannot be empty"})
+		return
+	}
+	if problems := labelPatchProblems(body.Labels, body.LabelsAdd, body.LabelsRemove); len(problems) > 0 {
+		httpapi.WriteValidation(w, problems)
 		return
 	}
 	var dueAt *time.Time
@@ -2573,6 +2624,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		VersionAffected: body.VersionAffected, VersionFixed: body.VersionFixed,
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
 		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD, Labels: body.Labels,
+		LabelsAdd: body.LabelsAdd, LabelsRemove: body.LabelsRemove,
 		Components: body.Components, MilestoneID: body.MilestoneID, ReleaseID: body.ReleaseID,
 		DueAt: dueAt, EstimateMinutes: estimate,
 	})
