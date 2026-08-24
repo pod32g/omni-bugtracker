@@ -57,3 +57,28 @@ func publicRouter(t *testing.T) http.Handler {
 		Metrics: platform.NewMetrics(),
 	})
 }
+
+// The spec declares /healthz and /readyz with `security: []` under `servers: /api/v1`,
+// so the published URL is /api/v1/healthz. The handlers were only ever on the root
+// router, and /api/v1/healthz fell into the authenticated group — an uptime monitor, a
+// load balancer or a Kubernetes probe configured from the docs got 401 and reported
+// the service as down.
+func TestProbesAreServedAtTheDocumentedPath(t *testing.T) {
+	r := publicRouter(t)
+	for _, path := range []string{"/healthz", "/api/v1/healthz"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200 (unauthenticated)", path, rec.Code)
+		}
+	}
+	// /readyz pings the database, which is nil here, so the status depends on the
+	// pool. What matters is that it is not the 401 the auth group would produce.
+	for _, path := range []string{"/readyz", "/api/v1/readyz"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusNotFound {
+			t.Errorf("GET %s = %d — the documented probe is behind auth or missing", path, rec.Code)
+		}
+	}
+}

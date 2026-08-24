@@ -18,6 +18,10 @@ import (
 func (s *Store) ProjectKeyForEntity(ctx context.Context, entity string, id uuid.UUID) (string, error) {
 	var q string
 	switch entity {
+	case "project":
+		// The project itself, so a UUID in a /projects/{key}/... path can be resolved
+		// to the key those routes actually take — see resolveProjectPathID.
+		q = `SELECT p.key FROM projects p WHERE p.id = $1`
 	case "component":
 		q = `SELECT p.key FROM components t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`
 	case "milestone":

@@ -81,6 +81,20 @@ func NewRouter(d Deps) http.Handler {
 
 	// Authenticated API surface.
 	r.Route("/api/v1", func(api chi.Router) {
+		// The probes again, at the documented URL.
+		//
+		// The spec declares /healthz with `security: []` under `servers: /api/v1`, so
+		// the published address is /api/v1/healthz — but the handler was only ever on
+		// the root router, and /api/v1/healthz fell into the authenticated group. An
+		// uptime monitor, a load balancer or a Kubernetes probe configured from the
+		// docs got 401 and reported the service as down.
+		//
+		// Both paths, rather than moving it: the root ones are what the deployment
+		// manifests already use. /metrics is deliberately not here — it is on the
+		// admin listener, and the spec says so.
+		api.Get("/healthz", health)
+		api.Get("/readyz", readyz(d.DB, d.Logger))
+
 		// Inbound integration webhooks authenticate via HMAC, not bearer — mounted
 		// first, and limited by source address since they carry no principal.
 		api.Group(func(inbound chi.Router) {

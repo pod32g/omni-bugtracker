@@ -50,6 +50,9 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	h := &httpHandlers{issues: issues, repo: repo, pub: pub, log: logger, cfg: cfg, attachDir: attachDir, maxUpload: maxUploadMB << 20}
 
 	r := chi.NewRouter()
+	// Runs before routing, so it works on the raw path rather than a URL param chi
+	// has not extracted yet.
+	r.Use(h.resolveProjectPathID)
 	r.Get("/limits", h.limits)
 	r.Get("/me", h.me)
 	r.Patch("/me", h.updateMe)
@@ -208,6 +211,59 @@ type httpHandlers struct {
 // canOnProject is the elevation-aware permission check: the principal passes
 // if their global role grants the permission OR their project_members role in
 // this project does. Global owner/admin therefore always pass.
+// resolveProjectPathID lets /projects/{...} take a project UUID as well as a key.
+//
+// Every one of these routes treats the path segment as the project KEY — issue
+// creation allocates numbers with `UPDATE projects ... WHERE key = $1`. Posting to
+// /projects/{uuid}/issues is a natural guess, because project objects expose `id`, and
+// it made that UPDATE match nothing: a 500 reading `allocate number: no rows in result
+// set`. On the read routes it was quieter and worse, answering with an empty list.
+//
+// Rewriting the path here rather than in each handler keeps the 30-odd routes honest
+// without 30 changes, and means an unknown id is a 404 in one place. A segment that is
+// not a UUID is left alone — project keys are [A-Z][A-Z0-9]{1,9} and cannot collide
+// with one.
+func (h *httpHandlers) resolveProjectPathID(next http.Handler) http.Handler {
+	const prefix = "/projects/"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// This router is Mounted under /api/v1, and a mounted chi mux routes on
+		// rctx.RoutePath — the remainder after the mount point — rather than on
+		// r.URL.Path. Rewriting only the URL would work in a unit test and do nothing
+		// in the server.
+		rctx := chi.RouteContext(r.Context())
+		mounted := rctx != nil && rctx.RoutePath != ""
+		path := r.URL.Path
+		if mounted {
+			path = rctx.RoutePath
+		}
+		if !strings.HasPrefix(path, prefix) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		seg, tail, hasTail := strings.Cut(strings.TrimPrefix(path, prefix), "/")
+		id, err := uuid.Parse(seg)
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		key, err := h.repo.ProjectKeyForEntity(r.Context(), "project", id)
+		if err != nil {
+			httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project: "+seg)
+			return
+		}
+		rewritten := prefix + key
+		if hasTail {
+			rewritten += "/" + tail
+		}
+		if mounted {
+			rctx.RoutePath = rewritten
+		} else {
+			r.URL.Path = rewritten
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (h *httpHandlers) canOnProject(ctx context.Context, p *auth.Principal, projectKey string, perm auth.Permission) bool {
 	if p.Can(perm) {
 		return true
@@ -2158,8 +2214,39 @@ func (h *httpHandlers) deleteRelease(w http.ResponseWriter, r *http.Request) {
 // listAllIssues is listIssues without a project scope, for the cross-project queue.
 // People have one attention span across many projects; the tracker having one page that
 // matches is the difference between a system of record and somewhere you start the day.
+// listAllIssues is the cross-project list: every project the caller can see, narrowed
+// by ?project= when one is given.
+//
+// That parameter was accepted and silently ignored — the response looked like a valid
+// answer to the question that was asked and was in fact the answer to a wider one,
+// with `total` reporting the global count. The expectation comes from elsewhere in the
+// same API: /dashboards/overview does accept ?project= and does scope by it.
 func (h *httpHandlers) listAllIssues(w http.ResponseWriter, r *http.Request) {
-	h.issueList(w, r, "")
+	key, ok := h.projectQueryScope(w, r)
+	if !ok {
+		return
+	}
+	h.issueList(w, r, key)
+}
+
+// projectQueryScope resolves ?project= to a key, or "" when it is absent.
+func (h *httpHandlers) projectQueryScope(w http.ResponseWriter, r *http.Request) (string, bool) {
+	q := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("project")))
+	if q == "" {
+		return "", true
+	}
+	if !projectKeyRe.MatchString(q) {
+		httpapi.WriteValidation(w, map[string]string{"project": "expected a project key, e.g. BUG"})
+		return "", false
+	}
+	// A key that does not exist is a 404 rather than an empty page: "no issues" and
+	// "no such project" are different answers, and returning the first for the second
+	// is how a typo reads as a clean backlog.
+	if _, err := h.repo.GetProjectByKey(r.Context(), q); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project: "+q)
+		return "", false
+	}
+	return q, true
 }
 
 func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
@@ -2831,9 +2918,33 @@ func (h *httpHandlers) transition(w http.ResponseWriter, r *http.Request) {
 		// issue. The contract has always advertised this; until it was decoded
 		// here the field was accepted and silently thrown away.
 		Comment string `json:"comment"`
+		// Decoded only so a caller who sent the wrong field name can be told which
+		// one they wanted. `status` is what this value is called in every issue body
+		// they have ever read back, and in PATCH, so it is the natural first guess.
+		Status *string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	// An absent `to` used to fall through to the transition check and come back as
+	// `409 invalid transition: open → `, with the target half blank: the caller was
+	// told their transition was illegal rather than that their request was malformed.
+	// `{"status":"closed"}` is the natural first guess, because status is what this
+	// field is called everywhere else — in the issue body, and in PATCH — so it gets
+	// a message that says where to put it rather than a generic "required".
+	if strings.TrimSpace(string(body.To)) == "" {
+		msg := `required — the target status, e.g. {"to":"resolved"}`
+		if body.Status != nil {
+			msg = "required — this endpoint reads the target from `to`, not `status`"
+		}
+		httpapi.WriteValidation(w, map[string]string{"to": msg})
+		return
+	}
+	if !domain.ValidStatus(body.To) {
+		httpapi.WriteValidation(w, map[string]string{
+			"to": "unknown status " + strconv.Quote(string(body.To)),
+		})
 		return
 	}
 	issue, err := h.issues.Get(r.Context(), projectKey, number)

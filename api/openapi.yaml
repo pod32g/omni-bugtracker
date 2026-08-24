@@ -34,7 +34,28 @@ paths:
       tags: [system]
       operationId: health
       security: []
+      description: >
+        Liveness. Answers 200 as long as the process is serving; it does not check
+        the database. Also served at the root path /healthz, which is what the
+        deployment manifests use.
       responses: { "200": { description: OK } }
+
+  /readyz:
+    get:
+      tags: [system]
+      operationId: ready
+      security: []
+      description: >
+        Readiness — pings the database. 503 when it is unreachable, with a
+        problem+json body that deliberately does not name the host, port, user or
+        database. The reason is in the server log. Also served at the root path.
+
+        Prometheus metrics are NOT on this listener: they are served on a separate
+        admin port (server.metrics_addr, :9091 by default) that deployments do not
+        publish, because the scrape payload describes every route and its traffic.
+      responses:
+        "200": { description: ready }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /me:
     get:
@@ -286,6 +307,32 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /issues:
+    get:
+      tags: [issues]
+      operationId: listAllIssues
+      description: >
+        Issues across every project the caller can see. `project` narrows it to one —
+        the same scope as /projects/{key}/issues, reachable without knowing the key
+        ahead of time. An unknown key is a 404, not an empty page.
+      parameters:
+        - name: project
+          in: query
+          description: project key, case-insensitive
+          schema: { type: string }
+        - name: filter
+          in: query
+          description: same grammar as the per-project list below
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string, default: "-created_at" }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { description: issue list, content: { application/json: { schema: { $ref: "#/components/schemas/IssueList" } } } }
+        "404": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
 
   /projects/{key}/issues:
@@ -759,6 +806,11 @@ paths:
     post:
       tags: [issues]
       operationId: transitionIssue
+      description: >
+        Moves an issue along the workflow graph. The target goes in `to` — not
+        `status`, which is what the same value is called in every issue body. A
+        missing or unknown `to` is a 422 naming the field; 409 is reserved for a
+        request that was well-formed and asked for an edge the graph does not have.
       requestBody:
         required: true
         content:
@@ -768,10 +820,13 @@ paths:
               required: [to]
               properties:
                 to: { $ref: "#/components/schemas/IssueStatus" }
-                comment: { type: string }
+                comment:
+                  type: string
+                  description: optional note, recorded as a comment (needs comment:create)
       responses:
         "200": { description: transitioned, content: { application/json: { schema: { $ref: "#/components/schemas/Issue" } } } }
-        "409": { $ref: "#/components/responses/Problem" }
+        "409": { description: "the edge is not in the workflow graph, or somebody moved the issue first", content: { application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } } } }
+        "422": { $ref: "#/components/responses/Problem" }
 
   /issues/{issueKey}/move:
     parameters: [{ $ref: "#/components/parameters/IssueKey" }]
@@ -1328,7 +1383,12 @@ components:
       name: key
       in: path
       required: true
-      schema: { type: string, pattern: "^[A-Z][A-Z0-9]{1,9}$" }
+      description: >
+        The project key (e.g. BUG). A project UUID is also accepted and resolved to
+        the key — project objects expose `id`, so posting to /projects/{id}/issues is
+        a natural guess, and it used to produce a 500. An id that resolves to nothing
+        is a 404.
+      schema: { type: string, pattern: "^([A-Z][A-Z0-9]{1,9}|[0-9a-fA-F-]{36})$" }
     IssueKey:
       name: issueKey
       in: path

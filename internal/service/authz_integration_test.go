@@ -535,3 +535,131 @@ func TestBulkLabelEditIsAdditive(t *testing.T) {
 		t.Errorf("the same label in add and remove = %d, want 422", code)
 	}
 }
+
+// TestProjectPathAcceptsAUUID covers the 500 you got for guessing the obvious.
+//
+// Every /projects/{key}/... route treats the segment as the project KEY — issue
+// creation allocates numbers with `UPDATE projects ... WHERE key = $1`. Posting to
+// /projects/{uuid}/issues is a natural guess, because project objects expose `id`, and
+// it made that UPDATE match nothing: 500 `allocate number: no rows in result set`.
+func TestProjectPathAcceptsAUUID(t *testing.T) {
+	f := setupAuthz(t)
+
+	body := `{"type":"bug","title":"filed against a project uuid"}`
+	if code := f.do(t, domain.RoleOwner, "POST",
+		"/projects/"+f.projectID.String()+"/issues", body); code != http.StatusCreated {
+		t.Errorf("POST /projects/{uuid}/issues = %d, want 201", code)
+	}
+	// Reads too — this one used to answer an empty list, which is quieter and worse.
+	if code := f.do(t, domain.RoleOwner, "GET",
+		"/projects/"+f.projectID.String()+"/issues", ""); code != http.StatusOK {
+		t.Errorf("GET /projects/{uuid}/issues = %d, want 200", code)
+	}
+	// An id that resolves to nothing is a 404 naming the project, not a 500 out of
+	// the depths of the store.
+	if code := f.do(t, domain.RoleOwner, "GET",
+		"/projects/"+uuid.NewString()+"/issues", ""); code != http.StatusNotFound {
+		t.Errorf("GET /projects/{unknown uuid}/issues = %d, want 404", code)
+	}
+	// Keys still work, obviously.
+	if code := f.do(t, domain.RoleOwner, "GET", "/projects/"+f.project+"/issues", ""); code != http.StatusOK {
+		t.Errorf("GET /projects/{key}/issues = %d, want 200", code)
+	}
+}
+
+// TestCrossProjectListHonoursProject covers ?project= being accepted and ignored: the
+// response looked like a valid answer to the question that was asked, and was the
+// answer to a wider one.
+func TestCrossProjectListHonoursProject(t *testing.T) {
+	f := setupAuthz(t)
+	f.seedIssue(t)
+
+	total := func(query string) float64 {
+		t.Helper()
+		var out struct {
+			Total float64 `json:"total"`
+		}
+		if code := f.doJSON(t, domain.RoleOwner, "GET", "/issues"+query, "", &out); code != http.StatusOK {
+			t.Fatalf("GET /issues%s = %d", query, code)
+		}
+		return out.Total
+	}
+
+	// f.other exists and has no issues, so it is the clean probe: before the fix this
+	// reported the global total, because the parameter reached nothing.
+	global := total("?limit=1")
+	if global == 0 {
+		t.Fatal("no issues at all — nothing to scope")
+	}
+	if empty := total("?limit=1&project=" + f.other); empty != 0 {
+		t.Errorf("?project=%s reported %v of a global %v — the parameter is being ignored",
+			f.other, empty, global)
+	}
+	scoped := total("?limit=1&project=" + f.project)
+	if scoped == 0 {
+		t.Errorf("?project=%s reported nothing, but the project has issues", f.project)
+	}
+	// Lower case is the same project. Callers type it either way.
+	if lower := total("?limit=1&project=" + strings.ToLower(f.project)); lower != scoped {
+		t.Errorf("lower-case project key reported %v, want %v", lower, scoped)
+	}
+	// A key that does not exist is a 404: "no issues" and "no such project" are
+	// different answers, and returning the first for the second is how a typo reads
+	// as a clean backlog.
+	if code := f.do(t, domain.RoleOwner, "GET", "/issues?project=NOPE", ""); code != http.StatusNotFound {
+		t.Errorf("?project=NOPE = %d, want 404", code)
+	}
+}
+
+// TestTransitionNamesTheFieldYouGotWrong: an absent `to` used to fall through to the
+// workflow graph and come back as `409 invalid transition: open → `, with nothing on
+// the right-hand side — the caller was told their transition was illegal rather than
+// that their request was malformed.
+func TestTransitionNamesTheFieldYouGotWrong(t *testing.T) {
+	f := setupAuthz(t)
+	path := "/issues/" + f.seedIssue(t) + "/transition"
+
+	for _, tc := range []struct{ name, body string }{
+		{"empty body", `{}`},
+		{"the field it is called everywhere else", `{"status":"closed"}`},
+		{"blank target", `{"to":"  "}`},
+	} {
+		if code := f.do(t, domain.RoleOwner, "POST", path, tc.body); code != http.StatusUnprocessableEntity {
+			t.Errorf("%s = %d, want 422", tc.name, code)
+		}
+	}
+	// A status that is not a status is also the request's fault, not the graph's.
+	if code := f.do(t, domain.RoleOwner, "POST", path, `{"to":"finished"}`); code != http.StatusUnprocessableEntity {
+		t.Errorf("unknown status = %d, want 422", code)
+	}
+	// ...and a genuinely illegal edge is still a 409, which is what that code is for.
+	// open → reopened is not in the graph: you cannot reopen something still open.
+	if code := f.do(t, domain.RoleOwner, "POST", path, `{"to":"reopened"}`); code != http.StatusConflict {
+		t.Errorf("open → reopened = %d, want 409", code)
+	}
+}
+
+// doJSON is `do` plus decoding the body, for the cases that need to read the answer
+// rather than only the status.
+func (f *authzFixture) doJSON(t *testing.T, role domain.Role, method, path, body string, out any) int {
+	t.Helper()
+	var rdr io.Reader = http.NoBody
+	if body != "" {
+		rdr = bytes.NewReader([]byte(body))
+	}
+	req := httptest.NewRequest(method, path, rdr)
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithPrincipal(req.Context(), &auth.Principal{
+		UserID: f.users[role].String(),
+		Email:  string(role) + "@test.local",
+		Role:   role,
+	}))
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK {
+		if err := json.Unmarshal(rec.Body.Bytes(), out); err != nil {
+			t.Fatalf("decode %s %s: %v", method, path, err)
+		}
+	}
+	return rec.Code
+}
