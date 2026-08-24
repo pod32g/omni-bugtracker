@@ -959,3 +959,110 @@ func seedStatusIssue(t *testing.T, ctx context.Context, tx pgx.Tx) uuid.UUID {
 	}
 	return issueID
 }
+
+// TestIntegrationVelocityUsesTheCommitmentSnapshot is the regression test for velocity
+// reporting every carried-over sprint as 100% delivered.
+//
+// Both numbers came from issues whose iteration_id *currently* points at the
+// iteration, and CarryOverIssues moves out exactly the issues that are not resolved or
+// closed. So the moment a sprint was closed with carry-over the only issues left
+// pointing at it were the finished ones, planned collapsed onto done, and the panel
+// rendered "2/2 done" for a sprint that delivered two of four.
+func TestIntegrationVelocityUsesTheCommitmentSnapshot(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := New(pool)
+
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	projectKey := "V" + strings.ToUpper(suffix[:4])
+
+	var reporterID, projectID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (identity_sub, email, display_name, role)
+		 VALUES ($1, $2, $3, 'owner') RETURNING id`,
+		"vel:"+suffix, suffix+"@test.local", "vel-"+suffix).Scan(&reporterID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO projects (key, name) VALUES ($1, 'Velocity Test') RETURNING id`,
+		projectKey).Scan(&projectID); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+		_, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, reporterID)
+	})
+
+	var sprint, next uuid.UUID
+	for _, it := range []struct {
+		into *uuid.UUID
+		name string
+	}{{&sprint, "sprint-1"}, {&next, "sprint-2"}} {
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO iterations (project_id, name, starts_on, ends_on)
+			 VALUES ($1, $2, current_date - 14, current_date) RETURNING id`,
+			projectID, it.name+"-"+suffix).Scan(it.into); err != nil {
+			t.Fatalf("seed iteration %s: %v", it.name, err)
+		}
+	}
+
+	// Four issues committed to the sprint; two of them will get finished.
+	for n := 1; n <= 4; n++ {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO issues (project_id, number, type, title, status, priority, reporter_id,
+			                     iteration_id, estimate_minutes)
+			 VALUES ($1, $2, 'bug', 'velocity target', 'open', 'p2', $3, $4, 60)`,
+			projectID, n, reporterID, sprint); err != nil {
+			t.Fatalf("seed issue %d: %v", n, err)
+		}
+	}
+
+	active := domain.IterationActive
+	if _, err := store.UpdateIteration(ctx, sprint, service.UpdateIterationInput{State: &active}); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+
+	// Two get done, two do not — and the two that do not are carried into the next
+	// sprint, which is what removes the evidence.
+	if _, err := pool.Exec(ctx,
+		`UPDATE issues SET status = 'resolved', resolved_at = now()
+		  WHERE iteration_id = $1 AND number <= 2`, sprint); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	moved, err := store.CarryOverIssues(ctx, sprint, &next)
+	if err != nil {
+		t.Fatalf("carry over: %v", err)
+	}
+	if moved != 2 {
+		t.Fatalf("carried over %d issues, want 2", moved)
+	}
+
+	completed := domain.IterationCompleted
+	if _, err := store.UpdateIteration(ctx, sprint, service.UpdateIterationInput{State: &completed}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	history, err := store.IterationVelocity(ctx, projectKey, 5)
+	if err != nil {
+		t.Fatalf("velocity: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("velocity returned %d rows, want 1", len(history))
+	}
+	v := history[0]
+	if v.DoneIssues != 2 {
+		t.Errorf("done_issues = %d, want 2", v.DoneIssues)
+	}
+	// The assertion the bug was about: before the snapshot this was 2, and the sprint
+	// reported 2/2 — a perfect record for delivering half the work.
+	if v.PlannedIssues != 4 {
+		t.Errorf("planned_issues = %d, want 4 — the commitment is being re-derived from "+
+			"what survived carry-over", v.PlannedIssues)
+	}
+	if v.PlannedMinutes != 240 {
+		t.Errorf("planned_minutes = %d, want 240", v.PlannedMinutes)
+	}
+	if !v.Committed {
+		t.Error("committed = false, but this iteration was activated and snapshotted")
+	}
+}
