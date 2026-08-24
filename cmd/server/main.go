@@ -92,6 +92,12 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
+	// Prometheus and the container probes get their own listener, deliberately not
+	// the published one. /metrics used to sit on the public router: ~74KB of route
+	// patterns, per-route traffic and runtime internals, to anyone who could reach
+	// the API port. Scrape this from inside; publish only cfg.Server.Addr.
+	adminSrv := httpapi.AdminServer(cfg.Server.MetricsAddr, metrics.Registry, db, logger)
+
 	go func() {
 		logger.Info("api listening", "addr", cfg.Server.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -100,9 +106,18 @@ func main() {
 		}
 	}()
 
+	go func() {
+		logger.Info("api metrics listening", "addr", adminSrv.Addr)
+		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			// Not fatal: losing observability should not take the API with it.
+			logger.Error("metrics listen", "err", err)
+		}
+	}()
+
 	<-ctx.Done()
 	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+	_ = adminSrv.Shutdown(shutdownCtx)
 }

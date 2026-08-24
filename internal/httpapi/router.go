@@ -9,7 +9,6 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/omni/bugtracker/internal/auth"
 	"github.com/omni/bugtracker/internal/config"
@@ -58,10 +57,14 @@ func NewRouter(d Deps) http.Handler {
 		AllowCredentials: true,
 	}))
 
-	// Unauthenticated operational endpoints.
+	// Unauthenticated operational endpoints. Probes only — the container runtime
+	// cannot authenticate, so these say whether the process is up and nothing else.
+	//
+	// /metrics is NOT here. It lives on the admin listener (see AdminMux), which is
+	// not published: the scrape payload is a map of the API surface and its traffic,
+	// and it used to be readable by anyone who could reach the public port.
 	r.Get("/healthz", health)
 	r.Get("/readyz", readyz(d.DB, d.Logger))
-	r.Handle("/metrics", promhttp.HandlerFor(d.Metrics.Registry, promhttp.HandlerOpts{}))
 
 	// Interactive API docs (Swagger UI) + the raw OpenAPI spec. The UI assets are
 	// vendored and served locally (no CDN).
@@ -78,6 +81,20 @@ func NewRouter(d Deps) http.Handler {
 
 	// Authenticated API surface.
 	r.Route("/api/v1", func(api chi.Router) {
+		// The probes again, at the documented URL.
+		//
+		// The spec declares /healthz with `security: []` under `servers: /api/v1`, so
+		// the published address is /api/v1/healthz — but the handler was only ever on
+		// the root router, and /api/v1/healthz fell into the authenticated group. An
+		// uptime monitor, a load balancer or a Kubernetes probe configured from the
+		// docs got 401 and reported the service as down.
+		//
+		// Both paths, rather than moving it: the root ones are what the deployment
+		// manifests already use. /metrics is deliberately not here — it is on the
+		// admin listener, and the spec says so.
+		api.Get("/healthz", health)
+		api.Get("/readyz", readyz(d.DB, d.Logger))
+
 		// Inbound integration webhooks authenticate via HMAC, not bearer — mounted
 		// first, and limited by source address since they carry no principal.
 		api.Group(func(inbound chi.Router) {

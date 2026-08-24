@@ -488,6 +488,11 @@ function VelocityPanel({
             averaged over {averagedOver} of the last {windowSize}
             {averagedOver < windowSize && " — too few to call it a trend"}
           </span>
+          {history.some((v) => !v.committed) && (
+            <span className="basis-full font-mono text-xs text-graphite-soft">
+              * no commitment was recorded, so the total is what stayed in the iteration
+            </span>
+          )}
         </div>
         <div className="flex flex-col gap-2">
           {history.slice(0, 6).map((v) => (
@@ -501,6 +506,19 @@ function VelocityPanel({
               </div>
               <span className="w-24 shrink-0 text-right font-mono text-xs text-graphite">
                 {v.done_issues}/{v.planned_issues} done
+                {!v.committed && (
+                  // No commitment snapshot, so the denominator is whatever still
+                  // points at the iteration — and carry-over took the unfinished
+                  // issues out, which is how these read as 100%. Marked rather than
+                  // hidden: the number is still the only one there is for sprints
+                  // that closed before the snapshot existed.
+                  <span
+                    className="ml-1 cursor-help text-graphite-soft"
+                    title="No commitment recorded for this iteration — this is what remained in it, not what was planned. Sprints activated from now on record their commitment."
+                  >
+                    *
+                  </span>
+                )}
               </span>
             </div>
           ))}

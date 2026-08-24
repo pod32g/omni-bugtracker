@@ -297,6 +297,14 @@ export interface Velocity {
   done_minutes: number;
   planned_issues: number;
   planned_minutes: number;
+  /**
+   * Whether planned_* is the commitment snapshot taken when the sprint was activated.
+   * False means it was re-derived from what still points at the iteration — and since
+   * carry-over moves out exactly the unfinished issues, a re-derived denominator
+   * collapses onto done_issues and reports 100%. Sprints that finished before the
+   * snapshot existed cannot be fixed retroactively, so the panel marks them.
+   */
+  committed: boolean;
 }
 
 export interface EffortRollup {
@@ -878,7 +886,14 @@ export const api = {
       priority?: Priority;
       severity?: Severity;
       assignee_id?: string;
+      /**
+       * Replaces the whole label set — every label not listed here is deleted from
+       * every selected issue. Prefer labels_add / labels_remove: in a bulk selection
+       * the user cannot see what a replace is about to discard.
+       */
       labels?: string[];
+      labels_add?: string[];
+      labels_remove?: string[];
       components?: string[];
       milestone_id?: string;
       release_id?: string;

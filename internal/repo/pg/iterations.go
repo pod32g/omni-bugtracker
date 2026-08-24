@@ -101,6 +101,23 @@ func (s *Store) UpdateIteration(ctx context.Context, id uuid.UUID, in service.Up
 			    AND project_id = (SELECT project_id FROM iterations WHERE id = $1)`, id); err != nil {
 			return domain.Iteration{}, err
 		}
+		// Snapshot the commitment as the sprint starts: what the team signed up for,
+		// before anything is finished and before carry-over removes the evidence.
+		//
+		// Only on the first activation — `committed_at IS NULL` — because re-activating
+		// a sprint that was closed early must not quietly rewrite what was promised
+		// into what was left.
+		if _, err := tx.Exec(ctx, `
+			UPDATE iterations it SET
+			  committed_issues  = c.n,
+			  committed_minutes = c.minutes,
+			  committed_at      = now()
+			 FROM (SELECT count(*)::INT AS n,
+			              COALESCE(sum(estimate_minutes), 0)::INT AS minutes
+			         FROM issues WHERE iteration_id = $1 AND deleted_at IS NULL) c
+			WHERE it.id = $1 AND it.committed_at IS NULL`, id); err != nil {
+			return domain.Iteration{}, fmt.Errorf("snapshot commitment: %w", err)
+		}
 	}
 	tag, err := tx.Exec(ctx,
 		`UPDATE iterations SET
@@ -242,18 +259,33 @@ func (s *Store) SnapshotIterations(ctx context.Context) (int, error) {
 // IterationVelocity returns finished iterations newest-first, so the caller can take a
 // rolling window off the front.
 func (s *Store) IterationVelocity(ctx context.Context, projectKey string, limit int) ([]domain.Velocity, error) {
+	// The denominator is the commitment snapshot taken when the sprint was activated,
+	// not a count of what still points at the iteration now. Carry-over moves out
+	// exactly the unfinished issues, so the live count collapses onto the done count
+	// and every sprint that carried anything over reported 100%.
+	//
+	// GREATEST(..., done) because an issue can be added mid-sprint and finished: the
+	// team delivered more than it committed to, and a denominator smaller than the
+	// numerator would render as over 100% rather than as the good news it is. Sprints
+	// with no snapshot — everything from before the column existed — fall back to the
+	// old derivation and say so in `committed`, rather than being handed a baseline
+	// nobody recorded.
 	rows, err := s.pool.Query(ctx, `
 		SELECT it.id, it.name, to_char(it.ends_on, 'YYYY-MM-DD'),
-		       count(*) FILTER (WHERE i.status IN ('resolved','closed'))::INT,
+		       count(*) FILTER (WHERE i.status IN ('resolved','closed'))::INT AS done,
 		       COALESCE(sum(i.estimate_minutes)
-		                FILTER (WHERE i.status IN ('resolved','closed')), 0)::INT,
-		       count(i.id)::INT,
-		       COALESCE(sum(i.estimate_minutes), 0)::INT
+		                FILTER (WHERE i.status IN ('resolved','closed')), 0)::INT AS done_minutes,
+		       GREATEST(COALESCE(it.committed_issues, count(i.id)),
+		                count(*) FILTER (WHERE i.status IN ('resolved','closed')))::INT,
+		       GREATEST(COALESCE(it.committed_minutes, COALESCE(sum(i.estimate_minutes), 0)),
+		                COALESCE(sum(i.estimate_minutes)
+		                         FILTER (WHERE i.status IN ('resolved','closed')), 0))::INT,
+		       it.committed_at IS NOT NULL
 		  FROM iterations it
 		  JOIN projects p ON p.id = it.project_id
 		  LEFT JOIN issues i ON i.iteration_id = it.id AND i.deleted_at IS NULL
 		 WHERE p.key = $1 AND it.state = 'completed'
-		 GROUP BY it.id, it.name, it.ends_on
+		 GROUP BY it.id, it.name, it.ends_on, it.committed_issues, it.committed_minutes, it.committed_at
 		 ORDER BY it.ends_on DESC
 		 LIMIT $2`, projectKey, limit)
 	if err != nil {
@@ -265,7 +297,7 @@ func (s *Store) IterationVelocity(ctx context.Context, projectKey string, limit 
 	for rows.Next() {
 		var v domain.Velocity
 		if err := rows.Scan(&v.IterationID, &v.Name, &v.EndsOn, &v.DoneIssues,
-			&v.DoneMinutes, &v.PlannedIssues, &v.PlannedMinutes); err != nil {
+			&v.DoneMinutes, &v.PlannedIssues, &v.PlannedMinutes, &v.Committed); err != nil {
 			return nil, err
 		}
 		out = append(out, v)

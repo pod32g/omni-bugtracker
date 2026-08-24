@@ -816,6 +816,13 @@ function BulkBar({ ids, projectKey, onDone }: { ids: string[]; projectKey: strin
   const qc = useQueryClient();
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.listUsers() });
   const { projects } = useProject();
+  // Only offer labels the project already has. Free text here would let a typo create
+  // a new label across fifty issues at once, and there is no undo for that either.
+  const labels = useQuery({
+    queryKey: ["labels", projectKey],
+    queryFn: () => api.listLabels(projectKey),
+    enabled: !!projectKey,
+  });
 
   const run = useMutation({
     mutationFn: (body: Parameters<typeof api.bulkUpdateIssues>[0]) => api.bulkUpdateIssues(body),
@@ -904,6 +911,48 @@ function BulkBar({ ids, projectKey, onDone }: { ids: string[]; projectKey: strin
             </option>
           ))}
       </select>
+
+      {/* labels_add / labels_remove, never `labels`. `labels` replaces the whole set,
+          so "add one label to these fifty" would strip every other label from all
+          fifty — and unlike the single-issue form, the user cannot see what they are
+          about to lose. */}
+      {!!projectKey && (labels.data?.items.length ?? 0) > 0 && (
+        <>
+          <select
+            defaultValue=""
+            aria-label="Add label to selected issues"
+            className={selectClass}
+            onChange={(e) => {
+              if (e.target.value) run.mutate({ ids, patch: { labels_add: [e.target.value] } });
+              e.target.value = "";
+            }}
+          >
+            <option value="">+ Label…</option>
+            {labels.data?.items.map((l) => (
+              <option key={l.id} value={l.name}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+
+          <select
+            defaultValue=""
+            aria-label="Remove label from selected issues"
+            className={selectClass}
+            onChange={(e) => {
+              if (e.target.value) run.mutate({ ids, patch: { labels_remove: [e.target.value] } });
+              e.target.value = "";
+            }}
+          >
+            <option value="">− Label…</option>
+            {labels.data?.items.map((l) => (
+              <option key={l.id} value={l.name}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
 
       <button
         onClick={() => {

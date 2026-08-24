@@ -49,6 +49,12 @@ type Server struct {
 	ReadTimeout  time.Duration `koanf:"read_timeout"`
 	WriteTimeout time.Duration `koanf:"write_timeout"`
 	CORSOrigins  []string      `koanf:"cors_origins"`
+
+	// MetricsAddr is where the API serves /metrics plus its own probes, on a listener
+	// separate from Addr. Publish Addr; do not publish this one. Prometheus scrapes it
+	// from inside the cluster, which is the only access it needs — the payload
+	// describes every route, its traffic and the size of the install.
+	MetricsAddr string `koanf:"metrics_addr"`
 }
 
 type Database struct {
@@ -226,6 +232,11 @@ func (c *Config) validate() error {
 	// something that only ever wants to be reachable from inside the cluster.
 	if c.Worker.MetricsAddr == "" {
 		c.Worker.MetricsAddr = ":9090"
+	}
+	// Distinct from the worker's, because in a compose or bare-metal deployment the
+	// two processes share a network namespace and would collide on :9090.
+	if c.Server.MetricsAddr == "" {
+		c.Server.MetricsAddr = ":9091"
 	}
 	return nil
 }

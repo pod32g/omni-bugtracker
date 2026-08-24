@@ -51,6 +51,13 @@ type Velocity struct {
 	DoneMinutes    int       `json:"done_minutes"`
 	PlannedIssues  int       `json:"planned_issues"`
 	PlannedMinutes int       `json:"planned_minutes"`
+	// Committed reports whether Planned* came from the commitment snapshot taken when
+	// the sprint was activated, or was re-derived from what still points at the
+	// iteration. False means the number is the old, flattering one — carry-over
+	// removes exactly the unfinished issues, so a re-derived denominator collapses
+	// onto the done count. Iterations that predate the snapshot cannot be fixed
+	// retroactively, so they are labelled instead.
+	Committed bool `json:"committed"`
 }
 
 // ValidIterationState guards a value about to reach the Postgres enum column, where

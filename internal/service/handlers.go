@@ -50,6 +50,9 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	h := &httpHandlers{issues: issues, repo: repo, pub: pub, log: logger, cfg: cfg, attachDir: attachDir, maxUpload: maxUploadMB << 20}
 
 	r := chi.NewRouter()
+	// Runs before routing, so it works on the raw path rather than a URL param chi
+	// has not extracted yet.
+	r.Use(h.resolveProjectPathID)
 	r.Get("/limits", h.limits)
 	r.Get("/me", h.me)
 	r.Patch("/me", h.updateMe)
@@ -208,6 +211,59 @@ type httpHandlers struct {
 // canOnProject is the elevation-aware permission check: the principal passes
 // if their global role grants the permission OR their project_members role in
 // this project does. Global owner/admin therefore always pass.
+// resolveProjectPathID lets /projects/{...} take a project UUID as well as a key.
+//
+// Every one of these routes treats the path segment as the project KEY — issue
+// creation allocates numbers with `UPDATE projects ... WHERE key = $1`. Posting to
+// /projects/{uuid}/issues is a natural guess, because project objects expose `id`, and
+// it made that UPDATE match nothing: a 500 reading `allocate number: no rows in result
+// set`. On the read routes it was quieter and worse, answering with an empty list.
+//
+// Rewriting the path here rather than in each handler keeps the 30-odd routes honest
+// without 30 changes, and means an unknown id is a 404 in one place. A segment that is
+// not a UUID is left alone — project keys are [A-Z][A-Z0-9]{1,9} and cannot collide
+// with one.
+func (h *httpHandlers) resolveProjectPathID(next http.Handler) http.Handler {
+	const prefix = "/projects/"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// This router is Mounted under /api/v1, and a mounted chi mux routes on
+		// rctx.RoutePath — the remainder after the mount point — rather than on
+		// r.URL.Path. Rewriting only the URL would work in a unit test and do nothing
+		// in the server.
+		rctx := chi.RouteContext(r.Context())
+		mounted := rctx != nil && rctx.RoutePath != ""
+		path := r.URL.Path
+		if mounted {
+			path = rctx.RoutePath
+		}
+		if !strings.HasPrefix(path, prefix) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		seg, tail, hasTail := strings.Cut(strings.TrimPrefix(path, prefix), "/")
+		id, err := uuid.Parse(seg)
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		key, err := h.repo.ProjectKeyForEntity(r.Context(), "project", id)
+		if err != nil {
+			httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project: "+seg)
+			return
+		}
+		rewritten := prefix + key
+		if hasTail {
+			rewritten += "/" + tail
+		}
+		if mounted {
+			rctx.RoutePath = rewritten
+		} else {
+			r.URL.Path = rewritten
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (h *httpHandlers) canOnProject(ctx context.Context, p *auth.Principal, projectKey string, perm auth.Permission) bool {
 	if p.Can(perm) {
 		return true
@@ -2158,8 +2214,39 @@ func (h *httpHandlers) deleteRelease(w http.ResponseWriter, r *http.Request) {
 // listAllIssues is listIssues without a project scope, for the cross-project queue.
 // People have one attention span across many projects; the tracker having one page that
 // matches is the difference between a system of record and somewhere you start the day.
+// listAllIssues is the cross-project list: every project the caller can see, narrowed
+// by ?project= when one is given.
+//
+// That parameter was accepted and silently ignored — the response looked like a valid
+// answer to the question that was asked and was in fact the answer to a wider one,
+// with `total` reporting the global count. The expectation comes from elsewhere in the
+// same API: /dashboards/overview does accept ?project= and does scope by it.
 func (h *httpHandlers) listAllIssues(w http.ResponseWriter, r *http.Request) {
-	h.issueList(w, r, "")
+	key, ok := h.projectQueryScope(w, r)
+	if !ok {
+		return
+	}
+	h.issueList(w, r, key)
+}
+
+// projectQueryScope resolves ?project= to a key, or "" when it is absent.
+func (h *httpHandlers) projectQueryScope(w http.ResponseWriter, r *http.Request) (string, bool) {
+	q := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("project")))
+	if q == "" {
+		return "", true
+	}
+	if !projectKeyRe.MatchString(q) {
+		httpapi.WriteValidation(w, map[string]string{"project": "expected a project key, e.g. BUG"})
+		return "", false
+	}
+	// A key that does not exist is a 404 rather than an empty page: "no issues" and
+	// "no such project" are different answers, and returning the first for the second
+	// is how a typo reads as a clean backlog.
+	if _, err := h.repo.GetProjectByKey(r.Context(), q); err != nil {
+		httpapi.WriteProblem(w, http.StatusNotFound, "not found", "no such project: "+q)
+		return "", false
+	}
+	return q, true
 }
 
 func (h *httpHandlers) listIssues(w http.ResponseWriter, r *http.Request) {
@@ -2252,6 +2339,14 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
 		return
 	}
+	if unknown := h.unknownComponents(r.Context(), chi.URLParam(r, "key"), body.Components); len(unknown) > 0 {
+		// Same silent drop as the patch path: setIssueComponents skips a name the
+		// project does not have, so a typo was accepted and simply not applied.
+		httpapi.WriteValidation(w, map[string]string{
+			"components": "not components of " + chi.URLParam(r, "key") + ": " + strings.Join(unknown, ", "),
+		})
+		return
+	}
 	if strings.TrimSpace(body.Title) == "" {
 		httpapi.WriteValidation(w, map[string]string{"title": "required"})
 		return
@@ -2341,6 +2436,94 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, issue)
 }
 
+// unknownJSONField pulls the member name out of encoding/json's unknown-field error.
+// There is no typed form of it — the error is the string `json: unknown field "x"` and
+// nothing else — so this is string handling by necessity, kept in one place.
+func unknownJSONField(err error) (string, bool) {
+	const prefix = `json: unknown field "`
+	msg := err.Error()
+	if !strings.HasPrefix(msg, prefix) || !strings.HasSuffix(msg, `"`) {
+		return "", false
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(msg, prefix), `"`), true
+}
+
+// unknownIssueFieldHint says where a field that is not settable here actually lives,
+// for the ones people reach for. `status` is the whole reason: it is what this value
+// is called in every issue body, so patching it is the obvious first attempt, and it
+// used to succeed silently.
+func unknownIssueFieldHint(field string) string {
+	switch field {
+	case "status":
+		return "not settable here — status moves through POST /issues/{key}/transition, which validates the workflow graph"
+	case "fields":
+		return "not settable here — custom field values go to PUT /issues/{key}/fields"
+	case "iteration_id", "iteration":
+		return "not settable here — use PUT /issues/{key}/iteration"
+	case "project", "project_key":
+		return "not settable here — moving an issue between projects is POST /issues/{key}/move"
+	case "key", "number", "id":
+		return "read-only"
+	}
+	return "unknown field"
+}
+
+// unknownComponents returns the names that are not components of the project.
+//
+// setIssueComponents matches names against the project's own component rows and skips
+// anything that does not match, so a typo — or a component from another project — was
+// accepted with a 200 and simply not applied.
+func (h *httpHandlers) unknownComponents(ctx context.Context, projectKey string, names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	existing, err := h.repo.ListComponents(ctx, projectKey)
+	if err != nil {
+		// Fall through to the store rather than refusing an edit because a lookup
+		// failed. The old silent-skip behaviour is the floor, not the target.
+		h.log.Warn("component check failed", "project", projectKey, "err", err)
+		return nil
+	}
+	known := make(map[string]bool, len(existing))
+	for _, c := range existing {
+		known[strings.ToLower(c.Name)] = true
+	}
+	var unknown []string
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n != "" && !known[strings.ToLower(n)] {
+			unknown = append(unknown, n)
+		}
+	}
+	return unknown
+}
+
+// labelPatchProblems validates the three label members against each other.
+//
+// `labels` is a replace: the store deletes every row in issue_labels for the issue and
+// re-inserts what was sent. Selecting fifty issues and "adding" one label therefore
+// stripped every other label from all fifty, in one click, with no confirmation and no
+// undo. labels_add / labels_remove exist so the common intention does not have to be
+// expressed as a destructive write.
+func labelPatchProblems(replace *[]string, add, remove []string) map[string]string {
+	problems := map[string]string{}
+	if replace != nil && (len(add) > 0 || len(remove) > 0) {
+		problems["labels"] = "cannot be combined with labels_add or labels_remove — replace or edit, not both"
+		return problems
+	}
+	inRemove := make(map[string]bool, len(remove))
+	for _, n := range remove {
+		inRemove[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+	for _, n := range add {
+		if inRemove[strings.ToLower(strings.TrimSpace(n))] {
+			problems["labels_add"] = "contains a label that labels_remove also names: " + n
+			break
+		}
+	}
+	return problems
+}
+
 // bulkUpdateIssues applies a patch, a status transition, and/or a project move
 // to a set of issues. Each issue is processed independently with the same
 // permission checks and activity/event semantics as the single-issue
@@ -2350,13 +2533,18 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		IDs   []uuid.UUID `json:"ids"`
 		Patch *struct {
-			Priority    *domain.Priority `json:"priority"`
-			Severity    *domain.Severity `json:"severity"`
-			AssigneeID  *uuid.UUID       `json:"assignee_id"`
-			Labels      *[]string        `json:"labels"`
-			Components  *[]string        `json:"components"`
-			MilestoneID *uuid.UUID       `json:"milestone_id"`
-			ReleaseID   *uuid.UUID       `json:"release_id"`
+			Priority   *domain.Priority `json:"priority"`
+			Severity   *domain.Severity `json:"severity"`
+			AssigneeID *uuid.UUID       `json:"assignee_id"`
+			// labels replaces the whole set. In a bulk selection the caller cannot
+			// see what they are replacing, so labels_add / labels_remove edit it
+			// instead — see the mutual-exclusion check below.
+			Labels       *[]string  `json:"labels"`
+			LabelsAdd    []string   `json:"labels_add"`
+			LabelsRemove []string   `json:"labels_remove"`
+			Components   *[]string  `json:"components"`
+			MilestoneID  *uuid.UUID `json:"milestone_id"`
+			ReleaseID    *uuid.UUID `json:"release_id"`
 		} `json:"patch"`
 		Status           *domain.IssueStatus `json:"status"`
 		TargetProjectKey *string             `json:"target_project_key"`
@@ -2385,6 +2573,16 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 	if problems := issueEnumProblems(nil, sev, pri, body.Status); len(problems) > 0 {
 		httpapi.WriteValidation(w, problems)
 		return
+	}
+	// Replace and edit are different intentions and combining them has no obvious
+	// meaning, so it is refused rather than resolved by an argument order nobody can
+	// see. Same for a name in both add and remove.
+	if body.Patch != nil {
+		if problems := labelPatchProblems(body.Patch.Labels,
+			body.Patch.LabelsAdd, body.Patch.LabelsRemove); len(problems) > 0 {
+			httpapi.WriteValidation(w, problems)
+			return
+		}
 	}
 	var target string
 	if body.TargetProjectKey != nil {
@@ -2428,6 +2626,7 @@ func (h *httpHandlers) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) 
 			if _, err := h.issues.Update(r.Context(), issue.ID, actor, UpdateIssueInput{
 				Priority: body.Patch.Priority, Severity: body.Patch.Severity,
 				AssigneeID: body.Patch.AssigneeID, Labels: body.Patch.Labels,
+				LabelsAdd: body.Patch.LabelsAdd, LabelsRemove: body.Patch.LabelsRemove,
 				Components: body.Patch.Components, MilestoneID: body.Patch.MilestoneID,
 				ReleaseID: body.Patch.ReleaseID,
 			}); err != nil {
@@ -2512,21 +2711,39 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		AssigneeID      *uuid.UUID        `json:"assignee_id"`
 		VersionAffected *string           `json:"version_affected"`
 		VersionFixed    *string           `json:"version_fixed"`
+		GitCommitSHA    *string           `json:"git_commit_sha"`
+		PullRequestURL  *string           `json:"pull_request_url"`
 		ReproStepsMD    *string           `json:"repro_steps_md"`
 		ExpectedMD      *string           `json:"expected_md"`
 		ActualMD        *string           `json:"actual_md"`
 		EnvironmentMD   *string           `json:"environment_md"`
 		Labels          *[]string         `json:"labels"`
-		Components      *[]string         `json:"components"`
-		MilestoneID     *uuid.UUID        `json:"milestone_id"`
-		ReleaseID       *uuid.UUID        `json:"release_id"`
+		// Additive alternatives to labels, same as the bulk endpoint — an API where
+		// only one of the two routes can edit a label set without knowing it is an
+		// API people work around.
+		LabelsAdd    []string   `json:"labels_add"`
+		LabelsRemove []string   `json:"labels_remove"`
+		Components   *[]string  `json:"components"`
+		MilestoneID  *uuid.UUID `json:"milestone_id"`
+		ReleaseID    *uuid.UUID `json:"release_id"`
 		// Pointer-to-string so the three cases stay distinguishable: absent leaves the
 		// due date alone, "" clears it, a timestamp sets it.
 		DueAt *string `json:"due_at"`
 		// Same three cases for the estimate: absent, "" clears, "2d" sets.
 		Estimate *string `json:"estimate"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	// Strict, because the failure this endpoint was reported for is silence: it
+	// accepted writes to fields it does not implement, answered 200 with a full issue
+	// body, and applied nothing. A client had no way to learn which subset of the
+	// documented fields was actually writable except by reading back and diffing
+	// every time. An unknown member is now a 422 that names it.
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		if field, ok := unknownJSONField(err); ok {
+			httpapi.WriteValidation(w, map[string]string{field: unknownIssueFieldHint(field)})
+			return
+		}
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
 		return
 	}
@@ -2537,6 +2754,18 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 	if body.Title != nil && strings.TrimSpace(*body.Title) == "" {
 		httpapi.WriteValidation(w, map[string]string{"title": "cannot be empty"})
 		return
+	}
+	if problems := labelPatchProblems(body.Labels, body.LabelsAdd, body.LabelsRemove); len(problems) > 0 {
+		httpapi.WriteValidation(w, problems)
+		return
+	}
+	if body.Components != nil {
+		if unknown := h.unknownComponents(r.Context(), issue.ProjectKey, *body.Components); len(unknown) > 0 {
+			httpapi.WriteValidation(w, map[string]string{
+				"components": "not components of " + issue.ProjectKey + ": " + strings.Join(unknown, ", "),
+			})
+			return
+		}
 	}
 	var dueAt *time.Time
 	if body.DueAt != nil {
@@ -2573,6 +2802,8 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		VersionAffected: body.VersionAffected, VersionFixed: body.VersionFixed,
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
 		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD, Labels: body.Labels,
+		GitCommitSHA: body.GitCommitSHA, PullRequestURL: body.PullRequestURL,
+		LabelsAdd: body.LabelsAdd, LabelsRemove: body.LabelsRemove,
 		Components: body.Components, MilestoneID: body.MilestoneID, ReleaseID: body.ReleaseID,
 		DueAt: dueAt, EstimateMinutes: estimate,
 	})
@@ -2779,9 +3010,33 @@ func (h *httpHandlers) transition(w http.ResponseWriter, r *http.Request) {
 		// issue. The contract has always advertised this; until it was decoded
 		// here the field was accepted and silently thrown away.
 		Comment string `json:"comment"`
+		// Decoded only so a caller who sent the wrong field name can be told which
+		// one they wanted. `status` is what this value is called in every issue body
+		// they have ever read back, and in PATCH, so it is the natural first guess.
+		Status *string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	// An absent `to` used to fall through to the transition check and come back as
+	// `409 invalid transition: open → `, with the target half blank: the caller was
+	// told their transition was illegal rather than that their request was malformed.
+	// `{"status":"closed"}` is the natural first guess, because status is what this
+	// field is called everywhere else — in the issue body, and in PATCH — so it gets
+	// a message that says where to put it rather than a generic "required".
+	if strings.TrimSpace(string(body.To)) == "" {
+		msg := `required — the target status, e.g. {"to":"resolved"}`
+		if body.Status != nil {
+			msg = "required — this endpoint reads the target from `to`, not `status`"
+		}
+		httpapi.WriteValidation(w, map[string]string{"to": msg})
+		return
+	}
+	if !domain.ValidStatus(body.To) {
+		httpapi.WriteValidation(w, map[string]string{
+			"to": "unknown status " + strconv.Quote(string(body.To)),
+		})
 		return
 	}
 	issue, err := h.issues.Get(r.Context(), projectKey, number)

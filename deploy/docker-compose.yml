@@ -51,6 +51,8 @@ services:
       OMNI_BT_DATABASE__DSN: postgres://omni:omni@postgres:5432/omni_bugtracker?sslmode=disable
       OMNI_BT_REDIS__ADDR: redis:6379
       OMNI_BT_SERVER__ADDR: ":8080"
+      # /metrics + probes, on a listener that is deliberately not in `ports:` below.
+      OMNI_BT_SERVER__METRICS_ADDR: ":9091"
       OMNI_BT_STORAGE__ATTACHMENTS_DIR: /app/data/attachments
       # Omni-Notify ingest (host-published behind its netviz sidecar). Token in .env.
       OMNI_BT_INTEGRATIONS__NOTIFY__BASE_URL: ${OMNI_BT_NOTIFY_URL:-http://omni-notify:8080}

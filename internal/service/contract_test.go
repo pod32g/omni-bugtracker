@@ -44,7 +44,6 @@ var undocumented = map[string]bool{
 	"DELETE /time-entries/{id}":          true,
 	"DELETE /views/{id}":                 true,
 	"GET /audit":                         true,
-	"GET /issues":                        true,
 	"GET /issues/{issueKey}/fields":      true,
 	"GET /issues/{issueKey}/reactions":   true,
 	"GET /issues/{issueKey}/references":  true,
@@ -124,11 +123,14 @@ func TestEverySpecOperationHasARoute(t *testing.T) {
 	var phantom []string
 	for op := range specOperations(t) {
 		// Some documented endpoints are real but registered elsewhere, so this router
-		// has never heard of them: /healthz on the root router, /auth/* on the OIDC
-		// BFF, and the inbound integration endpoints via mountInboundIntegrations —
-		// those authenticate by HMAC rather than bearer, which is exactly why they are
-		// mounted in their own group in httpapi.NewRouter.
+		// has never heard of them: the probes in httpapi.NewRouter (at the root *and*
+		// under /api/v1 — see TestProbesAreServedAtTheDocumentedPath, which is where
+		// their reachability is actually asserted), /auth/* on the OIDC BFF, and the
+		// inbound integration endpoints via mountInboundIntegrations — those
+		// authenticate by HMAC rather than bearer, which is exactly why they are
+		// mounted in their own group.
 		if strings.HasSuffix(op, " /healthz") ||
+			strings.HasSuffix(op, " /readyz") ||
 			strings.Contains(op, " /auth/") ||
 			strings.HasPrefix(op, "POST /integrations/") {
 			continue

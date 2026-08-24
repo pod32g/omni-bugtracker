@@ -29,6 +29,10 @@ api:
   # store (S3/MinIO). Until then a ReadWriteOnce volume and a single writer are what
   # make the data durable. See attachments.persistence below.
   replicas: 1
+  # /metrics, /healthz and /readyz for the API, on a listener of their own. Not in the
+  # Service and not in the Ingress: Prometheus scrapes the pod directly, and nothing
+  # outside the cluster has any business reading it.
+  metricsPort: 9091
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
