@@ -1644,6 +1644,12 @@ components:
 
     UpdateIssue:
       type: object
+      description: >
+        A partial edit; omitted fields are unchanged. Unknown members are rejected
+        with 422 rather than ignored — this endpoint used to accept writes it does not
+        implement (status, custom fields) and answer 200 having applied nothing.
+        Status changes go through POST /issues/{issueKey}/transition.
+      additionalProperties: false
       properties:
         title: { type: string }
         description_md: { type: string }
@@ -1652,6 +1658,17 @@ components:
         assignee_id: { type: string, format: uuid, nullable: true }
         milestone_id: { type: string, format: uuid, nullable: true }
         version_fixed: { type: string }
+        git_commit_sha: { type: string, description: "a commit this issue was fixed by; empty clears it" }
+        pull_request_url: { type: string, description: "a pull request for this issue; empty clears it" }
+        type: { $ref: "#/components/schemas/IssueType" }
+        repro_steps_md: { type: string }
+        expected_md: { type: string }
+        actual_md: { type: string }
+        environment_md: { type: string }
+        version_affected: { type: string }
+        release_id: { type: string, format: uuid, nullable: true }
+        due_at: { type: string, description: "YYYY-MM-DD or RFC 3339; empty clears it" }
+        estimate: { type: string, description: "a duration like 2d or 90m; empty clears it" }
         labels:
           type: array
           items: { type: string }
@@ -1667,7 +1684,10 @@ components:
         components:
           type: array
           items: { type: string }
-          description: "Replaces the set; names must exist as project components."
+          description: >
+            Replaces the set. Names must already exist as components of the project —
+            one that does not is a 422 naming it, where it used to be accepted and
+            silently dropped.
     BulkUpdate:
       type: object
       required: [ids]

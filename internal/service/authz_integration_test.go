@@ -663,3 +663,53 @@ func (f *authzFixture) doJSON(t *testing.T, role domain.Role, method, path, body
 	}
 	return rec.Code
 }
+
+// TestPatchRefusesWhatItCannotApply is the regression test for PATCH returning 200
+// while discarding the write.
+//
+// The endpoint accepted status, git_commit_sha, pull_request_url and unknown component
+// names, answered 200 with a full issue body, and applied none of them. A client had
+// no way to learn which subset of the documented fields was actually writable except
+// by reading back and diffing every time.
+func TestPatchRefusesWhatItCannotApply(t *testing.T) {
+	f := setupAuthz(t)
+	path := "/issues/" + f.seedIssue(t)
+
+	// A field that lives somewhere else says where, rather than being swallowed.
+	for _, body := range []string{
+		`{"status":"closed"}`,
+		`{"fields":{"x":1}}`,
+		`{"project_key":"OTHER"}`,
+		`{"nonsense":true}`,
+	} {
+		if code := f.do(t, domain.RoleOwner, "PATCH", path, body); code != http.StatusUnprocessableEntity {
+			t.Errorf("PATCH %s = %d, want 422", body, code)
+		}
+	}
+
+	// A component the project does not have used to be accepted and dropped by the
+	// INSERT ... SELECT that could not match it.
+	if code := f.do(t, domain.RoleOwner, "PATCH", path, `{"components":["no-such-component"]}`); code != http.StatusUnprocessableEntity {
+		t.Errorf("PATCH unknown component = %d, want 422", code)
+	}
+
+	// And the two columns every issue response carries, which nothing had ever
+	// written, are now writable — which is what the spec always said.
+	var out struct {
+		GitCommitSHA   string `json:"git_commit_sha"`
+		PullRequestURL string `json:"pull_request_url"`
+	}
+	patch := `{"git_commit_sha":"deadbeef","pull_request_url":"https://example.test/pr/1"}`
+	if code := f.doJSON(t, domain.RoleOwner, "PATCH", path, patch, &out); code != http.StatusOK {
+		t.Fatalf("PATCH git fields = %d, want 200", code)
+	}
+	if out.GitCommitSHA != "deadbeef" || out.PullRequestURL != "https://example.test/pr/1" {
+		t.Errorf("the response does not reflect the write: %+v", out)
+	}
+	// Read back, because "the response says so" and "it was stored" are the two
+	// things this bug was about telling apart.
+	f.doJSON(t, domain.RoleOwner, "GET", path, "", &out)
+	if out.GitCommitSHA != "deadbeef" {
+		t.Errorf("git_commit_sha did not survive the round trip: %q", out.GitCommitSHA)
+	}
+}

@@ -2339,6 +2339,14 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
 		return
 	}
+	if unknown := h.unknownComponents(r.Context(), chi.URLParam(r, "key"), body.Components); len(unknown) > 0 {
+		// Same silent drop as the patch path: setIssueComponents skips a name the
+		// project does not have, so a typo was accepted and simply not applied.
+		httpapi.WriteValidation(w, map[string]string{
+			"components": "not components of " + chi.URLParam(r, "key") + ": " + strings.Join(unknown, ", "),
+		})
+		return
+	}
 	if strings.TrimSpace(body.Title) == "" {
 		httpapi.WriteValidation(w, map[string]string{"title": "required"})
 		return
@@ -2426,6 +2434,68 @@ func (h *httpHandlers) createIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusCreated, issue)
+}
+
+// unknownJSONField pulls the member name out of encoding/json's unknown-field error.
+// There is no typed form of it — the error is the string `json: unknown field "x"` and
+// nothing else — so this is string handling by necessity, kept in one place.
+func unknownJSONField(err error) (string, bool) {
+	const prefix = `json: unknown field "`
+	msg := err.Error()
+	if !strings.HasPrefix(msg, prefix) || !strings.HasSuffix(msg, `"`) {
+		return "", false
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(msg, prefix), `"`), true
+}
+
+// unknownIssueFieldHint says where a field that is not settable here actually lives,
+// for the ones people reach for. `status` is the whole reason: it is what this value
+// is called in every issue body, so patching it is the obvious first attempt, and it
+// used to succeed silently.
+func unknownIssueFieldHint(field string) string {
+	switch field {
+	case "status":
+		return "not settable here — status moves through POST /issues/{key}/transition, which validates the workflow graph"
+	case "fields":
+		return "not settable here — custom field values go to PUT /issues/{key}/fields"
+	case "iteration_id", "iteration":
+		return "not settable here — use PUT /issues/{key}/iteration"
+	case "project", "project_key":
+		return "not settable here — moving an issue between projects is POST /issues/{key}/move"
+	case "key", "number", "id":
+		return "read-only"
+	}
+	return "unknown field"
+}
+
+// unknownComponents returns the names that are not components of the project.
+//
+// setIssueComponents matches names against the project's own component rows and skips
+// anything that does not match, so a typo — or a component from another project — was
+// accepted with a 200 and simply not applied.
+func (h *httpHandlers) unknownComponents(ctx context.Context, projectKey string, names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	existing, err := h.repo.ListComponents(ctx, projectKey)
+	if err != nil {
+		// Fall through to the store rather than refusing an edit because a lookup
+		// failed. The old silent-skip behaviour is the floor, not the target.
+		h.log.Warn("component check failed", "project", projectKey, "err", err)
+		return nil
+	}
+	known := make(map[string]bool, len(existing))
+	for _, c := range existing {
+		known[strings.ToLower(c.Name)] = true
+	}
+	var unknown []string
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n != "" && !known[strings.ToLower(n)] {
+			unknown = append(unknown, n)
+		}
+	}
+	return unknown
 }
 
 // labelPatchProblems validates the three label members against each other.
@@ -2641,6 +2711,8 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		AssigneeID      *uuid.UUID        `json:"assignee_id"`
 		VersionAffected *string           `json:"version_affected"`
 		VersionFixed    *string           `json:"version_fixed"`
+		GitCommitSHA    *string           `json:"git_commit_sha"`
+		PullRequestURL  *string           `json:"pull_request_url"`
 		ReproStepsMD    *string           `json:"repro_steps_md"`
 		ExpectedMD      *string           `json:"expected_md"`
 		ActualMD        *string           `json:"actual_md"`
@@ -2660,7 +2732,18 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		// Same three cases for the estimate: absent, "" clears, "2d" sets.
 		Estimate *string `json:"estimate"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	// Strict, because the failure this endpoint was reported for is silence: it
+	// accepted writes to fields it does not implement, answered 200 with a full issue
+	// body, and applied nothing. A client had no way to learn which subset of the
+	// documented fields was actually writable except by reading back and diffing
+	// every time. An unknown member is now a 422 that names it.
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		if field, ok := unknownJSONField(err); ok {
+			httpapi.WriteValidation(w, map[string]string{field: unknownIssueFieldHint(field)})
+			return
+		}
 		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
 		return
 	}
@@ -2675,6 +2758,14 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 	if problems := labelPatchProblems(body.Labels, body.LabelsAdd, body.LabelsRemove); len(problems) > 0 {
 		httpapi.WriteValidation(w, problems)
 		return
+	}
+	if body.Components != nil {
+		if unknown := h.unknownComponents(r.Context(), issue.ProjectKey, *body.Components); len(unknown) > 0 {
+			httpapi.WriteValidation(w, map[string]string{
+				"components": "not components of " + issue.ProjectKey + ": " + strings.Join(unknown, ", "),
+			})
+			return
+		}
 	}
 	var dueAt *time.Time
 	if body.DueAt != nil {
@@ -2711,6 +2802,7 @@ func (h *httpHandlers) updateIssue(w http.ResponseWriter, r *http.Request) {
 		VersionAffected: body.VersionAffected, VersionFixed: body.VersionFixed,
 		ReproStepsMD: body.ReproStepsMD, ExpectedMD: body.ExpectedMD,
 		ActualMD: body.ActualMD, EnvironmentMD: body.EnvironmentMD, Labels: body.Labels,
+		GitCommitSHA: body.GitCommitSHA, PullRequestURL: body.PullRequestURL,
 		LabelsAdd: body.LabelsAdd, LabelsRemove: body.LabelsRemove,
 		Components: body.Components, MilestoneID: body.MilestoneID, ReleaseID: body.ReleaseID,
 		DueAt: dueAt, EstimateMinutes: estimate,

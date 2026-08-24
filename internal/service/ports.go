@@ -714,11 +714,16 @@ type UpdateIssueInput struct {
 	AssigneeID      *uuid.UUID
 	VersionAffected *string
 	VersionFixed    *string
-	ReproStepsMD    *string
-	ExpectedMD      *string
-	ActualMD        *string
-	EnvironmentMD   *string
-	Labels          *[]string // nil = unchanged; non-nil replaces the label set
+	// Both of these are columns the issue has always exposed and nothing has ever
+	// written. Empty string is a legitimate value (clearing the link), so nil is the
+	// only "unchanged".
+	GitCommitSHA   *string
+	PullRequestURL *string
+	ReproStepsMD   *string
+	ExpectedMD     *string
+	ActualMD       *string
+	EnvironmentMD  *string
+	Labels         *[]string // nil = unchanged; non-nil replaces the label set
 	// LabelsAdd / LabelsRemove edit the set without knowing it. Labels is a
 	// destructive write: adding one label means sending the complete list, so any
 	// label the caller did not know about is deleted. That is defensible on the

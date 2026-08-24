@@ -878,13 +878,19 @@ func (s *Store) UpdateIssue(ctx context.Context, id, actor uuid.UUID, in service
 		                       WHEN $17::int IS NULL THEN estimate_minutes
 		                       WHEN $17::int = 0 THEN NULL
 		                       ELSE $17::int END,
+		  -- Both columns were read on every issue, serialized on every response and
+		  -- documented in the spec, and no code path had ever written either. They
+		  -- were permanently empty fields that looked settable.
+		  git_commit_sha   = COALESCE($18, git_commit_sha),
+		  pull_request_url = COALESCE($19, pull_request_url),
 		  updated_at       = now()
 		WHERE id = $1 AND deleted_at IS NULL`
 	tag, err := tx.Exec(ctx, q, id,
 		in.Title, in.DescriptionMD, typePtr(in.Type), sevPtr(in.Severity), prioPtr(in.Priority),
 		in.AssigneeID, in.VersionAffected, in.VersionFixed,
 		in.ReproStepsMD, in.ExpectedMD, in.ActualMD, in.EnvironmentMD,
-		in.MilestoneID, in.ReleaseID, in.DueAt, in.EstimateMinutes)
+		in.MilestoneID, in.ReleaseID, in.DueAt, in.EstimateMinutes,
+		in.GitCommitSHA, in.PullRequestURL)
 	if err != nil {
 		return domain.Issue{}, err
 	}
