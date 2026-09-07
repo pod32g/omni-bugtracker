@@ -39,20 +39,19 @@ jobs:
       OMNI_BT_TEST_DSN: postgres://omni:omni@localhost:25432/omni_bugtracker?sslmode=disable
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Apply migrations
-        run: go run ./cmd/migrate up
-        env:
-          OMNI_BT_DATABASE__DSN: postgres://omni:omni@localhost:25432/omni_bugtracker?sslmode=disable
-      - name: go vet
-        run: go vet ./...
-      # -race because the failure classes this codebase is exposed to (job fan-out,
-      # the JWKS cache, the rate limiter) are concurrent ones that pass without it.
-      - name: go test
-        run: go test -race ./...
+      # Go from the same image the API is built with (the runner host has no Go,
+      # and -race needs cgo, which the image has). --network host reaches the
+      # throwaway Postgres published above on localhost:25432.
+      - name: Migrate, vet, test (-race)
+        run: |
+          set -euo pipefail
+          GO_IMAGE="$(sed -nE 's/^FROM (golang:[^ ]+) AS .*/\1/p;s/^FROM (golang:[^ ]+)$/\1/p' deploy/Dockerfile.api | head -1)"
+          CACHE="$HOME/.cache/omnibt-ci"; mkdir -p "$CACHE/go-build" "$CACHE/go-mod"
+          docker run --rm --network host --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src -e HOME=/tmp -e GOFLAGS=-buildvcs=false \
+            -v "$CACHE/go-build:/tmp/gocache" -v "$CACHE/go-mod:/tmp/gomod" -e GOCACHE=/tmp/gocache -e GOMODCACHE=/tmp/gomod \
+            -e CGO_ENABLED=1 -e OMNI_BT_TEST_DSN="$OMNI_BT_TEST_DSN" \
+            -e OMNI_BT_DATABASE__DSN="$OMNI_BT_TEST_DSN" "$GO_IMAGE" \
+            sh -c 'go run ./cmd/migrate up && go vet ./... && go test -race ./...'
 
   web:
     runs-on: [self-hosted, omnibt]
