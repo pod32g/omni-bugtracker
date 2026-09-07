@@ -63,8 +63,12 @@ services:
       OMNI_BT_LOG__SHIP__ENDPOINT: ${OMNI_BT_LOGSHIP_URL:-http://omni-logging:8080/api/v1/ingest}
       OMNI_BT_LOG__SHIP__API_KEY: ${OMNI_BT_LOGSHIP_KEY:-}
     volumes: ["attachments:/app/data/attachments"]
-    # Published host port is overridable so prod avoids conflicts (default dev 8080).
-    ports: ["${OMNI_BT_API_PORT:-8080}:8080"]
+    # Published on loopback only: the web container proxies /api and /auth to
+    # it, and browsers reach the tracker through Omni Access
+    # (https://bugtracker.omni.pod32g.dev), which joins this compose network
+    # and talks to the containers by name. The host port stays for local
+    # debugging. Set OMNI_BT_BIND=0.0.0.0 to publish on the LAN again.
+    ports: ["${OMNI_BT_BIND:-127.0.0.1}:${OMNI_BT_API_PORT:-8080}:8080"]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -88,7 +92,7 @@ services:
   web:
     build: { context: .., dockerfile: deploy/Dockerfile.web }
     restart: unless-stopped
-    ports: ["${OMNI_BT_WEB_PORT:-3000}:80"]
+    ports: ["${OMNI_BT_BIND:-127.0.0.1}:${OMNI_BT_WEB_PORT:-3000}:80"]
     depends_on: [api]
 
 volumes:

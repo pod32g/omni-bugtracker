@@ -16,11 +16,11 @@ env:
   COMPOSE: -f deploy/docker-compose.yml
 
 jobs:
-  # The test jobs run on GitHub-hosted runners, not the self-hosted box: they execute
-  # only the repo's own code against a throwaway database, so fork PRs can get real
-  # feedback without the fork-code-on-our-hardware risk the build job has to avoid.
+  # Every job runs on chizu's own runner (no GitHub-hosted minutes; the repo is
+  # private, so no fork code reaches it). The throwaway Postgres service container
+  # publishes an unusual host port: 5432 and 15432 are taken on that box.
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omnibt]
     services:
       postgres:
         image: postgres:16-alpine
@@ -28,7 +28,7 @@ jobs:
           POSTGRES_USER: omni
           POSTGRES_PASSWORD: omni
           POSTGRES_DB: omni_bugtracker
-        ports: ['5432:5432']
+        ports: ['25432:5432']
         options: >-
           --health-cmd "pg_isready -U omni -d omni_bugtracker"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -36,7 +36,7 @@ jobs:
       # The SQL integration tests skip themselves unless this is set, which is why
       # they had never run anywhere. Migrations are applied below, so it points at a
       # real schema rather than an empty database.
-      OMNI_BT_TEST_DSN: postgres://omni:omni@localhost:5432/omni_bugtracker?sslmode=disable
+      OMNI_BT_TEST_DSN: postgres://omni:omni@localhost:25432/omni_bugtracker?sslmode=disable
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
       - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5
@@ -46,7 +46,7 @@ jobs:
       - name: Apply migrations
         run: go run ./cmd/migrate up
         env:
-          OMNI_BT_DATABASE__DSN: postgres://omni:omni@localhost:5432/omni_bugtracker?sslmode=disable
+          OMNI_BT_DATABASE__DSN: postgres://omni:omni@localhost:25432/omni_bugtracker?sslmode=disable
       - name: go vet
         run: go vet ./...
       # -race because the failure classes this codebase is exposed to (job fan-out,
@@ -55,7 +55,7 @@ jobs:
         run: go test -race ./...
 
   web:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, omnibt]
     defaults:
       run:
         working-directory: web
