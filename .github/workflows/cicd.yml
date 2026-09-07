@@ -45,7 +45,8 @@ jobs:
       - name: Migrate, vet, test (-race)
         run: |
           set -euo pipefail
-          GO_IMAGE="$(sed -nE 's/^FROM (golang:[^ ]+) AS .*/\1/p;s/^FROM (golang:[^ ]+)$/\1/p' deploy/Dockerfile.api | head -1)"
+          # Same Go as the API image, on Debian rather than Alpine: -race needs gcc.
+          GO_IMAGE="$(sed -nE 's/^FROM (golang:[^ ]+) AS .*/\1/p;s/^FROM (golang:[^ ]+)$/\1/p' deploy/Dockerfile.api | head -1 | sed 's/-alpine.*/-bookworm/')"
           CACHE="$HOME/.cache/omnibt-ci"; mkdir -p "$CACHE/go-build" "$CACHE/go-mod"
           docker run --rm --network host --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src -e HOME=/tmp -e GOFLAGS=-buildvcs=false \
             -v "$CACHE/go-build:/tmp/gocache" -v "$CACHE/go-mod:/tmp/gomod" -e GOCACHE=/tmp/gocache -e GOMODCACHE=/tmp/gomod \
