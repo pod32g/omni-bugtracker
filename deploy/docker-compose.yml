@@ -57,6 +57,22 @@ services:
       # Omni-Notify ingest (host-published behind its netviz sidecar). Token in .env.
       OMNI_BT_INTEGRATIONS__NOTIFY__BASE_URL: ${OMNI_BT_NOTIFY_URL:-http://omni-notify:8080}
       OMNI_BT_INTEGRATIONS__NOTIFY__API_TOKEN: ${OMNI_BT_NOTIFY_TOKEN:-}
+      # Omni Identity: token verification (issuer/JWKS/audience) and the browser
+      # login flow (a public PKCE client; the code exchange runs in the API).
+      # Browser-facing URLs (authorize, end_session, redirect, post-logout) use
+      # the public HTTPS names; server-to-server ones (JWKS, token, userinfo)
+      # use the issuer address on the LAN. All from .env; empty leaves login off.
+      OMNI_BT_IDENTITY__ISSUER: ${OMNI_BT_IDENTITY_ISSUER:-}
+      OMNI_BT_IDENTITY__JWKS_URL: ${OMNI_BT_IDENTITY_JWKS_URL:-}
+      OMNI_BT_IDENTITY__AUDIENCE: ${OMNI_BT_IDENTITY_AUDIENCE:-}
+      OMNI_BT_IDENTITY__CLIENT_ID: ${OMNI_BT_IDENTITY_CLIENT_ID:-}
+      OMNI_BT_IDENTITY__AUTHORIZE_URL: ${OMNI_BT_IDENTITY_AUTHORIZE_URL:-}
+      OMNI_BT_IDENTITY__TOKEN_URL: ${OMNI_BT_IDENTITY_TOKEN_URL:-}
+      OMNI_BT_IDENTITY__USERINFO_URL: ${OMNI_BT_IDENTITY_USERINFO_URL:-}
+      OMNI_BT_IDENTITY__END_SESSION_URL: ${OMNI_BT_IDENTITY_END_SESSION_URL:-}
+      OMNI_BT_IDENTITY__REDIRECT_URI: ${OMNI_BT_IDENTITY_REDIRECT_URI:-}
+      OMNI_BT_IDENTITY__SCOPES: ${OMNI_BT_IDENTITY_SCOPES:-openid profile email offline_access}
+      OMNI_BT_IDENTITY__POST_LOGOUT_URL: ${OMNI_BT_IDENTITY_POST_LOGOUT_URL:-}
       # Ship our own logs to Omni-Logging as well as stdout. Stays off unless both
       # are set in .env, so a deploy without them behaves exactly as before.
       OMNI_BT_LOG__SHIP__ENABLED: ${OMNI_BT_LOGSHIP_ENABLED:-false}
