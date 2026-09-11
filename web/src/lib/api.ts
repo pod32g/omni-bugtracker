@@ -1,6 +1,8 @@
 // Minimal typed API client. After `npm run gen:api` you can swap this for openapi-fetch
 // bound to `src/api/gen/schema.d.ts` for end-to-end type safety against the OpenAPI spec.
 
+import { GATEWAY_RECHECK_MESSAGE, isEditableElement, isGatewayRecheck, recheckAction } from "./gatewayRecheck";
+
 export type IssueType = "bug" | "task" | "feature" | "improvement";
 export type IssueStatus =
   | "open" | "in_progress" | "blocked" | "ready_for_review"
@@ -597,6 +599,19 @@ export class ApiError extends Error {
 }
 
 /**
+ * Omni Access (the gateway in front of the tracker) wants a page load to re-check this
+ * device or sign-in, and the tracker could not reload safely (gatewayRecheck.ts). It is
+ * a 401, but the tracker session is fine: callers that treat a 401 as "signed out"
+ * must exclude this, or they tear down a page that still holds the user's input.
+ */
+export class GatewayRecheckError extends ApiError {
+  constructor() {
+    super(401, GATEWAY_RECHECK_MESSAGE);
+    this.name = "GatewayRecheckError";
+  }
+}
+
+/**
  * Builds the single-line message for a problem response. A validation failure with
  * field errors reads as "title: field — message", which is what the user needs; the
  * bare title alone tells them only that something was wrong.
@@ -655,6 +670,66 @@ function tryRefresh(): Promise<boolean> {
   return refreshInFlight;
 }
 
+// Omni Access in front of the tracker may answer 401 {"error":"authentication_required"}:
+// it needs a page load to sign in again or re-check this device (gatewayRecheck.ts).
+// Reload when that is safe — the gateway runs its check and returns to this view —
+// otherwise report it without touching the page. Returns normally when `res` is not
+// such a response.
+const RECHECK_RELOAD_KEY = "obt_gateway_recheck_reload_at";
+
+// Whether the user typed since the last successful write. A value !== defaultValue
+// check cannot tell: React keeps a controlled input's value attribute in sync, so it
+// always reads clean. Typing into a search box counts too — that only errs toward
+// not reloading, and the fallback (a message, reload by hand) loses nothing.
+let typedSinceSave = false;
+if (typeof document !== "undefined") {
+  document.addEventListener(
+    "input",
+    () => {
+      typedSinceSave = true;
+    },
+    true,
+  );
+}
+function markSaved(method: string) {
+  const m = method.toUpperCase();
+  if (m !== "GET" && m !== "HEAD") typedSinceSave = false;
+}
+
+function lastRecheckReload(): number {
+  try {
+    return Number(sessionStorage.getItem(RECHECK_RELOAD_KEY) ?? 0) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function gatewayRecheck(res: Response, method: string): Promise<void> {
+  if (res.status !== 401) return;
+  const body: unknown = await res
+    .clone()
+    .json()
+    .catch(() => null);
+  if (!isGatewayRecheck(res.status, body)) return;
+  const action = recheckAction({
+    method,
+    unsavedInput: typedSinceSave || isEditableElement(document.activeElement as HTMLElement | null),
+    lastReloadAt: lastRecheckReload(),
+    now: Date.now(),
+  });
+  if (action === "reload") {
+    try {
+      sessionStorage.setItem(RECHECK_RELOAD_KEY, String(Date.now()));
+    } catch {
+      // Private mode: no loop guard, but the gateway check itself still ends a loop.
+    }
+    window.location.reload();
+    // The page is going away; never settle, so no error flashes up meanwhile.
+    await new Promise<never>(() => {});
+  }
+  throw new GatewayRecheckError();
+}
+
 async function request<T>(path: string, init: RequestInit = {}, allowRefresh = true): Promise<T> {
   const doFetch = () =>
     fetch(BASE + path, {
@@ -668,6 +743,7 @@ async function request<T>(path: string, init: RequestInit = {}, allowRefresh = t
     });
 
   let res = await doFetch();
+  await gatewayRecheck(res, init.method ?? "GET");
   if (res.status === 401 && allowRefresh && (await tryRefresh())) {
     res = await doFetch();
   }
@@ -675,6 +751,7 @@ async function request<T>(path: string, init: RequestInit = {}, allowRefresh = t
     const problem = await res.json().catch(() => ({ title: res.statusText }));
     throw new ApiError(res.status, problemMessage(problem, res.status), problem.errors ?? {});
   }
+  markSaved(init.method ?? "GET");
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -1069,11 +1146,13 @@ export const api = {
       });
     };
     let res = await doFetch();
+    await gatewayRecheck(res, "POST");
     if (res.status === 401 && (await tryRefresh())) res = await doFetch();
     if (!res.ok) {
       const problem = await res.json().catch(() => ({ title: res.statusText }));
       throw new ApiError(res.status, problemMessage(problem, res.status), problem.errors ?? {});
     }
+    markSaved("POST");
     return res.json() as Promise<Attachment>;
   },
   // Blob download so it works with both cookie and bearer-token auth.
@@ -1082,6 +1161,7 @@ export const api = {
       credentials: "include",
       headers: { ...optionalToken() },
     });
+    await gatewayRecheck(res, "GET");
     if (!res.ok) throw new ApiError(res.status, "download failed");
     const url = URL.createObjectURL(await res.blob());
     const a = document.createElement("a");

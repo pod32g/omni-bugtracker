@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, session, type Project, type User } from "../lib/api";
+import { api, ApiError, GatewayRecheckError, session, type Project, type User } from "../lib/api";
 import { ProjectProvider, useProject } from "../lib/project";
 import { isTypingTarget, useChord, useShortcut } from "../lib/shortcuts";
 import { useTheme } from "../lib/theme";
@@ -79,7 +79,7 @@ export function Layout() {
 
   if (me.isLoading) return <Centered>Loading…</Centered>;
 
-  const unauthenticated = me.isError && (me.error as ApiError).status === 401;
+  const unauthenticated = me.isError && isUnauthorized(me.error);
   if (unauthenticated) return <SignIn />;
   if (me.isError) return <Centered>API error: {(me.error as Error).message}</Centered>;
 
@@ -149,7 +149,10 @@ function MobileBar({ onOpenNav, onSearch }: { onOpenNav: () => void; onSearch: (
   );
 }
 
-const isUnauthorized = (e: unknown) => e instanceof ApiError && e.status === 401;
+// A GatewayRecheckError is a 401 from Omni Access wanting a page load, not the tracker
+// session ending: never treat it as signed out (it would tear down unsaved input).
+const isUnauthorized = (e: unknown) =>
+  e instanceof ApiError && e.status === 401 && !(e instanceof GatewayRecheckError);
 
 /**
  * useUnread polls the inbox count. Polling rather than SSE for now: 30s is well inside
