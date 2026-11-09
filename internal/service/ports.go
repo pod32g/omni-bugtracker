@@ -166,8 +166,9 @@ type Repository interface {
 	SetIssueSnooze(ctx context.Context, id, actor uuid.UUID, until *time.Time, note string, publish PublishFn) (domain.Issue, error)
 	// WakeSnoozedIssues clears every snooze that has come due, returning the ids.
 	WakeSnoozedIssues(ctx context.Context, enqueue func(pgx.Tx, []uuid.UUID) error) ([]uuid.UUID, error)
-	// ArchiveStaleClosed archives every non-archived issue closed more than `days`
-	// ago (attributed to actor). Returns how many were archived. Used by auto-archive.
+	// ArchiveStaleClosed archives every non-archived issue that has been finished
+	// (resolved or closed) for more than `days` (attributed to actor). Returns how many
+	// were archived. Used by auto-archive.
 	ArchiveStaleClosed(ctx context.Context, days int, actor uuid.UUID) (int, error)
 	// GetSetting returns a runtime setting's JSONB value, or (nil, nil) if unset.
 	GetSetting(ctx context.Context, key string) ([]byte, error)

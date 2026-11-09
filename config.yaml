@@ -76,8 +76,8 @@ integrations:
     close_on_merge: true
 
 archive:
-  # Fallback default for auto-archive (issues closed more than N days ago are archived
-  # by a daily job). 0 disables it. This is only the initial default — admins override
+  # Fallback default for auto-archive (issues resolved or closed more than N days ago are
+  # archived by a daily job). 0 disables it. This is only the initial default — admins override
   # it live from Settings → Auto-archive (stored in the DB). Manual archive is always on.
   auto_after_days: 0
 

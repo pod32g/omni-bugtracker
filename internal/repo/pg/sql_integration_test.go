@@ -591,6 +591,114 @@ func TestIntegrationArchiveStaleClosedSkipsReopened(t *testing.T) {
 	}
 }
 
+// TestIntegrationArchiveStaleArchivesResolved is the regression test for auto-archive
+// never archiving a resolved issue.
+//
+// The sweep filtered on status IN ('resolved','closed') but timed on closed_at, which is
+// only stamped on entry to `closed`. A resolved issue — the usual end state — therefore
+// had no closed_at and was skipped forever: hundreds piled up in Done on a 5-day window.
+// The test above did not catch it because its resolved fixture carries a closed_at that
+// a real resolution never writes, so the first case here resolves through the real
+// write path instead of hand-seeding the row.
+func TestIntegrationArchiveStaleArchivesResolved(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	store := &Store{pool: pool}
+
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	var actorID, projectID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (identity_sub, email, display_name, role)
+		 VALUES ($1, $2, $3, 'owner') RETURNING id`,
+		"test:"+suffix, suffix+"@test.local", "tester-"+suffix).Scan(&actorID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO projects (key, name) VALUES ($1, 'Archive Resolved Test') RETURNING id`,
+		"R"+strings.ToUpper(suffix[:4])).Scan(&projectID); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+		_, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, actorID)
+	})
+
+	// Ages in days; nil means the timestamp was never stamped.
+	days := func(n int) *int { return &n }
+	newIssue := func(t *testing.T, number int, status string, resolvedAgo, closedAgo *int) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO issues (project_id, number, type, title, status, priority, reporter_id,
+			                     resolved_at, closed_at)
+			 VALUES ($1, $2, 'bug', 'archive clock', $3::issue_status, 'p2', $4,
+			         now() - make_interval(days => $5::int), now() - make_interval(days => $6::int))
+			 RETURNING id`,
+			projectID, number, status, actorID, resolvedAgo, closedAgo).Scan(&id); err != nil {
+			t.Fatalf("seed issue %d: %v", number, err)
+		}
+		return id
+	}
+
+	// The bug, produced the way production produces it: resolve through TransitionIssue,
+	// confirm that left closed_at NULL, then age the resolution past the window.
+	viaTransition := newIssue(t, 1, "open", nil, nil)
+	if _, err := store.TransitionIssue(ctx, viaTransition, domain.StatusOpen, domain.StatusResolved,
+		actorID, "", nil, func(pgx.Tx) error { return nil }); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	var closedAtSet bool
+	if err := pool.QueryRow(ctx,
+		`SELECT closed_at IS NOT NULL FROM issues WHERE id = $1`, viaTransition).Scan(&closedAtSet); err != nil {
+		t.Fatalf("read closed_at: %v", err)
+	}
+	if closedAtSet {
+		t.Fatalf("a resolution stamped closed_at; this test's premise no longer holds")
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE issues SET resolved_at = now() - interval '400 days' WHERE id = $1`, viaTransition); err != nil {
+		t.Fatalf("age resolution: %v", err)
+	}
+
+	recentlyResolved := newIssue(t, 2, "resolved", days(1), nil)
+	// Closed long ago, reopened, re-resolved yesterday: closed_at is stale but the issue
+	// only just finished again. Keying on closed_at (or COALESCE-ing to it) would archive
+	// it immediately.
+	reResolved := newIssue(t, 3, "resolved", days(1), days(400))
+	// Resolved long ago, closed yesterday: the closed clock is the later one and wins,
+	// exactly as closed issues aged before this fix.
+	closedRecently := newIssue(t, 4, "closed", days(400), days(1))
+	closedLongAgo := newIssue(t, 5, "closed", days(400), days(400))
+	// Finished with no clock at all (e.g. created already resolved): nothing to age from.
+	noClock := newIssue(t, 6, "resolved", nil, nil)
+
+	if _, err := store.ArchiveStaleClosed(ctx, 30, actorID); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		id   uuid.UUID
+		want bool
+	}{
+		{"resolved via transition, 400 days ago", viaTransition, true},
+		{"resolved yesterday", recentlyResolved, false},
+		{"re-resolved yesterday after a stale close", reResolved, false},
+		{"closed yesterday after an old resolve", closedRecently, false},
+		{"closed 400 days ago", closedLongAgo, true},
+		{"resolved with no timestamps", noClock, false},
+	} {
+		var got bool
+		if err := pool.QueryRow(ctx,
+			`SELECT archived_at IS NOT NULL FROM issues WHERE id = $1`, tc.id).Scan(&got); err != nil {
+			t.Fatalf("read archived_at: %v", err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: archived = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestIntegrationDeactivationRevokesAccess covers the offboarding path end to end.
 //
 // users.is_active existed in the schema from the start and was written by nothing and

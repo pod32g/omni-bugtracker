@@ -763,7 +763,7 @@ func (s *Store) SetIssueArchived(ctx context.Context, id, actor uuid.UUID, archi
 }
 
 // ArchiveStaleClosed archives every non-archived, non-deleted issue that is currently
-// finished and whose closed_at is older than `days`, in one set-based statement, and
+// finished and has been finished for more than `days`, in one set-based statement, and
 // writes one activity row per issue. Returns the number archived. Used by the daily
 // auto-archive job.
 //
@@ -773,6 +773,17 @@ func (s *Store) SetIssueArchived(ctx context.Context, id, actor uuid.UUID, archi
 // carries a closed_at from its first life. Filtering on that timestamp alone archived
 // live work: a bug reopened after 30 days vanished from every list and from search
 // while somebody was assigned to it.
+//
+// The clock is GREATEST(closed_at, resolved_at): the latest moment the issue became
+// finished. closed_at alone is only stamped on entry to `closed`, so a `resolved`
+// issue — the usual end state — never had one, and the sweep skipped every resolved
+// issue forever while its status filter claimed to cover them (hundreds piled up in
+// Done). resolved_at is stamped on every entry into a finished status, including a
+// re-resolution after reopen, which is what keeps GREATEST from archiving an issue
+// the moment it is re-resolved on the strength of a stale closed_at; and for an
+// issue resolved and then closed later, closed_at is the later of the two, so closed
+// issues age exactly as they did before. With neither set there is no clock, and
+// GREATEST is NULL, so the comparison is false and the issue is left alone.
 func (s *Store) ArchiveStaleClosed(ctx context.Context, days int, actor uuid.UUID) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -784,8 +795,7 @@ func (s *Store) ArchiveStaleClosed(ctx context.Context, days int, actor uuid.UUI
 		WITH archived AS (
 			UPDATE issues SET archived_at = now(), updated_at = now()
 			 WHERE status IN ('resolved', 'closed')
-			   AND closed_at IS NOT NULL
-			   AND closed_at < now() - ($1 * interval '1 day')
+			   AND GREATEST(closed_at, resolved_at) < now() - ($1 * interval '1 day')
 			   AND archived_at IS NULL
 			   AND deleted_at IS NULL
 			RETURNING id
