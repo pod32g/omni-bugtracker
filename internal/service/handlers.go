@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -80,6 +81,7 @@ func NewHTTPHandlers(repo Repository, pub Publisher, logger *slog.Logger, cfg *c
 	r.Get("/audit", h.listAudit)
 	r.Get("/ops", h.ops)
 	r.Get("/users", h.users)
+	r.Post("/users", h.createUser)
 	r.Patch("/users/{id}/role", h.updateUserRole)
 	r.Patch("/users/{id}/active", h.updateUserActive)
 	r.Get("/dashboards/overview", h.dashboard)
@@ -507,6 +509,70 @@ func (h *httpHandlers) users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": users})
+}
+
+// createUser adds a local account: somebody who exists only in this tracker, with no
+// Omni-Identity login behind them. Users are otherwise created only when they sign in
+// (SyncUser), so there was no way to put a person on a project, or assign them work,
+// ahead of — or instead of — a login. The store gives the account a synthetic
+// subject (domain.LocalIdentityPrefix) that no token can present, so it can be
+// assigned, mentioned and attributed but never signed into. The email is whatever the
+// admin types — a placeholder is fine — but must not already belong to someone.
+func (h *httpHandlers) createUser(w http.ResponseWriter, r *http.Request) {
+	if !auth.FromContext(r.Context()).Can(auth.PermAdmin) {
+		httpapi.WriteProblem(w, http.StatusForbidden, "forbidden", "missing admin:all")
+		return
+	}
+	var body struct {
+		DisplayName string `json:"display_name"`
+		Email       string `json:"email"`
+		Role        string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpapi.WriteProblem(w, http.StatusBadRequest, "bad request", err.Error())
+		return
+	}
+	body.DisplayName = strings.TrimSpace(body.DisplayName)
+	body.Email = strings.TrimSpace(body.Email)
+	body.Role = strings.TrimSpace(body.Role)
+	if body.Role == "" {
+		body.Role = string(domain.RoleMember)
+	}
+
+	fields := map[string]string{}
+	if body.DisplayName == "" {
+		fields["display_name"] = "required"
+	}
+	// A bare address only: ParseAddress also accepts `Name <a@b>`, which would store
+	// the display-name decoration as part of the email.
+	if addr, err := mail.ParseAddress(body.Email); err != nil || addr.Address != body.Email {
+		fields["email"] = "must be an email address"
+	}
+	if !validRole(body.Role) {
+		fields["role"] = "must be owner, admin, maintainer, member, reporter, or bot"
+	}
+	if len(fields) > 0 {
+		httpapi.WriteValidation(w, fields)
+		return
+	}
+
+	user, err := h.repo.CreateLocalUser(r.Context(), CreateLocalUserParams{
+		Email:       body.Email,
+		DisplayName: body.DisplayName,
+		Role:        domain.Role(body.Role),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpapi.WriteProblem(w, http.StatusConflict, "email already in use",
+				"another user already has that email")
+			return
+		}
+		h.serverError(w, r, "create failed", err)
+		return
+	}
+	h.audit(r, AuditUserCreated, "user", user.ID.String(), user.Email,
+		map[string]any{"role": body.Role, "local": true})
+	writeJSON(w, http.StatusCreated, user)
 }
 
 func (h *httpHandlers) updateUserRole(w http.ResponseWriter, r *http.Request) {

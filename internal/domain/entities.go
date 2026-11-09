@@ -6,6 +6,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// LocalIdentityPrefix marks a user an admin created in the tracker itself rather than
+// one mirrored from an Omni-Identity login. Real subjects are created by SyncUser from
+// the token's `sub`; this prefix (same `namespace|id` shape as the `obs|system` bot)
+// can never match one, so a local account can be assigned, mentioned and attributed,
+// but never signed into.
+const LocalIdentityPrefix = "local|"
+
 type User struct {
 	ID          uuid.UUID `json:"id"`
 	IdentitySub string    `json:"-"`
@@ -24,6 +31,9 @@ type User struct {
 	// means "not loaded" and is omitted; only the endpoints that actually select the
 	// column populate it.
 	IsActive *bool `json:"is_active,omitempty"`
+	// IsLocal is set where the identity subject is read (the users list and the create
+	// response) so the admin screen can say which accounts have no login behind them.
+	IsLocal bool `json:"is_local,omitempty"`
 }
 
 type Project struct {

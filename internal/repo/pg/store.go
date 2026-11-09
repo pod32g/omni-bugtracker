@@ -1452,9 +1452,34 @@ func (s *Store) ListUsers(ctx context.Context, limit int32, includeInactive bool
 		if err := rows.Scan(&u.ID, &u.IdentitySub, &u.Email, &u.DisplayName, &u.AvatarURL, &u.Role, &u.IsActive); err != nil {
 			return nil, err
 		}
+		u.IsLocal = strings.HasPrefix(u.IdentitySub, domain.LocalIdentityPrefix)
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// CreateLocalUser adds an admin-created account with no Omni-Identity login behind it.
+// Users are otherwise only ever created by SyncUser on sign-in, keyed on the token's
+// `sub`; this one gets a synthetic subject (domain.LocalIdentityPrefix + a UUID) that
+// no login can present. The email must not already belong to another user (compared
+// case-insensitively) — pgx.ErrNoRows means it did. Two concurrent creates with the
+// same email can both pass the check; with no login riding on the email that costs a
+// duplicate row, not a security boundary, so it isn't worth a unique index here.
+func (s *Store) CreateLocalUser(ctx context.Context, in service.CreateLocalUserParams) (domain.User, error) {
+	const q = `
+		INSERT INTO users (identity_sub, email, display_name, role)
+		SELECT $1, $2, $3, $4::app_role
+		WHERE NOT EXISTS (SELECT 1 FROM users WHERE lower(email) = lower($2))
+		RETURNING id, identity_sub, email, display_name, avatar_url, role, is_active`
+	var u domain.User
+	err := s.pool.QueryRow(ctx, q,
+		domain.LocalIdentityPrefix+uuid.NewString(), in.Email, in.DisplayName, string(in.Role)).
+		Scan(&u.ID, &u.IdentitySub, &u.Email, &u.DisplayName, &u.AvatarURL, &u.Role, &u.IsActive)
+	if err != nil {
+		return domain.User{}, err
+	}
+	u.IsLocal = true
+	return u, nil
 }
 
 // UpdateUserProfile writes the fields a user owns about themselves. Setting either
