@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, type Board as BoardConfig, type BoardColumn, type Issue, type IssueStatus } from "../../lib/api";
 import { useProject } from "../../lib/project";
 import { issueKeys } from "../../lib/queryKeys";
+import { useShortcut } from "../../lib/shortcuts";
 import { Avatar, LabelChip, PriorityText, SeverityBar, statusLabel } from "../../components/Badges";
+import { BulkBar } from "../../components/BulkBar";
 import { IconGear, IconPlus } from "../../components/icons";
 
 const CAN_MANAGE = new Set(["owner", "admin", "maintainer"]);
@@ -83,9 +85,56 @@ export function Board() {
     onSuccess: () => qc.invalidateQueries({ queryKey: issueKeys.all }),
   });
 
+  // Selection for the bulk bar, by issue id. The usual reason to want it here is a
+  // Done column that needs closing or archiving in one go rather than card by card.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Where a shift-click range starts: the card last clicked. A ref because moving it
+  // changes nothing on screen.
+  const anchor = useRef<string | null>(null);
+  // A different scope or project is a different set of cards; a selection carried
+  // over would act on issues that are no longer on screen.
+  useEffect(() => {
+    setSelected(new Set());
+    anchor.current = null;
+  }, [projectKey, boardFilter]);
+  useShortcut((e) => {
+    if (e.key === "Escape" && selected.size > 0) setSelected(new Set());
+  });
+
+  /**
+   * Toggles one card, or with `range` selects every card between the anchor and this
+   * one. A range only spans the cards of one column (in one lane): across columns
+   * there is no order to take "between" from.
+   */
+  const selectCard = (issue: Issue, colIssues: Issue[], range: boolean) => {
+    const from = range ? colIssues.findIndex((i) => i.id === anchor.current) : -1;
+    const to = colIssues.findIndex((i) => i.id === issue.id);
+    setSelected((s) => {
+      const next = new Set(s);
+      if (from >= 0 && to >= 0) {
+        for (const i of colIssues.slice(Math.min(from, to), Math.max(from, to) + 1)) next.add(i.id);
+      } else if (next.has(issue.id)) next.delete(issue.id);
+      else next.add(issue.id);
+      return next;
+    });
+    anchor.current = issue.id;
+  };
+  const selectColumn = (colIssues: Issue[], on: boolean) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      for (const i of colIssues) {
+        if (on) next.add(i.id);
+        else next.delete(i.id);
+      }
+      return next;
+    });
+
   const items = issues.data?.pages.flatMap((p) => p.items) ?? [];
   const total = issues.data?.pages[0]?.total ?? 0;
   const truncated = items.length < total;
+  // Only ids still on the board: a card that left it (archived or moved elsewhere,
+  // perhaps by somebody else) must not ride along in the next bulk action unseen.
+  const selectedIds = items.filter((i) => selected.has(i.id)).map((i) => i.id);
   const columns = board.data?.columns ?? [];
   const swimlane = board.data?.swimlane ?? "none";
 
@@ -128,7 +177,8 @@ export function Board() {
   };
 
   return (
-    <div>
+    // Room under the last cards while the bulk bar floats over the bottom of the page.
+    <div className={selectedIds.length > 0 ? "pb-24" : ""}>
       <div className="sticky top-0 z-10 flex items-end justify-between border-b border-hairline bg-paper/80 px-4 md:px-9 pb-5 pt-7 backdrop-blur">
         <div className="flex flex-col gap-1.5">
           <h1 className="text-[30px] font-bold leading-none tracking-[-0.02em] text-ink">Board</h1>
@@ -230,20 +280,31 @@ export function Board() {
               </span>
             )}
             <div className="flex snap-x snap-mandatory items-stretch gap-4 overflow-x-auto md:snap-none">
-              {columns.map((col) => (
-                <Column
-                  key={col.id}
-                  column={col}
-                  issues={lane.issues.filter((i) => col.statuses.includes(i.status))}
-                  totalInColumn={items.filter((i) => col.statuses.includes(i.status)).length}
-                  compact={swimlane !== "none"}
-                  onDropAt={onDropAt(col, lane.issues.filter((i) => col.statuses.includes(i.status)))}
-                />
-              ))}
+              {columns.map((col) => {
+                const colIssues = lane.issues.filter((i) => col.statuses.includes(i.status));
+                return (
+                  <Column
+                    key={col.id}
+                    column={col}
+                    issues={colIssues}
+                    totalInColumn={items.filter((i) => col.statuses.includes(i.status)).length}
+                    compact={swimlane !== "none"}
+                    selected={selected}
+                    selecting={selectedIds.length > 0}
+                    onSelect={(issue, range) => selectCard(issue, colIssues, range)}
+                    onSelectAll={(on) => selectColumn(colIssues, on)}
+                    onDropAt={onDropAt(col, colIssues)}
+                  />
+                );
+              })}
             </div>
           </div>
         ))}
       </div>
+
+      {selectedIds.length > 0 && (
+        <BulkBar ids={selectedIds} projectKey={projectKey} onDone={() => setSelected(new Set())} />
+      )}
     </div>
   );
 }
@@ -253,15 +314,25 @@ function Column({
   issues,
   totalInColumn,
   compact,
+  selected,
+  selecting,
+  onSelect,
+  onSelectAll,
   onDropAt,
 }: {
   column: BoardColumn;
   issues: Issue[];
   totalInColumn: number;
   compact: boolean;
+  selected: Set<string>;
+  selecting: boolean;
+  onSelect: (issue: Issue, range: boolean) => void;
+  onSelectAll: (on: boolean) => void;
   onDropAt: (atIndex: number) => (e: DragEvent) => void;
 }) {
   const overWip = column.wip_limit != null && totalInColumn > column.wip_limit;
+  const selectedHere = issues.filter((i) => selected.has(i.id)).length;
+  const allSelected = issues.length > 0 && selectedHere === issues.length;
   return (
     <div
       onDragOver={(e) => e.preventDefault()}
@@ -276,8 +347,24 @@ function Column({
       } ${compact ? "min-h-[120px]" : "min-h-[180px]"}`}
     >
       <div className="flex items-center justify-between px-1">
-        <span className="text-sm font-semibold text-ink" title={column.statuses.map((s) => statusLabel[s]).join(", ")}>
-          {column.name}
+        <span className="flex min-w-0 items-center gap-2">
+          {/* Always visible, unlike the per-card boxes: "select the whole column" is
+              the action people come to the board for, so it must not hide behind a hover. */}
+          <input
+            type="checkbox"
+            aria-label={`Select all in ${column.name}`}
+            title={issues.length > 0 ? `Select all ${issues.length} in ${column.name}` : undefined}
+            disabled={issues.length === 0}
+            checked={allSelected}
+            ref={(el) => {
+              if (el) el.indeterminate = selectedHere > 0 && !allSelected;
+            }}
+            onChange={() => onSelectAll(!allSelected)}
+            className="accent-blueprint disabled:opacity-30"
+          />
+          <span className="truncate text-sm font-semibold text-ink" title={column.statuses.map((s) => statusLabel[s]).join(", ")}>
+            {column.name}
+          </span>
         </span>
         <span className={`font-mono text-xs ${overWip ? "font-bold text-critical" : "text-graphite-soft"}`}>
           {column.wip_limit != null ? `${totalInColumn}/${column.wip_limit}` : issues.length}
@@ -291,7 +378,12 @@ function Column({
         {issues.map((i, index) => (
           <div key={i.id}>
             <DropGap onDrop={onDropAt(index)} />
-            <BoardCard issue={i} />
+            <BoardCard
+              issue={i}
+              selected={selected.has(i.id)}
+              selecting={selecting}
+              onSelect={(range) => onSelect(i, range)}
+            />
           </div>
         ))}
         <DropGap onDrop={onDropAt(issues.length)} last />
@@ -498,40 +590,84 @@ function ColumnConfigRow({
   );
 }
 
-function BoardCard({ issue }: { issue: Issue }) {
+function BoardCard({
+  issue,
+  selected,
+  selecting,
+  onSelect,
+}: {
+  issue: Issue;
+  selected: boolean;
+  selecting: boolean;
+  onSelect: (range: boolean) => void;
+}) {
   return (
-    <Link
-      to={`/issues/${issue.key}`}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData("text/plain", issue.key);
-        e.dataTransfer.effectAllowed = "move";
-      }}
-      className="flex cursor-grab flex-col gap-2 rounded-md border border-hairline bg-paper p-2.5 transition hover:border-graphite active:cursor-grabbing"
-    >
-      <div className="flex items-start gap-2">
-        <SeverityBar severity={issue.severity} />
-        <span className="grow text-sm font-medium leading-tight text-ink">{issue.title}</span>
-      </div>
-      {issue.open_blockers > 0 && (
-        <span className="self-start rounded-full bg-critical-soft px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-caps text-critical">
-          blocked · {issue.open_blockers}
-        </span>
-      )}
-      {issue.labels && issue.labels.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          {issue.labels.slice(0, 2).map((l) => (
-            <LabelChip key={l} name={l} />
-          ))}
+    <div className="group relative">
+      <Link
+        to={`/issues/${issue.key}`}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData("text/plain", issue.key);
+          e.dataTransfer.effectAllowed = "move";
+        }}
+        // Shift-click selects a range and ⌘/Ctrl-click toggles one card, as in a file
+        // manager; a plain click still opens the issue.
+        onClick={(e) => {
+          if (!e.shiftKey && !e.metaKey && !e.ctrlKey) return;
+          e.preventDefault();
+          onSelect(e.shiftKey);
+        }}
+        // "x" on a focused card, matching the issue list. The list has a j/k cursor
+        // to give it focus; here Tab does.
+        onKeyDown={(e) => {
+          if (e.key !== "x" || e.metaKey || e.ctrlKey || e.altKey) return;
+          e.preventDefault();
+          onSelect(false);
+        }}
+        className={`flex cursor-grab flex-col gap-2 rounded-md border p-2.5 transition active:cursor-grabbing ${
+          selected ? "border-blueprint bg-blueprint-soft/40" : "border-hairline bg-paper hover:border-graphite"
+        }`}
+      >
+        <div className="flex items-start gap-2 pr-5">
+          <SeverityBar severity={issue.severity} />
+          <span className="grow text-sm font-medium leading-tight text-ink">{issue.title}</span>
         </div>
-      )}
-      <div className="flex items-center justify-between">
-        <span className="flex items-center gap-2">
-          <span className="font-mono text-xs font-medium text-blueprint">{issue.key}</span>
-          <PriorityText priority={issue.priority} />
-        </span>
-        <Avatar user={issue.assignee} size={22} />
-      </div>
-    </Link>
+        {issue.open_blockers > 0 && (
+          <span className="self-start rounded-full bg-critical-soft px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-caps text-critical">
+            blocked · {issue.open_blockers}
+          </span>
+        )}
+        {issue.labels && issue.labels.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {issue.labels.slice(0, 2).map((l) => (
+              <LabelChip key={l} name={l} />
+            ))}
+          </div>
+        )}
+        <div className="flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <span className="font-mono text-xs font-medium text-blueprint">{issue.key}</span>
+            <PriorityText priority={issue.priority} />
+          </span>
+          <Avatar user={issue.assignee} size={22} />
+        </div>
+      </Link>
+      {/* A sibling of the link rather than inside it, so ticking it never navigates
+          and never starts a drag. Hidden until hover or focus so a board nobody is
+          selecting on looks as it did; shown on every card once anything is selected,
+          and always on touch screens, which have no hover to reveal it. */}
+      <input
+        type="checkbox"
+        aria-label={`Select ${issue.key}`}
+        checked={selected}
+        readOnly
+        onClick={(e) => onSelect(e.shiftKey)}
+        className={`absolute right-2.5 top-2.5 accent-blueprint transition-opacity ${
+          selected || selecting
+            ? "opacity-100"
+            : "opacity-0 focus:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+        }`}
+      />
+    </div>
   );
 }
