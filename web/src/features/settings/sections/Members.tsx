@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type User } from "../../../lib/api";
 import { Avatar } from "../../../components/Badges";
-import { Card, ErrorLine } from "../ui";
+import { IconPlus } from "../../../components/icons";
+import { Card, ErrorLine, fieldLabelClass, inputClass } from "../ui";
 
 const ROLES = ["owner", "admin", "maintainer", "member", "reporter", "bot"];
 
@@ -20,6 +22,26 @@ export function MembersSection() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
   });
 
+  // Local users: people who exist only in this tracker. Everyone else appears here on
+  // their first sign-in; these are added by hand so they can be put on projects and
+  // assigned work without (or before) an Omni-Identity login.
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newRole, setNewRole] = useState("member");
+  const canCreate = newName.trim() !== "" && newEmail.trim() !== "";
+  const createUser = useMutation({
+    mutationFn: () => api.createUser({ display_name: newName.trim(), email: newEmail.trim(), role: newRole }),
+    onSuccess: () => {
+      setNewName("");
+      setNewEmail("");
+      setNewRole("member");
+      qc.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+  const submitCreate = () => {
+    if (canCreate && !createUser.isPending) createUser.mutate();
+  };
+
   return (
     <Card
       title="Members"
@@ -28,10 +50,60 @@ export function MembersSection() {
           Roles set what each user can do. <span className="text-ink">Owner/admin</span> manage everything including
           roles; <span className="text-ink">maintainer</span> manages projects; <span className="text-ink">member</span>{" "}
           files &amp; works issues; <span className="text-ink">reporter</span> only reports;{" "}
-          <span className="text-ink">bot</span> is for automation.
+          <span className="text-ink">bot</span> is for automation. People appear here when they first sign in;{" "}
+          <span className="text-ink">add user</span> creates a local account that can be assigned work but can&apos;t
+          sign in.
         </>
       }
     >
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="min-w-40 grow text-sm">
+          <span className={fieldLabelClass}>Name</span>
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitCreate()}
+            placeholder="e.g. Pat Rivera"
+            className={`w-full ${inputClass}`}
+          />
+        </label>
+        <label className="min-w-48 grow text-sm">
+          <span className={fieldLabelClass}>Email</span>
+          <input
+            type="email"
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitCreate()}
+            placeholder="a placeholder is fine, e.g. pat@local.invalid"
+            className={`w-full ${inputClass}`}
+          />
+        </label>
+        <label className="text-sm">
+          <span className={fieldLabelClass}>Role</span>
+          <select
+            value={newRole}
+            onChange={(e) => setNewRole(e.target.value)}
+            aria-label="Role for the new user"
+            className={`capitalize ${inputClass}`}
+          >
+            {ROLES.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          disabled={!canCreate || createUser.isPending}
+          onClick={submitCreate}
+          className="flex h-10 items-center gap-1.5 rounded-md bg-blueprint px-4 text-sm font-semibold text-paper transition hover:opacity-90 disabled:opacity-50"
+        >
+          <IconPlus size={15} />
+          {createUser.isPending ? "Adding…" : "Add user"}
+        </button>
+      </div>
+      <ErrorLine error={createUser.error} />
       <div className="flex flex-col divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
         {users.isLoading && <div className="p-4 text-sm text-graphite">Loading…</div>}
         {users.data?.items.map((u: User) => {
@@ -49,6 +121,14 @@ export function MembersSection() {
                   {deactivated && (
                     <span className="ml-2 rounded-full border border-hairline px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-caps text-graphite-soft">
                       deactivated
+                    </span>
+                  )}
+                  {u.is_local && (
+                    <span
+                      title="Created here by an admin. No Omni-Identity login, so this account can be assigned and mentioned but can't sign in."
+                      className="ml-2 rounded-full border border-hairline px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-caps text-graphite-soft"
+                    >
+                      local · can&apos;t sign in
                     </span>
                   )}
                 </div>

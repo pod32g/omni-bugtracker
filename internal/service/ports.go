@@ -303,6 +303,9 @@ type Repository interface {
 	// only the admin screen wants — an assignee picker must never offer a leaver.
 	ListUsers(ctx context.Context, limit int32, includeInactive bool) ([]domain.User, error)
 	UpdateUserRole(ctx context.Context, userID uuid.UUID, role domain.Role) (domain.User, error)
+	// CreateLocalUser adds an admin-created account with no Omni-Identity login behind
+	// it. Returns pgx.ErrNoRows when the email already belongs to a user.
+	CreateLocalUser(ctx context.Context, in CreateLocalUserParams) (domain.User, error)
 	// SetUserActive gates authentication for a user, revoking their API tokens when
 	// deactivating.
 	SetUserActive(ctx context.Context, userID uuid.UUID, active bool) (domain.User, error)
@@ -347,6 +350,14 @@ type UpsertUserParams struct {
 	Email       string
 	DisplayName string
 	AvatarURL   string
+}
+
+// CreateLocalUserParams is what an admin supplies for a local account. There is no
+// identity subject: the store mints a synthetic one (domain.LocalIdentityPrefix).
+type CreateLocalUserParams struct {
+	Email       string
+	DisplayName string
+	Role        domain.Role
 }
 
 // UpdateProfileInput is a self-service profile edit. A nil field is left unchanged;

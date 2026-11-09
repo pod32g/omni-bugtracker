@@ -214,6 +214,34 @@ paths:
                 required: [items]
                 properties:
                   items: { type: array, items: { $ref: "#/components/schemas/User" } }
+    post:
+      tags: [system]
+      operationId: createUser
+      description: >-
+        Create a local user (owner/admin only): an account that exists only in this
+        tracker, with no Omni-Identity login behind it. It can be assigned, mentioned,
+        put on projects and attributed, but never signed into. Users who sign in are
+        still created automatically on first login. The email may be a placeholder but
+        must not already belong to another user (compared case-insensitively).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [display_name, email]
+              properties:
+                display_name: { type: string }
+                email: { type: string, format: email }
+                role:
+                  type: string
+                  enum: [owner, admin, maintainer, member, reporter, bot]
+                  default: member
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
 
   /users/{id}/role:
     parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
@@ -1438,6 +1466,12 @@ components:
             False for a deactivated account. Only ever false in the admin members
             listing (`GET /users?include_inactive=1`) — every other listing is
             active-only.
+        is_local:
+          type: boolean
+          description: >-
+            True for a local user created via `POST /users` — no Omni-Identity login
+            behind it, so it cannot sign in. Present in the users listing and the
+            create response; omitted elsewhere.
 
     Project:
       type: object

@@ -18,6 +18,12 @@ export interface User {
   role?: string;
   /** False for a deactivated account. Only ever false in the admin members list. */
   is_active?: boolean;
+  /**
+   * True for a local user an admin created in the tracker: no Omni-Identity login
+   * behind it, so it can be assigned and mentioned but can't sign in. Only set by the
+   * users list and the create response.
+   */
+  is_local?: boolean;
 }
 
 export interface Project {
@@ -781,6 +787,9 @@ export const api = {
     }),
   updateUserRole: (id: string, role: string) =>
     request<User>(`/users/${id}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
+  /** Create a local user (owner/admin only). The email may be a placeholder. */
+  createUser: (body: { display_name: string; email: string; role?: string }) =>
+    request<User>("/users", { method: "POST", body: JSON.stringify(body) }),
   getArchiveSettings: () => request<{ auto_after_days: number }>("/settings/archive"),
   setArchiveSettings: (autoAfterDays: number) =>
     request<{ auto_after_days: number }>("/settings/archive", {

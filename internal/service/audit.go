@@ -17,6 +17,7 @@ import (
 // Audit actions. Named as verbs on a target so the log reads as a sentence and so a
 // filter by action is a stable string rather than free text.
 const (
+	AuditUserCreated       = "user.created"
 	AuditUserRoleChanged   = "user.role_changed"
 	AuditUserDeactivated   = "user.deactivated"
 	AuditUserReactivated   = "user.reactivated"
