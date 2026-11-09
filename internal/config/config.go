@@ -32,8 +32,8 @@ type Config struct {
 
 // Archive configures automatic issue archival.
 type Archive struct {
-	// AutoAfterDays archives issues closed more than this many days ago, via a daily
-	// job. 0 (default) disables auto-archive; manual archival is always available.
+	// AutoAfterDays archives issues resolved or closed more than this many days ago,
+	// via a daily job. 0 (default) disables auto-archive; manual archival is always available.
 	AutoAfterDays int `koanf:"auto_after_days"`
 }
 

@@ -30,7 +30,7 @@ export function ArchiveSection() {
       title="Auto-archive"
       description={
         <>
-          Automatically archive issues that have stayed closed for a while — they drop out of lists and search but
+          Automatically archive issues that have been done (resolved or closed) for a while — they drop out of lists and search but
           stay recoverable under the <span className="font-mono text-xs">is:archived</span> filter. Runs once a day.
         </>
       }
@@ -46,7 +46,7 @@ export function ArchiveSection() {
       </label>
 
       <div className={`flex items-center gap-2 text-sm ${enabled ? "text-ink" : "pointer-events-none opacity-50"}`}>
-        <span>Archive issues closed more than</span>
+        <span>Archive issues done more than</span>
         <input
           type="number"
           min={1}
@@ -67,7 +67,7 @@ export function ArchiveSection() {
           {settings.data == null
             ? ""
             : settings.data.auto_after_days > 0
-              ? `Currently archiving issues closed over ${settings.data.auto_after_days} days ago.`
+              ? `Currently archiving issues done over ${settings.data.auto_after_days} days ago.`
               : "Currently disabled."}
         </span>
       </div>
